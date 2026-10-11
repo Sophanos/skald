@@ -1,0 +1,14 @@
+snapshot/
+/data/
+__pycache__/
+*.pyc
+.env
+*.secret
+hydra.json
+eval/out/
+**/trakt*.json
+!tests/fixtures/**/trakt*.json
+**/codex*
+
+eval/private/
+.env.aiostreams

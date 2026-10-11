@@ -1,0 +1,13 @@
+{
+  "verification": "UNVERIFIED: hand-written Jellyfin API shape; no live server or current docs checked",
+  "items": [
+    {"Id":"movie-1","Type":"Movie","ProviderIds":{"Tmdb":"603"},"RunTimeTicks":1000000000,"UserData":{"Played":true,"PlayCount":2,"LastPlayedDate":"2026-10-10T00:00:00Z","PlaybackPositionTicks":0,"IsFavorite":true}},
+    {"Id":"movie-2","Type":"Movie","ProviderIds":{"Tmdb":"604"},"RunTimeTicks":1000000000,"UserData":{"Played":false,"PlayCount":0,"LastPlayedDate":"2026-10-09T00:00:00Z","PlaybackPositionTicks":250000000,"IsFavorite":false}},
+    {"Id":"movie-3","Type":"Movie","ProviderIds":{"Tmdb":"605"},"UserData":{"Played":false,"PlayCount":0,"PlaybackPositionTicks":0,"IsFavorite":true}},
+    {"Id":"ep-1","Type":"Episode","SeriesId":"show-1","ProviderIds":{"Tmdb":"999001"},"ParentIndexNumber":1,"IndexNumber":1,"RunTimeTicks":1000000000,"UserData":{"Played":true,"PlayCount":1,"LastPlayedDate":"2026-10-09T00:00:00Z","PlaybackPositionTicks":0,"IsFavorite":false}},
+    {"Id":"ep-2","Type":"Episode","SeriesId":"show-1","ProviderIds":{"Tmdb":"999002"},"ParentIndexNumber":1,"IndexNumber":2,"RunTimeTicks":1000000000,"UserData":{"Played":false,"PlayCount":2,"LastPlayedDate":"2026-10-10T00:00:00Z","PlaybackPositionTicks":0,"IsFavorite":false}},
+    {"Id":"ep-3","Type":"Episode","SeriesId":"show-1","ProviderIds":{"Tmdb":"999003"},"ParentIndexNumber":2,"IndexNumber":1,"RunTimeTicks":1000000000,"UserData":{"Played":false,"PlayCount":0,"LastPlayedDate":"2026-10-11T00:00:00Z","PlaybackPositionTicks":420000000,"IsFavorite":true}},
+    {"Id":"idless","Type":"Movie","ProviderIds":{"Imdb":"tt0000001"},"UserData":{"Played":true,"PlayCount":1,"PlaybackPositionTicks":0,"IsFavorite":false}}
+  ],
+  "series": {"show-1":{"Id":"show-1","Type":"Series","ProviderIds":{"Tmdb":"1419"}}}
+}

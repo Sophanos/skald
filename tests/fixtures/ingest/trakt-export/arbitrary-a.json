@@ -1,0 +1,114 @@
+[
+  {
+    "movie": {
+      "title": "Synthetic Trakt 1",
+      "year": 2020,
+      "ids": {
+        "tmdb": 87000101
+      }
+    },
+    "rating": 5,
+    "rated_at": "2026-10-11"
+  },
+  {
+    "show": {
+      "title": "Synthetic Trakt 2",
+      "year": 2020,
+      "ids": {
+        "tmdb": 87000102
+      }
+    },
+    "rating": 8,
+    "rated_at": "2026-10-10"
+  },
+  {
+    "show": {
+      "title": "Synthetic Trakt 2",
+      "year": 2020,
+      "ids": {
+        "tmdb": 87000102
+      }
+    },
+    "episode": {
+      "season": 1,
+      "number": 1
+    },
+    "rating": 4,
+    "rated_at": "2026-10-09"
+  },
+  {
+    "show": {
+      "title": "Synthetic Trakt 2",
+      "year": 2020,
+      "ids": {
+        "tmdb": 87000102
+      }
+    },
+    "episode": {
+      "season": 1,
+      "number": 2
+    },
+    "rating": 5,
+    "rated_at": "2026-10-09"
+  },
+  {
+    "show": {
+      "title": "Synthetic Trakt 2",
+      "year": 2020,
+      "ids": {
+        "tmdb": 87000102
+      }
+    },
+    "episode": {
+      "season": 1,
+      "number": 3
+    },
+    "rating": 6,
+    "rated_at": "2026-10-09"
+  },
+  {
+    "show": {
+      "title": "Synthetic Trakt 3",
+      "year": 2020,
+      "ids": {
+        "tmdb": 87000103
+      }
+    },
+    "episode": {
+      "season": 1,
+      "number": 1
+    },
+    "rating": 4,
+    "rated_at": "2026-10-09"
+  },
+  {
+    "show": {
+      "title": "Synthetic Trakt 3",
+      "year": 2020,
+      "ids": {
+        "tmdb": 87000103
+      }
+    },
+    "episode": {
+      "season": 1,
+      "number": 2
+    },
+    "rating": 5,
+    "rated_at": "2026-10-09"
+  },
+  {
+    "show": {
+      "title": "Synthetic Trakt 3",
+      "year": 2020,
+      "ids": {
+        "tmdb": 87000103
+      }
+    },
+    "episode": {
+      "season": 1,
+      "number": 3
+    },
+    "rating": 6,
+    "rated_at": "2026-10-09"
+  }
+]

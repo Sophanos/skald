@@ -1,0 +1,6 @@
+Date,Name,Year,TMDB ID,Watched Date,Rating,Rewatch,Tags
+2026-10-10,Synthetic Rewind,2020,87000020,2026-09-01,,No,synthetic
+2026-10-10,Synthetic Rewind,2020,87000020,2026-10-10,,Yes,synthetic
+2026-10-10,Synthetic Rewind,2020,87000020,2026-10-10,,Yes,duplicate
+2026-10-10,Synthetic Beacon,2021,87000001,2026-10-10,,Yes,
+2026-10-10,Synthetic Dull,2022,87000021,2026-10-10,2.5,Yes,

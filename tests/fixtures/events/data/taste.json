@@ -1,0 +1,22 @@
+{
+  "household": {
+    "likes": "Synthetic taste only"
+  },
+  "cal": {
+    "archived": true
+  },
+  "people": {
+    "ana": {
+      "loves": [
+        "Fixture 1|2020|m",
+        "Fixture 70|2020|m",
+        "Unresolved|2020|m"
+      ]
+    },
+    "ben": {
+      "loves": [
+        "Fixture 60|2020|m"
+      ]
+    }
+  }
+}

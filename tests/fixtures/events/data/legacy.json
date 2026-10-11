@@ -1,0 +1,57 @@
+{
+  "v": 1,
+  "household": {
+    "members": [
+      "ana",
+      "ben"
+    ],
+    "labels": {
+      "ana": "Ana",
+      "ben": "Ben",
+      "pair": "you both"
+    },
+    "note": "",
+    "archived": {
+      "cal": "Cal"
+    },
+    "trakt_member": "ben",
+    "member_rows": [
+      "ana"
+    ],
+    "experiences": {}
+  },
+  "taste": {
+    "household": {
+      "likes": "",
+      "rewatch_collections": []
+    },
+    "cal": {
+      "likes": "",
+      "archived": true
+    },
+    "people": {
+      "ben": {
+        "type": ""
+      },
+      "ana": {
+        "type": "",
+        "loves": []
+      }
+    }
+  },
+  "region": {
+    "lang": "en-US",
+    "tz": "UTC",
+    "country": "United States"
+  },
+  "addon": {
+    "id": "community.skald.legacy",
+    "name": "TMDB Search",
+    "version": "1.7.3",
+    "legacy_open": true
+  },
+  "history": {
+    "source": "file"
+  },
+  "connectors": {}
+}

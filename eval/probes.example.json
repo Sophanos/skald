@@ -1,0 +1,37 @@
+{
+  "probes": [
+    {
+      "name": "Family adventure",
+      "hide": [
+        {
+          "key": "tmdb:116149",
+          "kind": "movie",
+          "title": "Paddington"
+        }
+      ],
+      "expect": [
+        {
+          "key": "tmdb:346648",
+          "kind": "movie",
+          "title": "Paddington 2"
+        }
+      ]
+    }
+  ],
+  "seed_probes": [
+    {
+      "seed": {
+        "key": "tmdb:116149",
+        "kind": "movie",
+        "title": "Paddington"
+      },
+      "targets": [
+        {
+          "key": "tmdb:346648",
+          "kind": "movie",
+          "title": "Paddington 2"
+        }
+      ]
+    }
+  ]
+}

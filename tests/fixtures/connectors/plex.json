@@ -1,0 +1,24 @@
+{
+  "verification": "UNVERIFIED: hand-written Plex JSON API shape; no live server or current docs checked",
+  "sections": [
+    {"key":"movies","type":"movie"}, {"key":"shows","type":"show"}, {"key":"music","type":"artist"}
+  ],
+  "libraries": {
+    "movies": [
+      {"ratingKey":"m1","type":"movie","Guid":[{"id":"tmdb://603"}],"viewCount":2,"lastViewedAt":1791590400,"viewOffset":0,"duration":100000},
+      {"ratingKey":"m2","type":"movie","Guid":[{"id":"tmdb://604"}],"viewOffset":25000,"duration":100000,"lastViewedAt":1791504000},
+      {"ratingKey":"idless","type":"movie","Guid":[{"id":"imdb://tt0000001"}],"viewCount":1},
+      {"ratingKey":"unplayed","type":"movie","Guid":[{"id":"tmdb://605"}]}
+    ],
+    "shows": [
+      {"ratingKey":"s1","type":"show","Guid":[{"id":"tmdb://1419"}],"viewedLeafCount":2}
+    ]
+  },
+  "leaves": {
+    "s1": [
+      {"ratingKey":"e1","type":"episode","Guid":[{"id":"tmdb://999001"}],"parentIndex":1,"index":1,"viewCount":1,"lastViewedAt":1791504000,"duration":100000},
+      {"ratingKey":"e2","type":"episode","Guid":[{"id":"tmdb://999002"}],"parentIndex":1,"index":2,"viewCount":2,"lastViewedAt":1791590400,"duration":100000},
+      {"ratingKey":"e3","type":"episode","Guid":[{"id":"tmdb://999003"}],"parentIndex":2,"index":1,"viewOffset":42000,"duration":100000,"lastViewedAt":1791676800}
+    ]
+  }
+}

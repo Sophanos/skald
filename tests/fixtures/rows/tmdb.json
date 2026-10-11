@@ -1,0 +1,12 @@
+{
+  "vote_count": 500,
+  "vote_average": 7.5,
+  "release_date": "2025-01-01",
+  "first_air_date": "2025-01-01",
+  "genre_ids": [28],
+  "poster_path": "/fixture-p",
+  "backdrop_path": "/fixture-b",
+  "original_language": "en",
+  "overview": "A fixture title from the shelf's own source.",
+  "titles": ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey", "Zulu"]
+}

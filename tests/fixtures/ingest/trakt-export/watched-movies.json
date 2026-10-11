@@ -1,0 +1,13 @@
+[
+  {
+    "movie": {
+      "title": "Synthetic Trakt 6",
+      "year": 2020,
+      "ids": {
+        "tmdb": 87000106
+      }
+    },
+    "plays": 2,
+    "last_watched_at": "2026-10-10"
+  }
+]

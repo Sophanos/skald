@@ -1,0 +1,126 @@
+[
+  {
+    "show": {
+      "title": "Synthetic Trakt 7",
+      "year": 2020,
+      "ids": {
+        "tmdb": 87000107
+      }
+    },
+    "plays": 1,
+    "last_watched_at": "2026-07-01",
+    "seasons": [
+      {
+        "number": 1,
+        "episodes": [
+          {
+            "number": 1,
+            "plays": 2,
+            "last_watched_at": "2026-10-10"
+          },
+          {
+            "number": 2,
+            "plays": 2,
+            "last_watched_at": "2026-10-10"
+          },
+          {
+            "number": 3,
+            "plays": 2,
+            "last_watched_at": "2026-10-10"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "show": {
+      "title": "Synthetic Trakt 8",
+      "year": 2020,
+      "ids": {
+        "tmdb": 87000108
+      }
+    },
+    "plays": 1,
+    "last_watched_at": "2026-07-01",
+    "seasons": [
+      {
+        "number": 1,
+        "episodes": [
+          {
+            "number": 1,
+            "plays": 1,
+            "last_watched_at": "2026-07-01"
+          },
+          {
+            "number": 2,
+            "plays": 1,
+            "last_watched_at": "2026-07-01"
+          },
+          {
+            "number": 3,
+            "plays": 1,
+            "last_watched_at": "2026-07-01"
+          }
+        ]
+      }
+    ],
+    "aired_episodes": 20
+  },
+  {
+    "show": {
+      "title": "Synthetic Trakt 9",
+      "year": 2020,
+      "ids": {
+        "tmdb": 87000109
+      }
+    },
+    "plays": 1,
+    "last_watched_at": "2026-07-01",
+    "seasons": [
+      {
+        "number": 1,
+        "episodes": [
+          {
+            "number": 1,
+            "plays": 1,
+            "last_watched_at": "2026-07-01"
+          },
+          {
+            "number": 2,
+            "plays": 1,
+            "last_watched_at": "2026-07-01"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "show": {
+      "title": "Synthetic Trakt 10",
+      "year": 2020,
+      "ids": {
+        "tmdb": 87000110
+      }
+    },
+    "plays": 1,
+    "last_watched_at": "2026-07-01",
+    "seasons": [
+      {
+        "number": 1,
+        "episodes": [
+          {
+            "number": 1,
+            "plays": 1,
+            "last_watched_at": "2026-07-01"
+          },
+          {
+            "number": 2,
+            "plays": 1,
+            "last_watched_at": "2026-07-01"
+          }
+        ]
+      }
+    ],
+    "aired_episodes": 4
+  }
+]

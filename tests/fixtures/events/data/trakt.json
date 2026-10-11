@@ -1,0 +1,117 @@
+{
+  "items": [
+    {
+      "id": "tmdb:3",
+      "type": "tv",
+      "title": "Fixture 3",
+      "year": 2020,
+      "signal": "loved",
+      "weight": 4.1,
+      "at": 1787414400000.0,
+      "genres": [
+        "drama"
+      ],
+      "flags": [
+        "binge",
+        "anime"
+      ],
+      "last_episode": [
+        2,
+        5
+      ]
+    },
+    {
+      "id": "tmdb:60",
+      "type": "movie",
+      "title": "Fixture 60",
+      "year": 2020,
+      "signal": "watched",
+      "weight": 2.0,
+      "at": 1787414400000.0,
+      "genres": [
+        "drama"
+      ],
+      "flags": []
+    },
+    {
+      "id": "tmdb:60",
+      "type": "movie",
+      "title": "Fixture 60",
+      "year": 2020,
+      "signal": "loved",
+      "weight": 3.0,
+      "at": 1787414400000.0,
+      "genres": [
+        "drama"
+      ],
+      "flags": []
+    },
+    {
+      "id": "tmdb:61",
+      "type": "movie",
+      "title": "Fixture 61",
+      "year": 2020,
+      "signal": "abandoned",
+      "weight": -1.5,
+      "at": 1787414400000.0,
+      "genres": [
+        "drama"
+      ],
+      "flags": []
+    },
+    {
+      "id": "tmdb:62",
+      "type": "tv",
+      "title": "Fixture 62",
+      "year": 2020,
+      "signal": "interest",
+      "weight": 0.7,
+      "at": 1787414400000.0,
+      "genres": [
+        "drama"
+      ],
+      "flags": [
+        "anime"
+      ]
+    },
+    {
+      "id": "tmdb:63",
+      "type": "movie",
+      "title": "Fixture 63",
+      "year": 2020,
+      "signal": "watched",
+      "weight": 2.0,
+      "at": 1787414400000.0,
+      "genres": [
+        "drama"
+      ],
+      "flags": []
+    },
+    {
+      "id": "tmdb:64",
+      "type": "movie",
+      "title": "Fixture 64",
+      "year": 2020,
+      "signal": "watched",
+      "weight": 2.0,
+      "at": 1787414400000.0,
+      "genres": [
+        "drama"
+      ],
+      "flags": []
+    },
+    {
+      "id": "tmdb:65",
+      "type": "movie",
+      "title": "Fixture 65",
+      "year": 2020,
+      "signal": "mystery",
+      "weight": 0.9,
+      "at": null,
+      "genres": [
+        "drama"
+      ],
+      "flags": []
+    }
+  ]
+}

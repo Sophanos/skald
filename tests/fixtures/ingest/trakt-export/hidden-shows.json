@@ -1,0 +1,20 @@
+[
+  {
+    "show": {
+      "title": "Synthetic Trakt 11",
+      "year": 2020,
+      "ids": {
+        "tmdb": 87000111
+      }
+    }
+  },
+  {
+    "movie": {
+      "title": "Synthetic Trakt 12",
+      "year": 2020,
+      "ids": {
+        "tmdb": 87000112
+      }
+    }
+  }
+]

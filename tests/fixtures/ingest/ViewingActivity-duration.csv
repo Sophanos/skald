@@ -1,0 +1,16 @@
+Profile Name,Title,Start Time,Duration,Attributes,Supplemental Video Type
+Export B,Synthetic Flash,2026-10-11,00:00:40,,
+Export B,Synthetic Auto,2026-10-11,00:04:59,Autoplayed: user action: None,
+Export B,Synthetic Boundary,2026-10-11,00:02:00,,
+Export B,Synthetic Auto Kept,2026-10-11,00:05:00,Autoplayed,
+Export B,Synthetic Half,2026-10-10,00:10:00,,
+Export B,Synthetic Whole,2026-10-10,00:15:00,,
+Export B,Synthetic Whole,2026-10-11,00:15:00,,
+Export B,Synthetic Lost: Season 1: One,2026-07-01,00:40:00,,
+Export B,Synthetic Lost: Season 1: One,2026-07-02,00:40:00,,
+Export B,Synthetic Lost: Season 1: Two,2026-07-03,00:40:00,,
+Export B,Synthetic Active: Season 1: One,2026-10-10,00:40:00,,
+Export B,Synthetic Three: Season 1: One,2026-07-01,00:40:00,,
+Export B,Synthetic Three: Season 1: Two,2026-07-01,00:40:00,,
+Export B,Synthetic Three: Season 1: Three,2026-07-01,00:40:00,,
+Export B,Synthetic Trailer,2026-10-11,00:03:00,,Trailer

@@ -1,0 +1,15 @@
+{
+  "verification": "UNVERIFIED: hand-written AIOStreams Jellyfin emulation hypothesis, not captured from AIOStreams",
+  "login": "Owner logs in with config UUID and config password; fixture contains neither",
+  "supports_user_data": false,
+  "items": [
+    {"Id":"tmdb:603","Name":"Synthetic catalog film","Type":"Movie","ProviderIds":{"Tmdb":"603"}}
+  ],
+  "series": {},
+  "history_items": [
+    {"Id":"tmdb:603","Type":"Movie","ProviderIds":{"Tmdb":"603"},"RunTimeTicks":1000000000,"UserData":{"Played":true,"PlayCount":1,"LastPlayedDate":"2026-10-10T00:00:00Z","PlaybackPositionTicks":0,"IsFavorite":true}},
+    {"Id":"tmdb:604","Type":"Movie","ProviderIds":{"Tmdb":"604"},"RunTimeTicks":1000000000,"UserData":{"Played":false,"PlayCount":0,"LastPlayedDate":"2026-10-09T00:00:00Z","PlaybackPositionTicks":250000000,"IsFavorite":false}},
+    {"Id":"idless","Type":"Movie","ProviderIds":{},"UserData":{"Played":true,"PlayCount":1,"PlaybackPositionTicks":0,"IsFavorite":false}}
+  ],
+  "history_items_verification": "UNVERIFIED: hypothetical extension if emulation exposes UserData; not evidence it does"
+}

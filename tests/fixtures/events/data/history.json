@@ -1,0 +1,248 @@
+{
+  "items": [
+    {
+      "id": "tmdb:1",
+      "type": "movie",
+      "at": 1790784000000.0,
+      "favorite": true
+    },
+    {
+      "id": "tmdb:2",
+      "type": "series",
+      "at": 1789833600000.0,
+      "episodes_played": 1
+    },
+    {
+      "id": "tmdb:3",
+      "type": "series",
+      "at": 1788883200000.0,
+      "episodes_played": 3,
+      "last_episode": [
+        1,
+        2
+      ]
+    },
+    {
+      "id": "tmdb:4",
+      "type": "movie",
+      "at": 1787932800000.0
+    },
+    {
+      "id": "tmdb:5",
+      "type": "movie",
+      "at": 1786982400000.0,
+      "played": true
+    },
+    {
+      "id": "tt0000006",
+      "type": "movie",
+      "at": 1786032000000.0,
+      "rating": 8
+    },
+    {
+      "id": "tmdb:7",
+      "type": "movie"
+    },
+    {
+      "id": "tmdb:8",
+      "type": "series",
+      "at": 1784131200000.0,
+      "progress": 0.1
+    },
+    {
+      "id": "tmdb:9",
+      "type": "series",
+      "at": 1783180800000.0,
+      "dropped": true
+    },
+    {
+      "id": "tmdb:10",
+      "type": "series",
+      "at": 1782230400000.0,
+      "episodes_played": 2
+    },
+    {
+      "id": "tmdb:11",
+      "type": "movie",
+      "at": 1781280000000.0
+    },
+    {
+      "id": "tmdb:12",
+      "type": "movie",
+      "at": 1780329600000.0,
+      "progress": 0.04
+    },
+    {
+      "id": "tmdb:13",
+      "type": "movie",
+      "at": 1779379200000.0,
+      "played": true
+    },
+    {
+      "id": "tmdb:14",
+      "type": "movie",
+      "at": 1778428800000.0,
+      "rating": 3
+    },
+    {
+      "id": "tmdb:15",
+      "type": "movie",
+      "at": 1777478400000.0
+    },
+    {
+      "id": "tmdb:16",
+      "type": "movie",
+      "at": 1776528000000.0,
+      "progress": 0.04
+    },
+    {
+      "id": "tmdb:17",
+      "type": "movie",
+      "at": 1775577600000.0,
+      "played": true
+    },
+    {
+      "id": "tmdb:18",
+      "type": "movie",
+      "at": 1774627200000.0,
+      "rating": 3
+    },
+    {
+      "id": "tmdb:19",
+      "type": "movie",
+      "at": 1773676800000.0
+    },
+    {
+      "id": "tmdb:20",
+      "type": "movie",
+      "at": 1772726400000.0,
+      "progress": 0.04
+    },
+    {
+      "id": "tmdb:21",
+      "type": "movie",
+      "at": 1771776000000.0,
+      "played": true
+    },
+    {
+      "id": "tmdb:22",
+      "type": "movie",
+      "at": 1770825600000.0,
+      "rating": 3
+    },
+    {
+      "id": "tmdb:23",
+      "type": "movie",
+      "at": 1769875200000.0
+    },
+    {
+      "id": "tmdb:24",
+      "type": "movie",
+      "at": 1768924800000.0,
+      "progress": 0.04
+    },
+    {
+      "id": "tmdb:25",
+      "type": "movie",
+      "at": 1767974400000.0,
+      "played": true
+    },
+    {
+      "id": "tmdb:26",
+      "type": "movie",
+      "at": 1767024000000.0,
+      "rating": 3
+    },
+    {
+      "id": "tmdb:27",
+      "type": "movie",
+      "at": 1766073600000.0
+    },
+    {
+      "id": "tmdb:28",
+      "type": "movie",
+      "at": 1765123200000.0,
+      "progress": 0.04
+    },
+    {
+      "id": "tmdb:29",
+      "type": "movie",
+      "at": 1764172800000.0,
+      "played": true
+    },
+    {
+      "id": "tmdb:30",
+      "type": "movie",
+      "at": 1763222400000.0,
+      "rating": 3
+    },
+    {
+      "id": "tmdb:31",
+      "type": "movie",
+      "at": 1762272000000.0
+    },
+    {
+      "id": "tmdb:32",
+      "type": "movie",
+      "at": 1761321600000.0,
+      "progress": 0.04
+    },
+    {
+      "id": "tmdb:33",
+      "type": "movie",
+      "at": 1760371200000.0,
+      "played": true
+    },
+    {
+      "id": "tmdb:34",
+      "type": "movie",
+      "at": 1759420800000.0,
+      "rating": 3
+    },
+    {
+      "id": "tmdb:35",
+      "type": "movie",
+      "at": 1758470400000.0
+    },
+    {
+      "id": "tmdb:36",
+      "type": "movie",
+      "at": 1757520000000.0,
+      "progress": 0.04
+    },
+    {
+      "id": "tmdb:37",
+      "type": "movie",
+      "at": 1756569600000.0,
+      "played": true
+    },
+    {
+      "id": "tmdb:38",
+      "type": "movie",
+      "at": 1755619200000.0,
+      "rating": 3
+    },
+    {
+      "id": "tmdb:1",
+      "type": "movie",
+      "at": 1790784000000.0,
+      "favorite": true
+    },
+    {
+      "id": "tmdb:999",
+      "type": "movie"
+    },
+    {
+      "id": "tmdb:41",
+      "type": "movie",
+      "at": 1752768000000.0,
+      "played": true
+    },
+    {
+      "id": "tmdb:42",
+      "type": "movie",
+      "at": 1751817600000.0,
+      "rating": 3
+    }
+  ]
+}

@@ -1,0 +1,917 @@
+{
+  "details": {
+    "tmdb:1": [
+      "movie",
+      {
+        "id": 1,
+        "title": "Fixture 1",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:2": [
+      "tv",
+      {
+        "id": 2,
+        "name": "Fixture 2",
+        "first_air_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:3": [
+      "tv",
+      {
+        "id": 3,
+        "name": "Fixture 3",
+        "first_air_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:4": [
+      "movie",
+      {
+        "id": 4,
+        "title": "Fixture 4",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:5": [
+      "movie",
+      {
+        "id": 5,
+        "title": "Fixture 5",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tt0000006": [
+      "movie",
+      {
+        "id": 6,
+        "title": "Fixture 6",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:7": [
+      "movie",
+      {
+        "id": 7,
+        "title": "Fixture 7",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:8": [
+      "tv",
+      {
+        "id": 8,
+        "name": "Fixture 8",
+        "first_air_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:9": [
+      "tv",
+      {
+        "id": 9,
+        "name": "Fixture 9",
+        "first_air_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:10": [
+      "tv",
+      {
+        "id": 10,
+        "name": "Fixture 10",
+        "first_air_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:12": [
+      "movie",
+      {
+        "id": 12,
+        "title": "Fixture 12",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:13": [
+      "movie",
+      {
+        "id": 13,
+        "title": "Fixture 13",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:14": [
+      "movie",
+      {
+        "id": 14,
+        "title": "Fixture 14",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:15": [
+      "movie",
+      {
+        "id": 15,
+        "title": "Fixture 15",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:16": [
+      "movie",
+      {
+        "id": 16,
+        "title": "Fixture 16",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:17": [
+      "movie",
+      {
+        "id": 17,
+        "title": "Fixture 17",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:18": [
+      "movie",
+      {
+        "id": 18,
+        "title": "Fixture 18",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:19": [
+      "movie",
+      {
+        "id": 19,
+        "title": "Fixture 19",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:20": [
+      "movie",
+      {
+        "id": 20,
+        "title": "Fixture 20",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:21": [
+      "movie",
+      {
+        "id": 21,
+        "title": "Fixture 21",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:22": [
+      "movie",
+      {
+        "id": 22,
+        "title": "Fixture 22",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:23": [
+      "movie",
+      {
+        "id": 23,
+        "title": "Fixture 23",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:24": [
+      "movie",
+      {
+        "id": 24,
+        "title": "Fixture 24",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:25": [
+      "movie",
+      {
+        "id": 25,
+        "title": "Fixture 25",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:26": [
+      "movie",
+      {
+        "id": 26,
+        "title": "Fixture 26",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:27": [
+      "movie",
+      {
+        "id": 27,
+        "title": "Fixture 27",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:28": [
+      "movie",
+      {
+        "id": 28,
+        "title": "Fixture 28",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:29": [
+      "movie",
+      {
+        "id": 29,
+        "title": "Fixture 29",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:30": [
+      "movie",
+      {
+        "id": 30,
+        "title": "Fixture 30",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:31": [
+      "movie",
+      {
+        "id": 31,
+        "title": "Fixture 31",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:32": [
+      "movie",
+      {
+        "id": 32,
+        "title": "Fixture 32",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:33": [
+      "movie",
+      {
+        "id": 33,
+        "title": "Fixture 33",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:34": [
+      "movie",
+      {
+        "id": 34,
+        "title": "Fixture 34",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:35": [
+      "movie",
+      {
+        "id": 35,
+        "title": "Fixture 35",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:36": [
+      "movie",
+      {
+        "id": 36,
+        "title": "Fixture 36",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:37": [
+      "movie",
+      {
+        "id": 37,
+        "title": "Fixture 37",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:38": [
+      "movie",
+      {
+        "id": 38,
+        "title": "Fixture 38",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:39": [
+      "movie",
+      {
+        "id": 39,
+        "title": "Fixture 39",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:40": [
+      "movie",
+      {
+        "id": 40,
+        "title": "Fixture 40",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:41": [
+      "movie",
+      {
+        "id": 41,
+        "title": "Fixture 41",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:42": [
+      "movie",
+      {
+        "id": 42,
+        "title": "Fixture 42",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    ],
+    "tmdb:999": [
+      "movie",
+      {
+        "raise": true
+      }
+    ]
+  },
+  "picks": [
+    {
+      "title": "Fixture 1",
+      "kind": "movie",
+      "pick": {
+        "id": 1,
+        "title": "Fixture 1",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "title": "Fixture 70",
+      "kind": "movie",
+      "pick": {
+        "id": 70,
+        "title": "Fixture 70",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "title": "Fixture 60",
+      "kind": "movie",
+      "pick": {
+        "id": 60,
+        "title": "Fixture 60",
+        "release_date": "2020-01-02",
+        "genres": [
+          {
+            "name": "Drama"
+          },
+          {
+            "name": "Science Fiction"
+          }
+        ],
+        "genre_ids": [
+          1,
+          2
+        ]
+      }
+    }
+  ],
+  "genres": {
+    "1": "Drama",
+    "2": "Science Fiction",
+    "3": "Animation"
+  },
+  "collections": {
+    "movie/70": {
+      "belongs_to_collection": {
+        "id": 700
+      }
+    },
+    "collection/700": {
+      "parts": [
+        {
+          "id": 70
+        },
+        {
+          "id": 71
+        }
+      ]
+    }
+  }
+}
