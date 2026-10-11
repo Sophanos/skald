@@ -23,3 +23,13 @@ class ReleaseDocs(unittest.TestCase):
 
     def test_watch_exact_shared_text(self):
         self.assertEqual((ROOT/'docs/WATCH.md').read_text(), recipes.watch_doc())
+
+    def test_recommended_setup_prepares_private_data_first(self):
+        command = 'mkdir -p data && sudo chown 65534 data && sudo chmod 700 data'
+        for name in ('README.md', 'docs/WATCH.md', 'docs/SETUP.md'):
+            with self.subTest(name=name):
+                text = (ROOT/name).read_text()
+                if name == 'README.md':
+                    text = text.split('## Recommended: the setup we run', 1)[1]
+                self.assertIn(command, text)
+                self.assertLess(text.index(command), text.index('docker compose -f compose.stack.example.yaml'))

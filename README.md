@@ -41,13 +41,15 @@ Only AIOStreams needs an HTTPS address. Skald stays inside the Docker network.
 Apple TV app (Odin) → AIOStreams (Jellyfin mode, HTTPS) → Skald (internal)
 ```
 
-1. Copy `.env.example` to `.env` and `.env.aiostreams.example` to `.env.aiostreams`.
+1. Run `mkdir -p data && sudo chown 65534 data && sudo chmod 700 data`.
+   Skald runs as user 65534 and keeps DATA private.
+2. Copy `.env.example` to `.env` and `.env.aiostreams.example` to `.env.aiostreams`.
    Set TMDB and OpenRouter keys in `.env`. Make the AIOStreams secret with
    `openssl rand -hex 32`; set its public HTTPS address in `.env.aiostreams`.
-2. Run `docker compose -f compose.stack.example.yaml up -d --build`.
-3. Run `docker compose -f compose.stack.example.yaml exec skald skald setup`.
-4. Add the printed internal manifest URL as a custom addon in AIOStreams.
-5. Add your AIOStreams HTTPS address as a server in Odin. Log in with the AIOStreams
+3. Run `docker compose -f compose.stack.example.yaml up -d --build`.
+4. Run `docker compose -f compose.stack.example.yaml exec skald skald setup`.
+5. Add the printed internal manifest URL as a custom addon in AIOStreams.
+6. Add your AIOStreams HTTPS address as a server in Odin. Log in with the AIOStreams
    config UUID as username and the config password.
 
 Stremio can use the same AIOStreams URL; that path should work, not yet tested by us.

@@ -33,7 +33,7 @@ class SnapshotRows(unittest.TestCase):
         seen = set()
         for row in self.rows:
             ids = {x['id'] for x in row['metas']}
-            if row['id'] not in (rid('rewatch', s.CONFIG), rid('top10', s.CONFIG)):
+            if row['id'] != rid('top10', s.CONFIG):
                 blocked = seen if row['id'] in s.MOODS_ROWS + s.LANES else getattr(seen, 'deep', seen)
                 self.assertFalse(ids & blocked, row['id'])
             seen = s.mark_above(seen, row['id'], row['metas'])
@@ -157,7 +157,7 @@ class SnapshotRows(unittest.TestCase):
             for row in rows:
                 ids = [x['id'] for x in row['metas']]
                 self.assertEqual(len(ids), len(set(ids)), row['id'])
-                if row['id'] not in (rid('rewatch', s.CONFIG), rid('top10', s.CONFIG)):
+                if row['id'] != rid('top10', s.CONFIG):
                     blocked = seen if row['id'] in s.MOODS_ROWS + s.LANES else getattr(seen, 'deep', seen)
                     self.assertFalse(set(ids) & blocked, row['id'])
                 seen = s.mark_above(seen, row['id'], row['metas'])

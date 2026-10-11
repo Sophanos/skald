@@ -130,11 +130,22 @@ class W28Fixes(unittest.TestCase):
             from test_rows import SnapshotRows
             check = SnapshotRows('test_display_order_and_first_six_dedupe')
             check.s, check.rows = s, rows
-            check.test_display_order_and_first_six_dedupe()
+            with self.assertRaises(AssertionError):
+                check.test_display_order_and_first_six_dedupe()
             from test_rows_r2 import SnapshotR2
             check = SnapshotR2('test_snapshot_window_rule')
             check.s, check.rows = s, rows
-            check.test_snapshot_window_rule()
+            with patch('test_rows_r2.display_rows', return_value=rows):
+                with self.assertRaises(AssertionError):
+                    check.test_snapshot_window_rule()
+                for row in rows:
+                    if row['id'] == s.rid('rewatch'):
+                        row['metas'] = []
+                    elif row['id'] == s.rid('top10') and row['type'] == 'movie':
+                        row['metas'] = [shared]
+                    ids = [x['id'] for x in row['metas']]
+                    self.assertEqual(len(ids), len(set(ids)), row['id'])
+                check.test_snapshot_window_rule()
 
     def test_copy_helpers_keep_format_gate(self):
         output = Path(self.temp.name)/'output'

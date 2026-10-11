@@ -56,7 +56,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -9189,8 +9189,8 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
                                                 else f"Episode {m[2]}", x.get("description") or "")}
             if x["id"] not in masks[0] and row_eligible(x, cid, lang, p, animation) and (cid not in LANE_ROWS or row_related(x, cid, lang)):
                 corrected.append(x)
-        # Own rewatch items and chart ranks survive; all other shelves use the actual served rows above.
-        metas = corrected if cid in (rid('rewatch'), rid('top10')) else [x for x in corrected if x["id"] not in above]
+        # Chart ranks survive; all other shelves use the actual served rows above.
+        metas = corrected if cid == rid('top10') else [x for x in corrected if x["id"] not in above]
         tail_candidates = []
         metas = fill_row(metas, cid, lang, p, above, masks, tail_candidates) if cid == rid('week') else fill_row(metas, cid, lang, p, above, masks)
         if cid not in MIXED | set(LANE_BENCH):

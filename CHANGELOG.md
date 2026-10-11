@@ -4,6 +4,13 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.0.1
+
+Watch Again no longer repeats a title already shown higher up on the home screen.
+The recommended setup now creates a private DATA folder before starting Skald.
+
+**Data changes:** none.
+
 ## 1.0.0 — first public release
 
 First public release of Skald: household setup, taste-based shelves, connectors,

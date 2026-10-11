@@ -23,7 +23,7 @@ class RowsR2(unittest.TestCase):
         cls.s = cls.context.__enter__()
         cls.addClassCleanup(cls.context.__exit__, None, None, None)
 
-    def served(self, cid, metas, above=None, who=None):
+    def served(self, cid, metas, above=None, who=None, typ='tv'):
         s = self.s
         with ExitStack() as stack:
             for name, value in {'row_eligible': True, 'row_related': True, 'row_member': False, 'get_model': None,
@@ -32,7 +32,29 @@ class RowsR2(unittest.TestCase):
             stack.enter_context(patch.object(s, 'row_list', side_effect=lambda c, *a: metas.copy() if c == cid else []))
             for name in ('fill_row', 'balance_row', 'polish_row', 'rotate_row', 'remote_order'):
                 stack.enter_context(patch.object(s, name, side_effect=lambda xs, *a, **kw: xs))
-            return s.served_row(cid, 'tv', 'de-DE', {}, above if above is not None else set(), (set(), set()), who)
+            return s.served_row(cid, typ, 'de-DE', {}, above if above is not None else set(), (set(), set()), who)
+
+    def test_rewatch_dedupes_catchup_and_refills_own_candidates(self):
+        s = self.s
+        shared = [{**x, 'type': 'series'} for x in cards(2)]
+        catchup = self.served(rid('catchup', s.CONFIG), shared)
+        above = s.mark_above(set(), rid('catchup', s.CONFIG), catchup)
+        own = cards(20, 100)
+        self.assertEqual(self.served(rid('top10', s.CONFIG), shared, above, typ='series'), shared)
+        self.assertEqual(self.served(rid('rewatch', s.CONFIG), shared + own, above), own)
+        self.assertEqual(self.served(rid('rewatch', s.CONFIG), shared + own[:3], above), own[:3])
+
+    def test_window_check_uses_scoped_catalog_viewer(self):
+        s = self.s
+        cid = rid('rewatch', s.CONFIG)
+        check = SnapshotR2('test_snapshot_window_rule')
+        check.s = s
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.object(s, 'feed_rows', return_value=[(cid, ('tv',), 'Watch Again')]), \
+                patch.object(s, 'row_metas', return_value=[]) as row_metas:
+            check.test_snapshot_window_rule()
+        self.assertEqual([c.kwargs for c in row_metas.call_args_list],
+                         [{}] + [{'who': s.SCOPES[scope]} for scope in sorted(s.SCOPES)])
 
     def test_window_allows_deep_but_blocks_front(self):
         # A visible mood can reuse an unseen deep card, while its front stays distinct.
@@ -331,17 +353,24 @@ class SnapshotR2(unittest.TestCase):
         cls.rows = display_rows(cls.s)
 
     def test_snapshot_window_rule(self):
-        # Snapshot fronts stay distinct; legacy rewatch and chart exceptions are preserved.
-        s, above, first12 = self.s, set(), set()
-        for row in self.rows:
-            metas = row['metas']
-            keys = {x['id'] for x in metas}
-            if row['id'] not in (rid('rewatch', s.CONFIG), rid('top10', s.CONFIG)):
-                blocked = above if row['id'] in s.MOODS_ROWS + s.LANES else getattr(above, 'deep', above)
-                self.assertFalse(keys & blocked, row['id'])
-                self.assertFalse({x['id'] for x in metas[:12]} & first12, row['id'])
-            first12.update(x['id'] for x in metas[:12])
-            above = s.mark_above(above, row['id'], metas)
+        # Snapshot fronts stay distinct; only chart ranks may repeat.
+        s = self.s
+        row_metas = s.row_metas
+        for scope in [None] + sorted(s.SCOPES):
+            with s.addon_scope(scope), ExitStack() as stack:
+                if scope is not None:
+                    stack.enter_context(patch.object(s, 'row_metas', side_effect=lambda *args: row_metas(*args, who=s.SCOPES[scope])))
+                rows = display_rows(s)
+            above, first12 = set(), set()
+            for row in rows:
+                metas = row['metas']
+                keys = {x['id'] for x in metas}
+                if row['id'] != rid('top10', s.CONFIG):
+                    blocked = above if row['id'] in s.MOODS_ROWS + s.LANES else getattr(above, 'deep', above)
+                    self.assertFalse(keys & blocked, (scope, row['id']))
+                    self.assertFalse({x['id'] for x in metas[:12]} & first12, (scope, row['id']))
+                first12.update(x['id'] for x in metas[:12])
+                above = s.mark_above(above, row['id'], metas)
 
     def test_snapshot_row_targets(self):
         # Real served counts enforce the pre-registered mood, lane, Week and shelf targets.

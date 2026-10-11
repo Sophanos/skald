@@ -2,6 +2,8 @@
 
 We recommend the [setup we run](WATCH.md): Odin on Apple TV connects to AIOStreams
 in Jellyfin mode. AIOStreams reaches Skald inside Docker. Only AIOStreams needs HTTPS.
+First run `mkdir -p data && sudo chown 65534 data && sudo chmod 700 data`.
+Skald runs as user 65534 and keeps DATA private.
 Use `compose.stack.example.yaml` and both example env files. Add TMDB and OpenRouter
 keys in `.env`. Make `SECRET_KEY` with `openssl rand -hex 32` and set `BASE_URL` to
 AIOStreams' public HTTPS address in `.env.aiostreams`. Keep both files private.
