@@ -83,7 +83,7 @@ class PublicSetupTests(unittest.TestCase):
         self.assertIn('DATABASE_URI=sqlite://./data/db.sqlite', env)
         self.assertIn('JELLYFIN_MAX_LIBRARIES=40', env)
         self.assertEqual({line.split('=')[0] for line in env.splitlines() if line and not line.startswith('#')},
-                         {'SECRET_KEY', 'BASE_URL', 'DATABASE_URI', 'JELLYFIN_ENABLED', 'JELLYFIN_MAX_LIBRARIES'})
+                         {'SECRET_KEY', 'BASE_URL', 'DATABASE_URI', 'JELLYFIN_ENABLED', 'JELLYFIN_MAX_LIBRARIES', 'MANIFEST_CACHE_TTL'})
 
     def test_stack_setup_internal_token_url_without_public_base(self):
         for watch in ('aiostreams', 'jellyfin-app'):
@@ -102,7 +102,7 @@ class PublicSetupTests(unittest.TestCase):
                 self.assertIn(url.replace(s.addon_token(), '<addon-token>'), '\n'.join(result['lines']))
                 self.assertFalse(result['addon_urls_shown'])
                 self.assertNotEqual(url, 'http://skald:8080/en-US/manifest.json')
-                self.assertIn('restart skald', result['next'])
+                self.assertEqual(result['next'], 'skald setup aiostreams')
 
     def test_setup_refuses_event_only_household(self):
         from skald import setup

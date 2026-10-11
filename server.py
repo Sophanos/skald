@@ -56,7 +56,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -1396,14 +1396,34 @@ def manifest(lang, scope=None):
     rows = []
     with addon_scope(scope):
         catalogs = feed_rows(lang)
-    for cid, typs, name in catalogs:
-        if cid in MIXED and "tv" in typs:  # one mixed row; movie/series copies only duplicate it in Odin
-            typs = ["tv"]
-        for typ in typs:
-            if isinstance(name, dict):
-                rows.append({"type": typ, "id": cid, "name": name[typ]})
-            else:
-                rows.append({"type": typ, "id": cid, "name": name + (suffix[typ] if len(typs) > 1 else "")})
+        for cid, typs, name in catalogs:
+            if cid in MIXED and "tv" in typs:  # one mixed row; movie/series copies only duplicate it in Odin
+                typs = ["tv"]
+            for typ in typs:
+                if (feed(cid, lang) or (cid, lang) in _feeds_empty) and cid != rid('top10'):
+                    # Count the cached composition of stored rows, with the catalog's viewer and pins.
+                    metas = row_metas(cid, typ, lang, who=SCOPES[scope]) if scope is not None else row_metas(cid, typ, lang)
+                    if len(metas) < (1 if cid == rid('episodes') else ROW_MIN):
+                        continue
+                if isinstance(name, dict):
+                    rows.append({"type": typ, "id": cid, "name": name[typ]})
+                else:
+                    rows.append({"type": typ, "id": cid, "name": name + (suffix[typ] if len(typs) > 1 else "")})
+    reserved = {row["name"] for row in rows}
+    used = set()
+    for row in rows:
+        name = row["name"]
+        if name in used:
+            n = 2
+            while f"{name} · {n}" in reserved:
+                n += 1
+            row["name"] = f"{name} · {n}"
+            reserved.add(row["name"])
+        used.add(row["name"])
+    rows += [
+        {"type": "movie", "id": rid('search'), "name": "Search", "extra": extra},
+        {"type": "series", "id": rid('search'), "name": "Search", "extra": extra},
+    ]
     return {
         "id": CONFIG["addon"]["id"] + (f".{scope}" if scope else ""),
         "version": CONFIG["addon"]["version"],
@@ -1412,10 +1432,7 @@ def manifest(lang, scope=None):
         "resources": ["catalog"],
         "types": ["movie", "series", "tv"],
         "idPrefixes": ["tmdb:"],
-        "catalogs": rows + [
-            {"type": "movie", "id": rid('search'), "name": "Search", "extra": extra},
-            {"type": "series", "id": rid('search'), "name": "Search", "extra": extra},
-        ],
+        "catalogs": rows,
     }
 
 
@@ -1637,6 +1654,7 @@ STAMP_V = "17.3"  # bump to rebuild every row once after a format change
 ROW_MAX = 40
 DAY = 86400
 _feeds = {}
+_feeds_empty = set()  # Checked without taste signal; forgotten on restart.
 _feeds_lock = threading.Lock()
 _langs = {LANG}
 _searches = []
@@ -8119,7 +8137,7 @@ def pin_decision(lang):
                         above[who] = mark_above(above[who], cid, served_row(cid, typ, lang, p or {}, above[who], masks_by[who], who=who))
             used = set()
             for cid in LANES:
-                primary = records.get((cid, lang)) or {"metas": {}}
+                primary = records.get((cid, lang)) or {}
                 for bench, candidate in [(None, primary)] + [(b, records.get((b, lang)) or {}) for b in LANE_BENCH]:
                     fid = (candidate.get("names") or {}).get("lane")
                     if bench and (not fid or fid in used):
@@ -8325,6 +8343,10 @@ def feed_pass(d, retry):
                         retry[(job, lang)] = time.time() + 600
                         continue
                     if rows is None:  # no taste signal yet: keep the old row, check again later
+                        with _feeds_lock:
+                            for cid in cids:
+                                if (cid, lang) not in _feeds:
+                                    _feeds_empty.add((cid, lang))
                         retry[(job, lang)] = time.time() + 1800
                         continue
                     names = rows.pop("_names", None) or {}
@@ -8334,6 +8356,7 @@ def feed_pass(d, retry):
                             if names.get(cid):
                                 rec["names"] = names[cid]
                             _feeds[(cid, lang)] = rec
+                            _feeds_empty.discard((cid, lang))
                     print(f"job {job} {lang} built: " + ", ".join(
                         f"{cid.split('.')[1]}.{k}={len(v)}" for cid in cids for k, v in (rows.get(cid) or {}).items()), flush=True)
                     try:

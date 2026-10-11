@@ -446,6 +446,8 @@ class PlayerConnectors(unittest.TestCase):
         self.assertTrue(result['keyless'])
         self.assertGreater(result['catalogs'], 0)
         self.assertGreater(result['token_metas'], 0)
+        self.assertEqual((result['rows'], result['nonempty'], result['foryou'], result['rewatch'], result['popular']),
+                         (28, 4, 24, 0, 10))
 
     def test_stale_plex_section_selection_preserves_history(self):
         self.configure('plex')

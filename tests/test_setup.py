@@ -47,7 +47,7 @@ class SetupTests(unittest.TestCase):
                 '--connect', 'files', '--json'], out=out), 0)
         result = json.loads(out.getvalue())
         self.assertIn('checksRun', result['doctor'])
-        self.assertEqual(result['next'], 'docker compose restart engine')
+        self.assertEqual(result['next'], 'nothing left')
 
     def test_setup_json_contains_recipe_and_private_urls(self):
         from skald import setup
@@ -57,7 +57,7 @@ class SetupTests(unittest.TestCase):
                 '--watch', 'aiostreams', '--connect', 'files', '--json'], out=out), 0)
         result = json.loads(out.getvalue())
         self.assertTrue(any('Together:' in line for line in result['lines']))
-        self.assertTrue(any('caches addon manifests' in line for line in result['lines']))
+        self.assertTrue(any('MANIFEST_CACHE_TTL' in line for line in result['lines']))
         manifest = next(line.split(': ', 1)[1] for line in result['lines'] if line.startswith('Household: https://'))
         self.assertTrue(any('http://engine:8080/' + manifest.split('https://tv.example/', 1)[1] in line for line in result['lines']))
 

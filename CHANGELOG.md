@@ -4,6 +4,23 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.0.2
+
+`skald setup aiostreams` creates an AIOStreams login with Skald and title details
+from The Movie Database addon (details only). It prints the Odin / Jellyfin app
+login. Existing AIOStreams users can add Skald to their login with `--uuid`;
+nothing else in that login changes. Skald's rows stay in Skald's order.
+
+Home only lists rows that have something to show. A row appears once it has
+enough titles. Rows no longer share a name in Jellyfin apps.
+
+`.env.aiostreams.example` includes optional `MANIFEST_CACHE_TTL` so new rows
+show up within minutes.
+
+**Data changes:** New optional file `DATA/credentials/aiostreams.json`, with
+permissions 0600, written only by `skald setup aiostreams`. DATA format unchanged.
+No migration.
+
 ## 1.0.1
 
 Watch Again no longer repeats a title already shown higher up on the home screen.

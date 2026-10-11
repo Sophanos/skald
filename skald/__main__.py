@@ -705,6 +705,7 @@ def main(argv=None, out=None):
                 print("Data format: " + str(data["data_format"]), file=out)
                 print("Done: " + (", ".join(data["done"]) or "nothing yet"), file=out)
                 print("Missing: " + (", ".join(data["missing"]) or "nothing"), file=out)
+                print("AIOStreams login: " + data["aiostreams_login"], file=out)
                 print("Next: " + data["next"], file=out)
             elif args.setup_action == "link":
                 print("\n".join(data["lines"]), file=out)

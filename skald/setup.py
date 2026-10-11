@@ -1,8 +1,10 @@
 """Guided setup on the machine holding DATA; no snapshot is required."""
 from contextlib import contextmanager, redirect_stdout
 import argparse
+import base64
 import copy
 import getpass
+import http.client
 import importlib.util
 import io
 import json
@@ -10,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import secrets
 import stat
 import sys
 import tempfile
@@ -139,6 +142,209 @@ def state(data):
     return value
 
 
+def aiostreams_logins(data):
+    path = Path(data)/'credentials/aiostreams.json'
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def aiostreams_request(url, *, method='GET', body=None, login=None, transport=None, manifest=None):
+    headers = {'Accept': 'application/json'}
+    if login:
+        headers['Authorization'] = 'Basic ' + base64.b64encode(
+            (login['uuid'] + ':' + login['password']).encode()).decode()
+    raw = json.dumps(body).encode() if body is not None else None
+    if raw is not None:
+        headers['Content-Type'] = 'application/json'
+    req = remote.urllib.request.Request(url, raw, headers, method=method)
+    http_status = None
+    try:
+        try:
+            response = (transport or remote.urllib.request.build_opener(remote.NoRedirect()).open)(req, timeout=20)
+        except remote.urllib.error.HTTPError as err:
+            http_status, response = err.code, err
+        with response:
+            raw = response.read(2 * 1024 * 1024)
+        if len(raw) >= 2 * 1024 * 1024:
+            raise ValueError()
+        reply = json.loads(raw)
+        if not isinstance(reply, dict):
+            raise ValueError()
+    except (OSError, ValueError, http.client.HTTPException):
+        raise ValueError('AIOStreams unavailable or invalid JSON; check --aio-url and try again') from None
+    if http_status or reply.get('success') is False:
+        error = reply.get('error', {})
+        error = error if isinstance(error, dict) else {}
+        code = error.get('code')
+        if http_status == 429:
+            hint = 'AIOStreams rate limit; try again later'
+        elif code == 'USER_INVALID_DETAILS':
+            hint = 'AIOStreams wrong login; check UUID and password'
+        elif code == 'ADDON_PASSWORD_INVALID':
+            hint = 'AIOStreams protected; check the instance access key and try again'
+        elif code == 'USER_INVALID_CONFIG' and 'fetch manifest' in str(error.get('message', '')).lower():
+            hint = 'AIOStreams cannot reach ' + (manifest or 'the Skald URL') + '; same Docker network? else use --base https address'
+        else:
+            hint = 'AIOStreams rejected setup; check its settings or use the manual steps'
+        raise ValueError(hint)
+    return reply
+
+
+def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
+    url = None
+    def request(address, **kwargs):
+        return aiostreams_request(address, transport=transport, manifest=url, **kwargs)
+    own_catalogs = {cid for cid, _, _ in s.feed_rows(s.LANG)} | {s.rid('search')}
+    def catalog_prefix(manifest):
+        for catalog in manifest.get('catalogs', []):
+            prefix, _, cid = catalog['id'].partition('.')
+            if cid in own_catalogs:
+                return prefix
+        return None
+    try:
+        internal = args.internal_base or saved.get('internal_base') or os.environ.get('SKALD_INTERNAL_BASE')
+        base = remote.validate_base(args.base or internal or saved.get('base') or '')
+        if (args.base or not internal) and remote.urllib.parse.urlsplit(base).scheme != 'https':
+            raise ValueError('use --base https address so AIOStreams can reach Skald')
+        urls = dict(zip(['household', *s.SCOPES], s.addon_urls(base)))
+        selected = args.member or 'household'
+        if selected not in (*urls, 'all'):
+            raise ValueError('choose --member ' + '|'.join([*s.PEOPLE, 'together', 'all']))
+        people = list(s.SCOPES) if selected == 'all' else [selected]
+        if args.uuid and selected == 'all':
+            raise ValueError('use --uuid with one member at a time')
+        aio = remote.validate_base(ask(args.aio_url or saved.get('aio_url') or ('http://aiostreams:3000' if internal else None),
+                                      'AIOStreams address', None, '--aio-url'))
+        roots = {remote.validate_base(b) for b in (base, internal, saved.get('internal_base'),
+                 saved.get('base'), os.environ.get('SKALD_INTERNAL_BASE')) if b}
+        known_urls = {url for root in roots for url in s.addon_urls(root)}
+        saved['aio_url'] = aio
+        if internal:
+            saved['internal_base'] = remote.validate_base(internal)
+        if args.base:
+            saved['base'] = base
+        write_private(Path(s.DATA)/'setup.json', json.dumps(saved) + '\n')
+        settings = request(aio + '/api/v1/status')['data']['settings']
+        public = remote.validate_base(settings['baseUrl'])
+        if not settings.get('jellyfin', {}).get('enabled'):
+            lines.append('Jellyfin mode is off; set JELLYFIN_ENABLED=true in .env.aiostreams')
+        if args.yes and settings.get('protected') and not args.secret_stdin:
+            raise ValueError('protected AIOStreams needs --secret-stdin for the instance access key')
+        if args.yes and args.uuid and not args.password_stdin:
+            raise ValueError('existing AIOStreams login needs --password-stdin')
+        access = secret(args.secret_stdin, 'AIOStreams instance access key') if settings.get('protected') else None
+        logins = aiostreams_logins(s.DATA)
+        for person in people:
+            url = urls[person]
+            login = {'uuid': args.uuid, 'password': secret(args.password_stdin, 'AIOStreams password'), 'member': person} if args.uuid else logins.get(person)
+            new = login is None
+            skald = {'type': 'custom', 'instanceId': 'skd', 'enabled': True, 'options': {
+                'name': 'Skald', 'manifestUrl': url, 'timeout': 7000, 'mediaTypes': [],
+                'libraryAddon': False, 'resultPassthrough': False}}
+            tmdb = {'type': 'tmdb-addon', 'instanceId': 'tmd', 'enabled': True, 'options': {
+                'name': 'The Movie Database', 'timeout': 7500, 'resources': ['meta']}}
+            if new:
+                password = secret(True, 'AIOStreams password') if args.password_stdin else secrets.token_urlsafe(18)
+                config = {'formatter': {'id': 'gdrive'}, 'sortCriteria': {'global': []}, 'presets': [skald, tmdb]}
+            else:
+                reply = request(aio + '/api/v1/user', login=login)['data']
+                config = reply['userData']
+                encrypted = reply['encryptedPassword']
+                presets = config['presets']
+                found = None
+                for preset in presets:
+                    options = preset.get('options', {})
+                    address = options.get('manifestUrl', '')
+                    if preset.get('type') == 'custom' and (address in known_urls or
+                        options.get('name') == 'Skald' and any(address.startswith(root + '/') for root in roots)):
+                        found = preset
+                        break
+                changes = []
+                def unused(preferred):
+                    used = {p.get('instanceId') for p in presets}
+                    if preferred not in used:
+                        return preferred
+                    return next(f'{i:03x}' for i in range(4096) if f'{i:03x}' not in used)
+                kept = len(presets) - (found is not None)
+                if found is None:
+                    skald['instanceId'] = unused('skd')
+                    presets.append(skald)
+                    changes.append('add Skald')
+                elif found['options']['manifestUrl'] != url:
+                    found['options']['manifestUrl'] = url
+                    changes.append('update Skald address')
+                manifest = request(aio + '/stremio/' + login['uuid'] + '/' + encrypted + '/manifest.json')
+                details = any(isinstance(r, dict) and r.get('name') == 'meta' and
+                              (not r.get('idPrefixes') or 'tmdb:' in r['idPrefixes']) for r in manifest.get('resources', []))
+                if not details:
+                    tmdb['instanceId'] = unused('tmd')
+                    presets.append(tmdb)
+                    changes.append('add The Movie Database (title details)')
+                if access is not None and config.get('accessKey') != access:
+                    changes.append('update instance access key')
+                save_config = bool(changes)
+                order_id = catalog_prefix(manifest)
+                order_needed = not order_id or order_id not in config.get('upstreamCatalogOrder', [])
+                if order_needed:
+                    changes.append("keep Skald's row order")
+                if changes:
+                    lines.extend([person + ':', *changes, str(kept) + ' other addons kept'])
+                    show()
+                    if not args.yes:
+                        if args.json:
+                            raise ValueError('use --yes with --json to save changes')
+                        if input('Save? [y/N] ').strip().lower() != 'y':
+                            lines.append('Not saved')
+                            continue
+                else:
+                    lines.append('AIOStreams already set up')
+            if access is not None:
+                config['accessKey'] = access
+            if new:
+                reply = request(aio + '/api/v1/user', method='POST', body={'config': config, 'password': password})['data']
+                login = {'uuid': reply['uuid'], 'password': password, 'member': person}
+                encrypted = reply['encryptedPassword']
+            elif save_config:
+                request(aio + '/api/v1/user', method='PUT', body={'config': config}, login=login)
+            if new or args.uuid:
+                logins[person] = login
+                os.close(s._credentials_dir(create=True))
+                write_private(Path(s.DATA)/'credentials/aiostreams.json', json.dumps(logins) + '\n')
+            if new or save_config or order_needed:
+                if new or save_config:
+                    manifest = request(aio + '/stremio/' + login['uuid'] + '/' + encrypted + '/manifest.json')
+                order_id = catalog_prefix(manifest)
+                if not order_id:
+                    raise ValueError('AIOStreams has no Skald catalogs yet; run skald setup aiostreams again when rows appear')
+                config = request(aio + '/api/v1/user', login=login)['data']['userData']
+                order = config.setdefault('upstreamCatalogOrder', [])
+                if order_id not in order:
+                    order.append(order_id)
+                    if access is not None:
+                        config['accessKey'] = access
+                    request(aio + '/api/v1/user', method='PUT', body={'config': config}, login=login)
+            if new:
+                if selected == 'all':
+                    lines.append(person + ':')
+                lines.extend(['Odin / Jellyfin app:  server  ' + public + '/jellyfin',
+                              '                      user    ' + login['uuid']])
+                if not args.json:
+                    lines.extend(['                      password ' + login['password'] + '   (shown once; also saved privately in DATA)',
+                                  'Stremio (optional):   ' + public + '/stremio/' + login['uuid'] + '/' + encrypted + '/manifest.json'])
+        result = {'ok': True, 'lines': lines}
+    except (ValueError, KeyError, TypeError) as error:
+        hint = str(error) if isinstance(error, ValueError) else 'AIOStreams response incomplete; check its settings'
+        if args.json and 'urls' in locals():
+            hint = hint.replace(s.addon_token(), '<addon-token>')
+        lines.append(hint)
+        manual_url = url or 'YOUR_PRINTED_MANIFEST_URL'
+        if args.json:
+            manual_url = manual_url.replace(s.addon_token(), '<addon-token>')
+        lines.extend(recipes.aiostreams_manual(manual_url).splitlines())
+        result = {'ok': False, 'lines': lines}
+    show()
+    return result
+
+
 def status(data):
     saved = state(data)
     path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
@@ -150,14 +356,17 @@ def status(data):
     missing = [k for k, done in steps.items() if not done]
     commands = {'checks': 'skald setup', 'household': 'skald setup', 'address': 'skald setup --base YOUR_ADDRESS',
                 'watch': 'skald setup --watch stremio', 'taste': 'skald setup --connect files'}
-    next_command = 'skald connectors test' if saved.get('connector_failed') else commands[missing[0]] if missing else ('docker compose -f compose.stack.example.yaml restart skald' if saved.get('internal_base') else 'docker compose restart engine')
+    next_command = 'skald connectors test' if saved.get('connector_failed') else commands[missing[0]] if missing else 'nothing left'
     if 'checks' in missing:
         missing[missing.index('checks')] = ('TMDB_API not set; put it in .env, then docker compose up -d (engine) or docker compose -f compose.stack.example.yaml up -d (skald); without Docker: export TMDB_API=...'
                                             if not os.environ.get('TMDB_API') else 'TMDB key not checked; run skald setup')
+    logins = aiostreams_logins(data)
+    if saved.get('watch') in ('aiostreams', 'jellyfin-app') and not logins and all(steps[k] for k in ('checks', 'household', 'address', 'watch')):
+        next_command = 'skald setup aiostreams'
     from .migrate import check
     return {'release': members.VERSION, 'data_format': check(data)['format'], 'done': [k for k, done in steps.items() if done], 'missing': missing,
             'next': next_command, 'ok': not missing,
-            'legacy_readonly': legacy}
+            'legacy_readonly': legacy, 'aiostreams_login': 'made for ' + ', '.join(logins) if logins else 'not made'}
 
 
 def link(s, name, person, scopes, base):
@@ -214,7 +423,8 @@ def _configure_connector(s, args, ask, lines, show, stage, published):
         mapping = {**old_options.get('profiles', {}), **parse_mapping(args.map, cfg)}
         for uid in users:
             if uid not in mapping:
-                mapping[uid] = ask(None, 'Member for profile ' + uid + ' (or together)', None, '--map')
+                default = next((v['member'] for v in aiostreams_logins(s.DATA).values() if v['uuid'].startswith(uid) or uid.startswith(v['uuid'][:8])), None)
+                mapping[uid] = ask(None, 'Member for profile ' + uid + ' (or together)', 'together' if default == 'household' else default, '--map')
         opts['profiles'] = {p: 'household' if who == 'together' else who for p, who in mapping.items()}
         c = {'kind': 'player', 'enabled': True, 'auth': None, 'options': opts}
     else:
@@ -342,6 +552,10 @@ def run(args):
             raise ValueError('use --yes and flags with --json')
         answer = input(label + (f' [{default}]' if default else '') + ': ').strip()
         return answer or default
+    if args.setup_action == 'aiostreams':
+        with server(data) as s:
+            s.require_config(s.CONFIG_SOURCE, s.CONFIG_ERROR)
+            return setup_aiostreams(s, args, saved, ask, lines, show)
     check_tmdb(data)
     saved['tmdb_checked'] = True
     write_private(data/'setup.json', json.dumps(saved) + '\n')
@@ -424,10 +638,14 @@ def run(args):
 
 def add_parser(commands):
     p = commands.add_parser('setup', help='set up a household on the machine holding DATA')
-    p.add_argument('setup_action', nargs='?', choices=['link'], help='link creates a private token for a laptop')
+    p.add_argument('setup_action', nargs='?', choices=['link', 'aiostreams'], help='link a laptop or make an AIOStreams login')
     helps = {
+        'aio-url': 'address where Skald reaches AIOStreams',
+        'uuid': 'existing AIOStreams login UUID',
+        'member': 'AIOStreams login for NAME, together or all; default: household',
+        'password-stdin': 'read the AIOStreams login password from stdin',
         'yes': 'use supplied values and defaults without prompting',
-        'json': 'print a JSON result with addon tokens hidden',
+        'json': 'print JSON with addon tokens, AIOStreams passwords and Stremio login URLs hidden',
         'status': 'show completed steps, missing settings and one next command',
         'check': 'fetch <base>/<lang>/manifest.json and say if your apps can reach it',
         'secret-stdin': 'read the secret from stdin instead of a prompt',
@@ -449,10 +667,10 @@ def add_parser(commands):
         'scopes': 'comma-separated laptop permissions (default: read,decide,events)',
         'map': 'map a source account to a member: SOURCE_ID=MEMBER or SOURCE_ID=together (repeatable)',
     }
-    for name in ('yes', 'json', 'status', 'check', 'secret-stdin'):
+    for name in ('yes', 'json', 'status', 'check', 'secret-stdin', 'password-stdin'):
         p.add_argument('--' + name, action='store_true', default=False if name != 'json' else argparse.SUPPRESS, help=helps[name])
     for name in ('members', 'lang', 'timezone', 'country', 'base', 'internal-base', 'watch', 'connect', 'name', 'person',
-                 'source-url', 'source-path', 'user-id', 'auth-env', 'client-id-env'):
+                 'source-url', 'source-path', 'user-id', 'auth-env', 'client-id-env', 'aio-url', 'uuid', 'member'):
         p.add_argument('--' + name, help=helps[name])
     p.add_argument('--scopes', default='read,decide,events', help=helps['scopes'])
     p.add_argument('--map', action='append', default=[], help=helps['map'])

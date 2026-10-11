@@ -14,7 +14,7 @@ We reference its published image.
 
 Run `docker compose -f compose.stack.example.yaml up -d --build`, then
 `docker compose -f compose.stack.example.yaml exec skald skald setup`.
-Setup detects the internal address and prints a private URL to paste into AIOStreams.
+Then run `skald setup aiostreams`: it makes your login with Skald and title details, and prints the Odin server, user and password.
 You can also supply `--internal-base http://skald:8080 --watch jellyfin-app`.
 Commands below using `exec engine` describe the Stremio-direct alternative;
 for the recommended stack, use `-f compose.stack.example.yaml exec skald` instead.
@@ -82,7 +82,7 @@ docker compose exec engine skald setup --yes --members alex,sam --lang en-US --t
 
 `--yes` never prompts. A missing value gets a one-line fix.
 Use `--json` for a machine result. Addon tokens are replaced by `<addon-token>`;
-run in text mode to get the real private URLs. Laptop linking requires text mode too.
+AIOStreams passwords and Stremio login URLs are hidden too; run in text mode to get the private login and URLs. Laptop linking requires text mode too.
 
 ## 3. Choose the address
 
@@ -144,6 +144,10 @@ These deployment examples should work, not yet tested by us.
 **What it does:** prints the matching [watching recipe](WATCH.md).
 **What you need:** `--watch stremio`, `--watch aiostreams` or `--watch jellyfin-app`.
 **Worked when:** Skald rows appear in the player.
+Run `skald setup aiostreams --uuid <your uuid>` to add Skald and missing title details to an existing login; it keeps your other settings and asks before saving.
+Use `--aio-url` for the AIOStreams address; `--member NAME|together|all` makes member logins.
+Passwords use a private prompt or `--password-stdin`. Protected instances ask for their access key (`--secret-stdin` reads it first).
+New passwords are shown once and saved privately in DATA/credentials/aiostreams.json. Reruns use saved logins.
 AIOStreams may need a restart after rows change.
 
 ## 5. Connect taste sources

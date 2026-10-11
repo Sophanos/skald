@@ -168,9 +168,16 @@ def smoke(count, setup=None, keyless=False):
                 assert manifest['name'] == 'Skald' and manifest['catalogs'], 'manifest branding'
                 names = {row['id']: row['name'] for row in manifest['catalogs']}
                 assert not any(rid('', s.CONFIG) + p in names for p in people), 'default member shelves'
-                assert names[rid('week', s.CONFIG)] == '✨ This Week for ' + ' & '.join(p.title() for p in people), 'week label'
-                rows = {r['id'] + ':' + r['type']: s.row_metas(r['id'], r['type'], s.LANG)
-                        for r in manifest['catalogs'] if r['id'] != rid('search', s.CONFIG)}
+                row_names = {cid: name for cid, _, name in s.feed_rows(s.LANG)}
+                assert row_names[rid('week', s.CONFIG)] == '✨ This Week for ' + ' & '.join(p.title() for p in people), 'week label'
+                catalogs = [(cid, typ) for cid, typs, _ in s.feed_rows(s.LANG)
+                            for typ in (('tv',) if cid in s.MIXED and 'tv' in typs else typs)]
+                rows = {cid + ':' + typ: s.row_metas(cid, typ, s.LANG) for cid, typ in catalogs}
+                listed = {(r['id'], r['type']) for r in manifest['catalogs']}
+                for cid, typ in catalogs:
+                    minimum = 1 if cid == rid('episodes', s.CONFIG) else s.ROW_MIN
+                    if s.feed(cid, s.LANG) and cid != rid('top10', s.CONFIG) and len(rows[cid + ':' + typ]) < minimum:
+                        assert (cid, typ) not in listed, 'listed sparse built row'
                 if keyless:
                     assert 'OPENROUTER_API_KEY' not in os.environ and not s.OR_KEY, 'fixture LLM key'
                     assert not s.read_history() and not s.read_trakt() and not s._profiles['household']['entries'], 'nonempty cold history'

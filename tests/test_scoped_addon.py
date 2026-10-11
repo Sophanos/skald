@@ -71,6 +71,9 @@ class ScopedAddon(unittest.TestCase):
         self.assertEqual(headers['Cache-Control'], 'public, max-age=3600')
         legacy = json.loads(raw)
         shown = Path(s.DATA, 'shown.json').read_bytes()
+        # Warm each catalog composition; pin decisions remain shared across scopes.
+        for scope in s.SCOPES:
+            request(s, 'manifest.json', scope)
         with patch.object(s, 'served_row', side_effect=AssertionError('pin cache missed')):
             for scope in s.SCOPES:
                 code, _, raw = request(s, 'manifest.json', scope)

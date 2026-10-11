@@ -51,7 +51,7 @@ class LanesPin(unittest.TestCase):
             s._shown.clear()
             for who in SESSIONS:
                 with patch.object(s, 'who_watching', return_value=(who, 'tap')):
-                    s.manifest(LANG)
+                    s.pin_shown(LANG)
                 self.assertEqual(serve.call_count, calls)
                 self.assertIs(s.feed(s.LANES[0], LANG), pinned)
 
@@ -117,7 +117,7 @@ class LanesPin(unittest.TestCase):
         self.assertIs(s._pin_cache[LANG][1][s.LANES[0], LANG], s._feeds[s.LANES[0], LANG])
         self.assertFalse(s._shown)
         with patch.object(s, 'served_row', side_effect=AssertionError('rebuild cache miss')):
-            s.manifest(LANG)
+            s.pin_shown(LANG)
 
     def test_catalog_can_finish_while_prewarm_is_evaluating(self):
         s = self.s

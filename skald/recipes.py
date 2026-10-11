@@ -6,24 +6,41 @@ RECIPES = {
 Open the printed member URL (or Together) in Stremio → Install.
 Skald only adds rows and search; keep your stream addons for playback.''',
     'aiostreams': '''AIOStreams in Stremio, self-hosted or ElfHosted — should work, not yet tested by us.
-Add Skald as a custom addon by its manifest URL: {manifest}
+Run `skald setup aiostreams` first. It makes a login with Skald and title details.
+Existing users: `skald setup aiostreams --uuid <your uuid>` adds Skald to your current login
+and changes nothing else. It asks before saving the additions.
+For ElfHosted, use `--aio-url YOUR_AIOSTREAMS_HTTPS_ADDRESS --base YOUR_SKALD_HTTPS_ADDRESS`.
+ElfHosted should work, not yet tested by us.
+By hand instead: add Skald as a custom addon by its manifest URL: {manifest}
 On the same Docker network, use {internal};
 otherwise use the printed HTTPS URL. The internal URL includes the private addon token.
 copy the exact URL that `skald setup --watch aiostreams` prints.
-Order rows in AIOStreams' catalog settings.
-AIOStreams caches addon manifests for hours: restart AIOStreams (or wait)
-after Skald adds or renames rows.''',
+Add The Movie Database addon with only Meta/details on, so title pages show.
+The TMDB key under Services → Metadata does not fill title pages.
+Rows appear in Skald's order; setup keeps that order when new rows are added.
+Set `MANIFEST_CACHE_TTL=*:21600,skald:600` in .env.aiostreams to re-read Skald's rows
+every 10 minutes; "skald" is its Docker hostname. Restart AIOStreams after changing the setting.
+Without it, wait up to 6 hours or restart AIOStreams after rows change.
+Rows appear once they have enough titles; a new household starts with a few and gains more as Skald learns your taste.''',
     'jellyfin-app': '''Apple TV / Jellyfin apps such as Odin — tested by us.
-First add Skald to AIOStreams as a custom addon: {internal}
+Run `skald setup aiostreams` first. It makes your login with Skald and title details.
+Existing users: `skald setup aiostreams --uuid <your uuid>` adds Skald to your current login
+and changes nothing else. It asks before saving the additions.
+By hand instead: add Skald to AIOStreams as a custom addon: {internal}
+Add The Movie Database addon with only Meta/details on, so title pages show.
+The TMDB key under Services → Metadata does not fill title pages.
 Use the printed HTTPS URL if AIOStreams is outside this Docker network.
 AIOStreams can pretend to be a Jellyfin server. Enable JELLYFIN_ENABLED.
 Only the first JELLYFIN_MAX_LIBRARIES catalogs become libraries (default 20).
 Raise it if you have more rows; we use 40.
-In the app, add a server at your AIOStreams address. Log in with the AIOStreams
-config UUID as username and the config password. Skald rows appear as libraries on Home.
+In the app, add the printed server. Log in with the printed user and password.
+Skald rows appear as libraries on Home.
 Rows mixing films and series are served as type "tv" so series show up.
 To learn from viewing there, run skald setup --connect aiostreams-db.
-A shared login can count as "together".''',
+A shared login can count as "together".
+Set `MANIFEST_CACHE_TTL=*:21600,skald:600` in .env.aiostreams to re-read Skald's rows
+every 10 minutes; "skald" is its Docker hostname. Restart AIOStreams after changing the setting.
+Rows appear once they have enough titles; a new household starts with a few and gains more as Skald learns your taste.''',
 }
 FILES = '''Import a file on your laptop, then preview before sending:
 python3 -m skald import netflix ViewingActivity.csv --person {person} --remote --dry-run
@@ -60,11 +77,24 @@ Apple TV app (Odin) → AIOStreams (Jellyfin mode, HTTPS) → Skald (internal)
    `openssl rand -hex 32`; set its public HTTPS address in `.env.aiostreams`.
 3. Run `docker compose -f compose.stack.example.yaml up -d --build`.
 4. Run `docker compose -f compose.stack.example.yaml exec skald skald setup`.
-5. Add the printed internal manifest URL as a custom addon in AIOStreams.
-6. Add your AIOStreams HTTPS address as a server in Odin. Log in with the AIOStreams
-   config UUID as username and the config password.
+5. Run `docker compose -f compose.stack.example.yaml exec skald skald setup aiostreams`.
+   It makes your AIOStreams login with Skald and title details, and prints the Odin login.
+6. Add the printed server in Odin. Log in with the printed user and password.
+
+By hand instead:
+
+- Add Skald as a custom addon with the printed internal URL.
+- Add The Movie Database addon with only Meta/details on, so title pages show.
+- The TMDB key under Services → Metadata does not fill title pages.
 
 Stremio can use the same AIOStreams URL; that path should work, not yet tested by us.
 AIOStreams is a separate project with its own [docs and licence](https://github.com/Viren070/AIOStreams).
 We reference its published image. Configure its stream addons for playback.
 '''
+
+
+def aiostreams_manual(manifest):
+    return ('By hand instead:\n'
+            'Add Skald as a custom addon: ' + manifest + '\n'
+            'Add The Movie Database addon with only Meta/details on, so title pages show.\n'
+            'The TMDB key under Services → Metadata does not fill title pages.')

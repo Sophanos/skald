@@ -100,7 +100,6 @@ class RouteParityTests(unittest.TestCase):
         self.assertEqual(result, (200, {"X-First": "one", "Content-Length": "2"}, b"{}", wire))
 
     def test_changed_manifest_byte_fails_base_comparison(self):
-        base = self.git_baseline()
         with tempfile.TemporaryDirectory() as temp:
             snapshot = Path(temp, "data")
             snapshot.mkdir()
@@ -110,6 +109,8 @@ class RouteParityTests(unittest.TestCase):
             profile = json.loads((ROOT / "tests/fixtures/events/golden.json").read_text())["household"]
             (snapshot / "profile.json").write_text(json.dumps(profile))
             source = (ROOT / "server.py").read_text()
+            base = Path(temp, "base.py")
+            base.write_text(source)
             changed = Path(temp, "changed.py")
             changed.write_text(source.replace('"version": CONFIG["addon"]["version"],',
                                               '"version": CONFIG["addon"]["version"] + "!",', 1))
@@ -122,7 +123,6 @@ class RouteParityTests(unittest.TestCase):
                     route_parity.report(snapshot, base=base)
 
     def test_changed_error_byte_fails_base_comparison(self):
-        base = self.git_baseline()
         with tempfile.TemporaryDirectory() as temp:
             snapshot = Path(temp, "data")
             snapshot.mkdir()
@@ -132,6 +132,8 @@ class RouteParityTests(unittest.TestCase):
             profile = json.loads((ROOT / "tests/fixtures/events/golden.json").read_text())["household"]
             (snapshot / "profile.json").write_text(json.dumps(profile))
             source = (ROOT / "server.py").read_text()
+            base = Path(temp, "base.py")
+            base.write_text(source)
             changed = Path(temp, "changed.py")
             head, handler = source.split("class Handler(BaseHTTPRequestHandler):", 1)
             changed.write_text(head + "class Handler(BaseHTTPRequestHandler):" + handler.replace(

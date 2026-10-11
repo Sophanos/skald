@@ -105,4 +105,5 @@ class PublicPolish(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue((ROOT/path).exists())
         self.assertEqual((ROOT/'CLAUDE.md').read_text().splitlines()[0], '@AGENTS.md')
-        self.assertIn('VERSION = "1.0.1"', (ROOT/'server.py').read_text())
+        self.assertIn('VERSION = "1.0.2"', (ROOT/'server.py').read_text())
+        self.assertEqual(re.search(r'^## (\S+)', (ROOT/'CHANGELOG.md').read_text(), re.M).group(1), '1.0.2')

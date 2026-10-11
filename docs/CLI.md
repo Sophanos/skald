@@ -51,6 +51,7 @@ The older `--live` route uses SSH and has no default host; set `SKALD_SSH_HOST` 
 |---|---|
 | `setup` | Guide a household through setup: `skald setup` |
 | `setup --status` | Show done, missing and one next command: `skald setup --status --json` |
+| `setup aiostreams` | Make a login with Skald and title details, or update one: `skald setup aiostreams --uuid <your uuid>` |
 | `setup link` | Issue a private laptop token: `skald setup link --name laptop --person alex` |
 | `connectors test` | Probe a source without saving history: `skald connectors test jellyfin --json` |
 | `connectors` | Inspect saved source health: `skald --snapshot /path/copy connectors` |
@@ -64,10 +65,14 @@ See [connector credentials and limits](CONNECTORS.md).
 | Flag | What it does |
 |---|---|
 | `--yes` | Use supplied values and defaults without prompting |
-| `--json` | Print a JSON result with addon tokens hidden |
+| `--json` | Print a JSON result with addon tokens, AIOStreams passwords and Stremio login URLs hidden |
 | `--status` | Show completed steps, missing settings and one next command |
 | `--check` | Fetch `<base>/<lang>/manifest.json` and say if your apps can reach it |
-| `--secret-stdin` | Read the secret from stdin instead of a prompt |
+| `--secret-stdin` | Read the secret (AIOStreams instance access key first, if protected) from stdin instead of a prompt |
+| `--aio-url` | AIOStreams address reachable from Skald; saved value or `http://aiostreams:3000` inside the stack |
+| `--uuid` | Existing AIOStreams login to update; password uses a private prompt |
+| `--password-stdin` | Read the AIOStreams login password from stdin |
+| `--member` | Make an AIOStreams login for NAME, together or all; default: household |
 | `--members` | Comma-separated household member names, e.g. alex,sam |
 | `--lang` | Language for titles, e.g. en-US |
 | `--timezone` | Timezone for dates, e.g. Europe/Berlin |

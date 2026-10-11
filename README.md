@@ -14,7 +14,6 @@ It learns from watch history and ratings. Your existing streaming addons still p
 ## Quickstart
 
 Run on the data machine:
-
 ```sh
 git clone https://github.com/Sophanos/skald skald && cd skald
 mkdir -p data && sudo chown 65534 data && sudo chmod 700 data
@@ -29,8 +28,7 @@ Delete the `SKALD_MEMBERS`, `SKALD_LANG` and `SKALD_TZ` lines from `.env`;
 setup asks for household names, language and timezone instead.
 Set the AIOStreams secret and public HTTPS address in `.env.aiostreams`.
 The empty Skald container waits for setup. Follow its printed next steps.
-Use [the setup guide](docs/SETUP.md) for HTTPS and laptop imports.
-An agent can use `skald setup --status`, then run the printed next command.
+Use [the setup guide](docs/SETUP.md) for HTTPS and laptop imports. An agent can use `skald setup --status`, then run the printed next command.
 
 ## Recommended: the setup we run
 
@@ -48,9 +46,15 @@ Apple TV app (Odin) → AIOStreams (Jellyfin mode, HTTPS) → Skald (internal)
    `openssl rand -hex 32`; set its public HTTPS address in `.env.aiostreams`.
 3. Run `docker compose -f compose.stack.example.yaml up -d --build`.
 4. Run `docker compose -f compose.stack.example.yaml exec skald skald setup`.
-5. Add the printed internal manifest URL as a custom addon in AIOStreams.
-6. Add your AIOStreams HTTPS address as a server in Odin. Log in with the AIOStreams
-   config UUID as username and the config password.
+5. Run `docker compose -f compose.stack.example.yaml exec skald skald setup aiostreams`.
+   It makes your AIOStreams login with Skald and title details, and prints the Odin login.
+6. Add the printed server in Odin. Log in with the printed user and password.
+
+By hand instead:
+
+- Add Skald as a custom addon with the printed internal URL.
+- Add The Movie Database addon with only Meta/details on, so title pages show.
+- The TMDB key under Services → Metadata does not fill title pages.
 
 Stremio can use the same AIOStreams URL; that path should work, not yet tested by us.
 AIOStreams is a separate project with its own [docs and licence](https://github.com/Viren070/AIOStreams).
@@ -67,7 +71,7 @@ We reference its published image. Configure its stream addons for playback.
 | Plex | Keep your Plex playback; optionally import its history | Should work, not yet tested by us |
 
 Follow [the watching recipes](docs/WATCH.md). Keep your stream addons for playback.
-For the simple Stremio-direct alternative, copy only `.env`, then run
+For Stremio direct, copy only `.env`, then run
 `docker compose up -d --build` and `docker compose exec engine skald setup --watch stremio`.
 
 ## Teach it your taste
@@ -91,8 +95,7 @@ See [connectors and their limits](docs/CONNECTORS.md) and [commands by task](doc
 
 ## Search
 
-Title search always works. With OpenRouter, you can also ask for
-“cozy mystery for a rainy evening”.
+Title search always works. With OpenRouter, ask for “cozy mystery for a rainy evening”.
 
 ## Privacy
 
