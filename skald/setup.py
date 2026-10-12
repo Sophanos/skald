@@ -619,9 +619,16 @@ def prefs_line(cfg, person):
     prefs = cfg['taste'].get('people', {}).get(person, {}).get('prefs', {})
     years = '-'.join(str(y) if y is not None else '' for y in prefs.get('years', [None, None]))
     excluded = prefs.get('excluded_genres', {})
+    extra = ['hide ' + ', '.join(prefs['hide'])] if prefs.get('hide') else []
+    focus = prefs.get('focus', {})
+    for label, values in [('movie genres', focus.get('genres', {}).get('movie', [])),
+                          ('series genres', focus.get('genres', {}).get('series', [])),
+                          ('languages', focus.get('languages', [])), ('countries', focus.get('countries', []))]:
+        if values:
+            extra.append('focus ' + label + ' ' + ', '.join(values))
     return ('Prefs ' + person + ': ' + prefs.get('discovery', 'balanced') + '; years ' + years +
             '; exclude movies ' + (', '.join(excluded.get('movie', [])) or 'none') +
-            '; exclude series ' + (', '.join(excluded.get('series', [])) or 'none'))
+            '; exclude series ' + (', '.join(excluded.get('series', [])) or 'none') + ''.join('; ' + x for x in extra))
 
 
 def run(args):
@@ -680,7 +687,8 @@ def run(args):
         cfg = members.validate_config(json.loads(config_path.read_text()), data=str(data))
         if args.person not in cfg['household']['members']:
             raise ValueError('choose a household member with --person')
-        values = (args.discovery, args.years, args.exclude_movie_genres, args.exclude_series_genres)
+        values = (args.discovery, args.years, args.exclude_movie_genres, args.exclude_series_genres,
+                  args.hide, args.show, args.focus_movie_genres, args.focus_series_genres, args.focus_languages, args.focus_countries)
         if args.clear and any(v is not None for v in values):
             raise ValueError('use --clear without preference flags')
         if not args.clear and all(v is None for v in values):
@@ -690,6 +698,20 @@ def run(args):
             traits.pop('prefs', None)
         else:
             prefs = traits.setdefault('prefs', {})
+            for action, raw in (('hide', args.hide), ('show', args.show)):
+                if raw is not None:
+                    words = [v.strip() for v in raw.split(',')]
+                    if any(v not in members.HIDE_CHOICES for v in words):
+                        raise ValueError('--' + action + ' accepts: ' + ', '.join(members.HIDE_CHOICES))
+                    hides = prefs.setdefault('hide', [])
+                    prefs['hide'] = list(dict.fromkeys(hides + words)) if action == 'hide' else [h for h in hides if h not in words]
+            for field, raw in (('movie', args.focus_movie_genres), ('series', args.focus_series_genres),
+                               ('languages', args.focus_languages), ('countries', args.focus_countries)):
+                if raw is not None:
+                    target = prefs.setdefault('focus', {})
+                    if field in ('movie', 'series'):
+                        target = target.setdefault('genres', {})
+                    target[field] = [v.strip() for v in raw.split(',')] if raw.strip() else []
             if args.discovery is not None:
                 prefs['discovery'] = args.discovery
             if args.years is not None:
@@ -857,6 +879,11 @@ def add_parser(commands):
     p.add_argument('--years', help='release years: FROM-TO, FROM- or -TO; use --years=-2000 for an upper bound')
     p.add_argument('--exclude-movie-genres', help='comma-separated TMDB movie genre names; empty clears exclusions')
     p.add_argument('--exclude-series-genres', help='comma-separated TMDB series genre names; empty clears exclusions')
+    for action in ('hide', 'show'):
+        p.add_argument('--' + action, help=action + ' comma-separated categories: ' + ', '.join(members.HIDE_CHOICES))
+    for flag, label in (('movie-genres', 'TMDB movie genre names'), ('series-genres', 'TMDB series genre names'),
+                        ('languages', 'two-letter language codes'), ('countries', 'two-letter country codes')):
+        p.add_argument('--focus-' + flag, help='rank rows by comma-separated ' + label + '; empty clears focus')
     p.add_argument('--clear', action='store_true', help='remove all preferences for --person')
     p.add_argument('--scopes', default='read,decide,events', help=helps['scopes'])
     p.add_argument('--map', action='append', default=[], help=helps['map'])

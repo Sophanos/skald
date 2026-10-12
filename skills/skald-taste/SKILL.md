@@ -16,6 +16,72 @@ prompt, stdin, or a named environment variable. Never put them in arguments or c
 Use `skald setup link --name laptop --person MEMBER` to link a laptop.
 Keep private addon links and tokens out of the conversation.
 
+## Connect each person's sources
+
+Run on the server where DATA lives; prefix with `docker compose exec engine` for
+Stremio direct, or `docker compose -f compose.stack.example.yaml exec skald` for the stack.
+Use configured member names. Keys go only through the private prompt or stdin,
+never in arguments or conversation. Scripts add `--yes --secret-stdin`.
+
+- Stremio: `skald setup --connect stremio --person MEMBER`. Paste an auth key
+  privately, or leave it blank for private email and password prompts. `--key-stdin`
+  reads one auth key line. Repeat for each person; earlier accounts stay connected.
+- Trakt: `skald setup --connect trakt --person MEMBER`. Supply the access token,
+  then client id privately; `--secret-stdin` reads those two lines. Repeat per person.
+- MDBList: `skald setup --connect mdblist --person MEMBER`. `--secret-stdin`
+  reads one key line. Repeat per person.
+- Jellyfin: `skald setup --connect jellyfin --source-url http://jellyfin:8096`.
+  Setup lists users and asks for member mappings; scripts can repeat `--map USER_ID=MEMBER`.
+- Plex: `skald setup --connect plex --source-url http://plex:32400 --person MEMBER`.
+  The token's account supplies this person's history.
+- AIOStreams database: `skald setup --connect aiostreams-db --source-path /aio-data/db.sqlite`.
+  Mount the database directory read-only, including WAL files; map listed profiles
+  to members, or repeat `--map SOURCE_ID=MEMBER`.
+- Check with `skald connectors test SOURCE` (`trakt` or `aiostreams_db` for those sources).
+  Remove a member's Stremio or MDBList connection with
+  `skald setup --disconnect stremio --person MEMBER` or
+  `skald setup --disconnect mdblist --person MEMBER`. This removes its key but keeps history.
+  Other sources have no setup disconnect command. Restart the engine after connector changes.
+
+## Set up watching and adopt older households
+
+- Run `skald setup aiostreams` for Odin and Jellyfin apps, or Stremio through
+  AIOStreams. It prints private server/login details and a Stremio link.
+  Update an existing login with `skald setup aiostreams --uuid UUID`.
+  Passwords use the private prompt or `--password-stdin`; a protected instance's
+  access key uses the private prompt or `--secret-stdin` and is read first.
+- AIOStreams records Jellyfin-app viewing, not Stremio playback. Connect Stremio
+  directly for its library signals. Stream addons still handle playback.
+- If `skald setup --status` says the older household needs adoption, run
+  `skald setup adopt --yes`, then check status again. It copies the existing
+  config unchanged to make setup, laptop linking and imports available.
+
+## Set personal row preferences
+
+- `skald setup prefs --person MEMBER --discovery gems --years 1990- --exclude-movie-genres horror --exclude-series-genres reality,talk`
+- Discovery is `balanced`, `mainstream` or `gems`. Years accept `1990-2010`,
+  `1990-` or `--years=-2010`; genres use TMDB's English names, separately by type.
+- Omitted flags keep other settings. `skald setup prefs --person MEMBER --clear`
+  removes all preferences. Changes apply on the next row request; apps may cache.
+- These settings shape rows, not search. Together respects members' genre
+  exclusions and keeps its usual years and order.
+
+## Read taste only when asked
+
+Use only the person's authorized CLI or API. Read an approved local copy with
+`skald --snapshot /path/approved-copy COMMAND`; never fetch private data unasked.
+
+- Show rows with `rows --n 10`, a profile with `taste show --person MEMBER`,
+  a title's fit with `taste why tmdb:123 --person MEMBER`, or saved memory with
+  `memory --person MEMBER`. The API provides rows, profile and title explanations
+  under the bound token's scope, as listed below.
+- Only after a request, remove a selected local imported source with
+  `me forget --source imdb --person MEMBER`, or an import with
+  `me forget --import IMPORT_ID --person MEMBER`.
+- `me forget --fact FACT_ID --person MEMBER` and
+  `me correct --fact FACT_ID --person MEMBER` are placeholders in 1.1.0:
+  they exit without changing memory. Explain this limit; never claim a correction succeeded.
+
 ## Import taste
 
 Run `python3 -m skald onboard --sources` for export instructions.

@@ -81,7 +81,7 @@ class ConfigTests(unittest.TestCase):
                 profile = {'entries': [{'who': 'tv', 'by': ['together'], 'title': 'Shared movie', 'year': '2020',
                     'signal': 'watched', 'kind': 'movie'}], 'genres': {}, 'searches': []}
                 text = s.profile_text(profile)
-                self.assertIn('Recently on the shared TV (everyone in the household):', text)
+                self.assertIn('Recently on the shared TV account (may include anyone in the household):', text)
             finally:
                 close_server(s)
 

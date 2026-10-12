@@ -51,6 +51,23 @@ Watched searches use up to 300 recent titles with watch or rating evidence and o
 2. Skald builds rows from history, TMDB recommendations and metadata, and AniList anime schedules. Optional OpenRouter adds curation.
 3. Install the printed member or Together link in your watching setup. Use your stream addons to play.
 
+## What changes as you watch
+
+| What happens | What Skald changes | How soon |
+|---|---|---|
+| History or ratings change | Rows are ordered by taste; cards can show a short reason. | Next build; daily or on taste change, episodes every 3h, upcoming every 6h. |
+| Taste changes with OpenRouter enabled | For You and the AI rewatch row refresh from your taste; This Week picks stay for the week. | At least 1h between taste-only builds, or twice daily. |
+| A title is shown without a play | It moves down tracked rows except Continue Watching, Upcoming and Catch Up; For You impressions can remove it from the AI pick pool. | After six days shown in the relevant row. |
+| You play picks from a theme shelf | Theme selection favours shelves that lead to plays; current slots get a staying bonus. | Daily or on taste change; bonus lasts 7 days without plays, 14 with plays. |
+| A new evening starts | OpenRouter can choose moods from weekday, season and recent watching, with a penalty for yesterday's moods. | Once per logical day, starting at 05:00; rule rotation is the fallback. |
+| A mapped person watches, or you set Who's watching? | Plays credit the mapped person, otherwise the active session; Together ranking uses all members. | When history is read; without a session, unmapped plays count as Together. |
+| Learned memory goes without new evidence | Its influence fades; preferences explicitly told to Skald keep their strength. | Learned strength halves every 180 days. |
+| You abandon or dislike titles | Negative signals lower taste fit; opening a title is only a hint. | On the next taste update and row build. |
+| You change `skald setup prefs` | Discovery style, years and genre exclusions shape rows, leaving search unchanged. | Next row request; apps may cache briefly. |
+| Two positive titles share a director or creator | A `More from` shelf can show their unseen work if enough suitable titles remain. | Next theme build; needs at least eight unseen candidates. |
+
+AI picks and AI mood selection need OpenRouter; other changes above work without it, though some shelves use saved AI tags. Rows with too few suitable titles stay hidden from the app.
+
 ## Rows
 
 Rows appear when they have enough suitable titles. Names follow your household and the current picks.
@@ -107,12 +124,12 @@ Mount the AIOStreams database directory read-only before connecting it. Netflix 
 Run on the server with the same prefix as connector commands:
 
 ```sh
-skald setup prefs --person NAME --discovery gems --years 1990- --exclude-movie-genres horror --exclude-series-genres reality,talk
+skald setup prefs --person NAME --discovery gems --years 1990- --hide documentaries,anime --focus-movie-genres horror,drama --focus-languages es --focus-countries ES
 skald setup prefs --person NAME --clear
 ```
 
-Choose `balanced` (default), `mainstream` (popular titles), or `gems` (high ratings with lower popularity). Years accept `1990-2010`, `1990-` or `--years=-2010`. Genre names are TMDB's English names, separately for movies and series.
-Changes apply on the next row request; apps may cache rows briefly. Together respects members' genre exclusions and keeps its usual years and order. Search is unchanged. [All settings](docs/SETUP.md#2-add-your-household).
+Choose `balanced` (default), `mainstream` (popular titles), or `gems` (high ratings with lower popularity). Years accept `1990-2010`, `1990-` or `--years=-2010`. Use `--hide` to add movies, series, documentaries, animation or anime; `--show anime` removes a hide. Animation hides all cartoons; anime hides Japanese animation. Focus genres, languages and countries rank personal rows without filtering; genre names are TMDB's English names.
+Changes apply on the next row request; apps may cache rows briefly. Started titles in New Episodes skip preference filters. Together respects genre and category hides except movies/series, and keeps its years and order. Search is unchanged. [All settings](docs/SETUP.md#2-add-your-household).
 
 ## Screenshots
 
@@ -141,8 +158,7 @@ cp .env.example .env && cp .env.aiostreams.example .env.aiostreams && chmod 600 
 ${EDITOR:-vi} .env .env.aiostreams
 ```
 
-Put `TMDB_API=YOUR_KEY` and optional `OPENROUTER_API_KEY=YOUR_KEY` in `.env`.
-Delete the `SKALD_MEMBERS`, `SKALD_LANG` and `SKALD_TZ` lines from `.env`.
+Put `TMDB_API=YOUR_KEY` and optional `OPENROUTER_API_KEY=YOUR_KEY` in `.env`. Delete the `SKALD_MEMBERS`, `SKALD_LANG` and `SKALD_TZ` lines from `.env`.
 Setup asks for names, language and timezone. Skald runs as user 65534 and keeps DATA private.
 Make the AIOStreams secret with `openssl rand -hex 32`; set it and the public HTTPS address in `.env.aiostreams`.
 

@@ -73,10 +73,10 @@ The optional `row_prefix` in household config sets catalog ids, for example
 digits, starting with a letter. Existing households keep their prefix in
 `DATA/legacy.json`; stored row ids are not rewritten.
 
-Each member can set a discovery style, release years and unwanted genres:
+Each member can set discovery, years, unwanted genres, hidden categories and focus:
 
 ```sh
-skald setup prefs --person alex --discovery gems --years 1990- --exclude-movie-genres horror --exclude-series-genres reality,talk
+skald setup prefs --person alex --discovery gems --years 1990- --exclude-movie-genres horror --exclude-series-genres reality,talk --hide documentaries,anime --focus-movie-genres horror,drama --focus-languages es --focus-countries ES
 skald setup --status
 skald setup prefs --person alex --clear
 ```
@@ -88,13 +88,23 @@ left out when a year limit is set. Genre names are TMDB's English names, ignorin
 case, separately for movies and series. Use quotes for names with spaces, such as
 `--exclude-movie-genres "Science Fiction,Horror"`. An empty genre flag clears that
 kind's exclusions. Omitted flags keep the member's other preferences.
+Use `--hide movies,series,documentaries,animation,anime` to add hides; `--show anime` removes one.
+Anime hides Japanese animation; animation hides all cartoons. Focus ranks without filtering:
+`--focus-movie-genres` and `--focus-series-genres` use the same genre names,
+`--focus-languages` uses two-letter language codes (such as `es`), and
+`--focus-countries` uses two-letter country codes (such as `ES,MX`). Codes are
+normalised to lowercase languages and uppercase countries. Empty focus flags
+clear their lists. Each matching group adds one point, with ties keeping the
+discovery order. Older cached titles without countries get no country point
+until the worker fills them; it retries failures and fetches at most 200 per pass.
 
 Settings live in `skald.json` under `taste.people.<name>.prefs`, with optional
 `discovery`, `years: [from, to]` (null means open), and
-`excluded_genres: {"movie": [...], "series": [...]}`. Absent settings keep the usual
+`excluded_genres: {"movie": [...], "series": [...]}`, `hide: ["documentaries", "anime"]`, and
+`focus: {"genres": {"movie": [...], "series": [...]}, "languages": [...], "countries": [...]}`. Absent settings keep the usual
 rows. Changes apply on the next row request without a restart; watching apps may
-cache rows briefly. Together rows exclude any genre blocked by a member present,
-but keep their usual years and order. Search stays unchanged. `--clear` removes
+cache rows briefly. Started titles in New Episodes skip hides, genre exclusions and years.
+Together respects genre and category hides from any member, except movies/series, and keeps its years and order. Search stays unchanged. `--clear` removes
 all settings for that person; status shows each member on one line.
 
 Older households in `DATA/legacy.json` are read-only in setup until you run

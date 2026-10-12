@@ -4,6 +4,18 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.2.0
+
+Each member can hide movies, series, documentaries, animation or anime with `skald setup prefs --hide`, `--show` and `--clear`.
+Hiding movies or series affects only that member's own rows; documentaries, animation and anime stay hidden in Together if any member hides them.
+Each member can focus on genres, languages and countries; focus moves matching titles up in their own rows and never removes others.
+Next episodes ignore these settings; search stays unfiltered.
+AI prompts no longer assume two members are a couple or use a gendered default, and the household note now reaches the This Week and mood picks.
+The README explains what changes as you watch, and the agent skill covers connecting sources, AIOStreams, adopt and personal settings.
+
+**Data changes:** no format bump or migration; adds optional `hide` and `focus` member preferences in `skald.json` and an origin country field in cached title facts, filled in small batches only when a member focuses on countries.
+Version 1.1.0 rejects configs with `hide` or `focus` set; clear them with `skald setup prefs --person NAME --clear` before rolling back.
+
 ## 1.1.0
 
 AI search can exclude watched titles or find matches in your own history, including member and Together links.

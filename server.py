@@ -56,13 +56,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
 ENV_FIRST_RUN = True
 MEMBER_COUNTS = (1, 2, 3, 4, 5, 6)
 FIRST_RUN_MEMBER_ROWS = False
+HIDE_CHOICES = ("movies", "series", "documentaries", "animation", "anime")
 TMDB_GENRES = {
     "movie": {28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy", 80: "Crime", 99: "Documentary",
               18: "Drama", 10751: "Family", 14: "Fantasy", 36: "History", 27: "Horror", 10402: "Music",
@@ -328,20 +329,34 @@ def validate_config(doc, *, data=None, environ=None):
         need(isinstance(loves, list) and all(isinstance(t, str) for t in loves), "taste.people." + p + ".loves")
         prefs = traits.get("prefs", {})
         key = "taste.people." + p + ".prefs"
-        need(isinstance(prefs, dict) and set(prefs) <= {"discovery", "years", "excluded_genres"}, key)
+        need(isinstance(prefs, dict) and set(prefs) <= {"discovery", "years", "excluded_genres", "hide", "focus"}, key)
         need(isinstance(prefs.get("discovery", "balanced"), str) and
              prefs.get("discovery", "balanced") in ("balanced", "mainstream", "gems"), key + ".discovery")
         years = prefs.get("years", [None, None])
         need(isinstance(years, list) and len(years) == 2 and
              all(y is None or type(y) is int and 1 <= y <= 9999 for y in years), key + ".years")
         need(years[0] is None or years[1] is None or years[0] <= years[1], key + ".years")
-        excluded = prefs.get("excluded_genres", {})
-        need(isinstance(excluded, dict) and set(excluded) <= set(TMDB_GENRES), key + ".excluded_genres")
-        for kind, values in excluded.items():
-            names = {name.casefold(): name for name in TMDB_GENRES[kind].values()}
-            need(isinstance(values, list) and all(isinstance(g, str) and g.casefold() in names for g in values),
-                 key + ".excluded_genres." + kind)
-            excluded[kind] = list(dict.fromkeys(names[g.casefold()] for g in values))
+        hides = prefs.get("hide", [])
+        need(isinstance(hides, list) and all(isinstance(h, str) and h in HIDE_CHOICES for h in hides),
+             key + ".hide (" + ", ".join(HIDE_CHOICES) + ")")
+        if "hide" in prefs:
+            prefs["hide"] = list(dict.fromkeys(hides))
+        focus = prefs.get("focus", {})
+        need(isinstance(focus, dict) and set(focus) <= {"genres", "languages", "countries"}, key + ".focus")
+        for field, transform in (("languages", str.lower), ("countries", str.upper)):
+            values = focus.get(field, [])
+            need(isinstance(values, list) and all(isinstance(v, str) and re.fullmatch(r"[a-zA-Z]{2}", v) for v in values),
+                 key + ".focus." + field + " (two-letter codes)")
+            if field in focus:
+                focus[field] = list(dict.fromkeys(transform(v) for v in values))
+        for field, genres in (("excluded_genres", prefs.get("excluded_genres", {})),
+                              ("focus.genres", focus.get("genres", {}))):
+            need(isinstance(genres, dict) and set(genres) <= set(TMDB_GENRES), key + "." + field)
+            for kind, values in genres.items():
+                names = {name.casefold(): name for name in TMDB_GENRES[kind].values()}
+                need(isinstance(values, list) and all(isinstance(g, str) and g.casefold() in names for g in values),
+                     key + "." + field + "." + kind + " (TMDB genre names)")
+                genres[kind] = list(dict.fromkeys(names[g.casefold()] for g in values))
     for p in archived:
         need(isinstance(taste[p].get("likes", ""), str), "taste." + p + ".likes")
         need(type(taste[p].get("archived", True)) is bool, "taste." + p + ".archived")
@@ -529,7 +544,7 @@ TZ = CONFIG["region"]["tz"]
 COUNTRY = CONFIG["region"]["country"]
 EXPERIENCE_TAGS = {p: set(xs) for p, xs in CONFIG["household"]["experiences"].items()}
 MEMBER_COUNT = ("one", "two", "three", "four", "five", "six")[len(PEOPLE) - 1]
-HOUSEHOLD_KIND = "a couple" if len(PEOPLE) == 2 else "a household"
+HOUSEHOLD_KIND = "a household"
 MEMBER_NAMES = " and ".join(LABELS[p] for p in PEOPLE)
 REGION_LANGUAGE = {"de": "German", "en": "English", "fr": "French", "es": "Spanish", "it": "Italian",
                    "nl": "Dutch", "pt": "Portuguese", "sv": "Swedish", "da": "Danish", "nb": "Norwegian",
@@ -1482,6 +1497,10 @@ def manifest(lang, scope=None):
             if cid in MIXED and "tv" in typs:  # one mixed row; movie/series copies only duplicate it in Odin
                 typs = ["tv"]
             for typ in typs:
+                if cid == rid('top10') and scope in PEOPLE:
+                    _, prefs = row_preferences(cid, scope)
+                    if ('movies' if typ == 'movie' else 'series') in prefs[0].get('hide', []):
+                        continue
                 if (feed(cid, lang) or (cid, lang) in _feeds_empty) and cid != rid('top10'):
                     # Count the cached composition of stored rows, with the catalog's viewer and pins.
                     metas = row_metas(cid, typ, lang, who=SCOPES[scope]) if scope is not None else row_metas(cid, typ, lang)
@@ -1681,7 +1700,7 @@ def search(stype, query, lang, title_only=False):
 #   top10      top10                   TMDB trending                   2x/day
 #   airing     airing                  AniList + TMDB                  4x/day
 #   nextseason nextseason              AniList + TMDB                  daily
-# The taste model (fingerprints + facets, see below) orders every non-LLM row and writes the "% match" notes.
+# The taste model (fingerprints + facets, see below) orders rows and can add short reasons to cards.
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 WD_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -4098,7 +4117,7 @@ def profile_text(p, you="they"):
         return "; ".join(f"{e['title']} ({e['year']}, {'movie' if e['kind'] == 'movie' else 'series'}"
                          f"{', ' + '/'.join(f for f in e.get('flags') or [] if f in ('binge', 'comfort', 'anime')) if set(e.get('flags') or []) & {'binge', 'comfort', 'anime'} else ''})"
                          for e in hits)
-    lines = [f"What {you} told us {'they' if you == 'they' else 'he'} love: {p['likes']}"] if p.get("likes") else []
+    lines = [f"What {you} told us they love: {p['likes']}"] if p.get("likes") else []
     owner = [e for e in p["entries"] if e.get("who") in ("owner", "both")]
     logs = [(TRAKT_PERSON, owner)]
     if _taste_accounts():
@@ -4127,8 +4146,7 @@ def profile_text(p, you="they"):
             lines.append(f"{LABELS[person]} loves: " + "; ".join(told[:12]))
     tv = [e for e in p["entries"] if e.get("who") in ("tv", "both")]
     if tv:
-        lines.append("Recently on the shared TV (both of them, incl. the partner's own shows):" if len(PEOPLE) == 2 else
-                     "Recently on the shared TV (everyone in the household):")
+        lines.append("Recently on the shared TV account (may include anyone in the household):")
     for label, sig in (("  Loved (favourites)", ("loved",)), ("  Liked", ("liked",)), ("  Watched", ("watched",)),
                        ("  Started recently (not finished)", ("interest",)), ("  Only opened, never started", ("opened",)),
                        (f"  Gave up on ({you} lost interest, avoid similar)", ("abandoned",)),
@@ -5014,6 +5032,31 @@ def femb(key, kind):
     return _emb.get(slot) if not kind or _emb_kinds.get(slot) in (None, kind) else None
 
 
+def origin_countries(det):
+    return (det.get("origin_country") or [c["iso_3166_1"] for c in det.get("production_countries") or []
+                                         if c.get("iso_3166_1")])[:3]
+
+
+def backfill_countries():
+    """Worker only: fill optional country facts in at most 200 cached titles per pass."""
+    if not any(CONFIG["taste"].get("people", {}).get(p, {}).get("prefs", {}).get("focus", {}).get("countries") for p in PEOPLE):
+        return
+    with _facets_lock:
+        todo = [(k, r.get("kind")) for k, r in _facets.items() if "oc" not in r and k.startswith("tmdb:")
+                and r.get("kind") in ("movie", "tv")][:200]
+    for k, kind in todo:
+        try:
+            det = tmdb(f"{kind}/{k[5:].split('@')[0]}", language="en-US")
+        except Exception:
+            continue  # Leave failed records missing so the next pass retries them.
+        with _facets_lock:
+            if k in _facets and _facets[k].get("kind") == kind:
+                _facets[k]["oc"] = origin_countries(det)
+                _facets_dirty.set()
+    if todo:
+        clear_seed_cache()
+
+
 def facet_record(kind, tid):
     det = tmdb(f"{kind}/{tid}", language="en-US", append_to_response="keywords,credits")
     kw = det.get("keywords") or {}
@@ -5029,7 +5072,7 @@ def facet_record(kind, tid):
             "n": [[n["id"], n["name"]] for n in (det.get("networks") or [])[:3]],
             "c": [[c["id"], c["name"]] for c in (det.get("production_companies") or [])[:4]],
             "g": genre_names([g["name"] for g in det.get("genres") or []]),
-            "lang": det.get("original_language"), "title": det.get("title") or det.get("name") or "",
+            "oc": origin_countries(det), "lang": det.get("original_language"), "title": det.get("title") or det.get("name") or "",
             "y": (det.get("release_date") or det.get("first_air_date") or "")[:4], "kind": kind,
             "vote_average": det.get("vote_average"), "vote_count": det.get("vote_count"),
             "collection": (det.get("belongs_to_collection") or {}).get("id"),
@@ -5782,7 +5825,7 @@ def with_match(meta, why=True, floor=65, person=None):
 
 
 def taste_order(metas, sort=True, why=True):
-    """Metas best match first (stable for unknowns) with a '91% match' note; unchanged without a model."""
+    """Metas best match first (stable for unknowns) with optional short reasons; unchanged without a model."""
     m = get_model()
     if not m or not metas:
         return metas
@@ -7588,7 +7631,7 @@ def mood_state(m):
     likes = ", ".join(m["names"][f] for _, f in sorted(((a, f) for f, a in m["aff"].items() if f[0] == "x" and a > 0),
                                                        reverse=True)[:8])
     lines = [f"{when_text()} Choosing the mood shelves for {'tonight' if d.hour >= 5 else 'this late night'} "
-             f"({lday:%A} evening, {year_season(lday)}) for {MEMBER_NAMES}, {HOUSEHOLD_KIND} sharing one TV.",
+             f"({lday:%A} evening, {year_season(lday)}). {household_context()}.",
              f"Experiences they love most: {likes}." if likes else ""]
     if ctx:
         lines.append("Recently watched on their TV (when): " + "; ".join(
@@ -7604,7 +7647,7 @@ def mood_state(m):
 
 MOOD_Q = {k: {"type": "score", "criteria": MOOD_LEVELS,
               "instructions": f"How well does the shelf '{t}' ({', '.join(EXPERIENCES[x][0] for x in xs)}) "
-                              f"fit this {'couple' if len(PEOPLE) == 2 else 'household'} tonight?"} for k, (t, xs, _) in MOODS.items()}
+                              "fit this household tonight?"} for k, (t, xs, _) in MOODS.items()}
 
 
 def mood_parse(resp, batch):
@@ -7684,7 +7727,7 @@ def week_feed(lang):
                 f"{'; '.join(mine) or 'see together'}{'. Enjoys: ' + x if x else ''}.")
 
     together = [e["title"] for e in p["entries"] if "together" in e.get("by", ()) and e["weight"] > 0][:10]
-    prompt = (when_text() + "\n" + "\n".join(person_line(p) for p in PEOPLE) + "\n"
+    prompt = (when_text() + "\n" + household_context() + ".\n" + "\n".join(person_line(p) for p in PEOPLE) + "\n"
               f"Watching together on the TV lately: {'; '.join(together)}.\n"
               f"Already seen, do not pick: {'; '.join(e['title'] for e in p['entries'][:60])}.")
     sec = llm_sections(WEEK_SYS, prompt, 4000, 150, "week", [*("FOR " + LABELS[p].upper() for p in PEOPLE), "TOGETHER"], effort="medium")
@@ -7710,7 +7753,7 @@ def candidate_pool(p, n=40, metas=False):
     vec = m and m["vec"]
     seeds, per = (top_seeds(p, 10), 20) if m else (top_seeds(p, 4), 15)
     tv = top_seeds({"entries": [e for e in p["entries"] if e.get("who") in ("tv", "both")]}, 3)
-    seeds += [e for e in tv if e not in seeds][:2]  # the shared TV (incl. the partner's shows) always seeds the pool
+    seeds += [e for e in tv if e not in seeds][:2]  # activity on the shared TV account always seeds the pool
     jobs = [(e, _pool.submit(tmdb, f"{e['kind']}/{e['id']}/recommendations", language="en-US")) for e in seeds]
     jobs += [({"kind": k, "title": None}, _pool.submit(tmdb, f"trending/{k}/week", language="en-US")) for k in ("movie", "tv")]
     cands, seen = [], set(p["seen"]) | set(p["negative"]) | set(tired_keys({rid('foryou')}))
@@ -7772,6 +7815,12 @@ def when_text():
     return f"It is {d:%A}, {d:%d %B %Y}, {d:%H:%M} in {COUNTRY}."
 
 
+def household_context(hint=""):
+    note = CONFIG["household"]["note"].rstrip(".!? \t\n\r\v\f")
+    return (f"Household of {MEMBER_COUNT} sharing one TV, {MEMBER_NAMES}{hint}"
+            + ("; " + note if note else ""))
+
+
 def personal_feed(lang):
     """One reasoning call builds two rows: For You and the AI half of Watch Again."""
     p = _profiles.get("household")
@@ -7788,10 +7837,9 @@ def personal_feed(lang):
     hits, tired = hit_titles(), tired_keys({rid('foryou')})
     m = get_model()
     types = {n: (c or {}).get("type") for n, c in (read_taste().get("people") or {}).items()}
-    prompt = (f"{when_text()} Household of {MEMBER_COUNT} sharing one TV, {MEMBER_NAMES}"
-              + (f" (personality types {', '.join(f'{LABELS.get(n, n.title())} {t}' for n, t in types.items() if t)}: a light hint only, "
-                 "taste comes from what they watch)" if any(types.values()) else "")
-              + ("; " + CONFIG["household"]["note"] if CONFIG["household"]["note"] else "")
+    hint = (f" (personality types {', '.join(f'{LABELS.get(n, n.title())} {t}' for n, t in types.items() if t)}: a light hint only, "
+            "taste comes from what they watch)" if any(types.values()) else "")
+    prompt = (f"{when_text()} {household_context(hint)}"
               + f". Pick for {'both' if len(PEOPLE) == 2 else 'all'} of them, not one blended person.\n"
               + profile_text(p) +
               (f"\nWhat their favourites have in common (from title metadata): {m['taste_line']}" if m and m.get("taste_line") else "") +
@@ -8853,6 +8901,8 @@ def feed_worker():
             _daily_log(f"connectors tick failed: {type(e).__name__}")
         try:
             feed_pass(local_now(), retry)
+            refresh_preferences()
+            backfill_countries()
         except Exception as e:
             _daily_log(f"feed pass failed: {type(e).__name__}: {e}".replace("\n", " ").replace("\r", " ")[:240])
         for name, save in (("learn", save_learn), ("nzb", save_nzb), ("emb", save_emb), ("facets", save_facets)):
@@ -9373,15 +9423,28 @@ def row_preferences(cid, who):
     return person, [settings.get(p, {}).get("prefs", {}) for p in people]
 
 
+def preference_genres(facts, kind):
+    genre_ids = facts.get("genre_ids")
+    return {TMDB_GENRES[kind][g].casefold() for g in genre_ids if g in TMDB_GENRES[kind]} if genre_ids else {
+        GENRE_ALIASES.get(g, g).casefold() for g in facts["g"]}
+
+
 def preference_ok(meta, cid, who):
+    if cid == rid('episodes'):
+        return True
     person, prefs = row_preferences(cid, who)
     if not any(prefs):
         return True
     facts = row_facts(meta)
     kind = meta["type"]
     genre_ids = facts.get("genre_ids")
-    names = {TMDB_GENRES[kind][g].casefold() for g in genre_ids if g in TMDB_GENRES[kind]} if genre_ids else {
-        GENRE_ALIASES.get(g, g).casefold() for g in facts["g"]}
+    names = preference_genres(facts, kind)
+    hides = {h for pref in prefs for h in pref.get("hide", [])}
+    if person in PEOPLE and ("movies" if kind == "movie" else "series") in hides:
+        return False
+    if ("documentaries" in hides and "documentary" in names or
+            "animation" in hides and "animation" in names or "anime" in hides and is_anime(meta)):
+        return False
     if any(names & {(g if genre_ids else GENRE_ALIASES.get(g, g)).casefold()
                     for g in pref.get("excluded_genres", {}).get(kind, [])} for pref in prefs):
         return False
@@ -9397,20 +9460,31 @@ def preference_ok(meta, cid, who):
 def preference_order(metas, cid, who):
     person, prefs = row_preferences(cid, who)
     style = prefs[0].get("discovery", "balanced") if person in PEOPLE else "balanced"
-    if style == "balanced" or len(metas) < 2:
+    focus = prefs[0].get("focus", {}) if person in PEOPLE else {}
+    if len(metas) < 2 or style == "balanced" and not any(focus.values()):
         return metas
-    m = get_model(False)
-    facts = [row_facts(x) for x in metas]
-    # shortcut: old feed cards lack popularity; use vote counts until their builder refreshes.
-    popularity = [f.get("popularity") if f.get("popularity") is not None else math.log1p(f.get("votes") or 0) for f in facts]
-    pmax = max(popularity) or 1
-    w_quality, w_pop, w_taste = (.2, .5, .3) if style == "mainstream" else (.6, -.1, .3)
-    scores = []
-    for x, f, pop in zip(metas, facts, popularity):
-        score = score_key(m, x["id"], person, "movie" if x["type"] == "movie" else "tv")[0]
-        taste = match_pct(m, score, person) if score is not None else None
-        scores.append(w_quality * (f.get("rating") or 0) / 10 + w_pop * pop / pmax + w_taste * (taste if taste is not None else 50) / 100)
-    return [metas[i] for i in sorted(range(len(metas)), key=lambda i: -scores[i])]
+    if style != "balanced":
+        m = get_model(False)
+        facts = [row_facts(x) for x in metas]
+        # shortcut: old feed cards lack popularity; use vote counts until their builder refreshes.
+        popularity = [f.get("popularity") if f.get("popularity") is not None else math.log1p(f.get("votes") or 0) for f in facts]
+        pmax = max(popularity) or 1
+        w_quality, w_pop, w_taste = (.2, .5, .3) if style == "mainstream" else (.6, -.1, .3)
+        scores = []
+        for x, f, pop in zip(metas, facts, popularity):
+            score = score_key(m, x["id"], person, "movie" if x["type"] == "movie" else "tv")[0]
+            taste = match_pct(m, score, person) if score is not None else None
+            scores.append(w_quality * (f.get("rating") or 0) / 10 + w_pop * pop / pmax + w_taste * (taste if taste is not None else 50) / 100)
+        metas = [metas[i] for i in sorted(range(len(metas)), key=lambda i: -scores[i])]
+    def focus_score(meta):
+        facts = row_facts(meta)
+        wanted = focus.get("genres", {}).get(meta["type"], [])
+        names = {(g if facts.get("genre_ids") else GENRE_ALIASES.get(g, g)).casefold() for g in wanted}
+        rec = frec(meta["id"], "movie" if meta["type"] == "movie" else "tv")
+        return (bool(preference_genres(facts, meta["type"]) & names) +
+                (facts.get("lang") in focus.get("languages", [])) +
+                bool(set(rec.get("oc") or []) & set(focus.get("countries", []))))
+    return sorted(metas, key=focus_score, reverse=True) if any(focus.values()) else metas
 
 
 def row_eligible(meta, cid, lang, p, animation=None):
@@ -9557,7 +9631,7 @@ def fill_row(metas, cid, lang, p, above, masks, tail=None):
         more.sort(key=lambda x: (member_pick(x, ROW_OWNER[cid]) if cid in ROW_OWNER else False,
                                   score_key(m, x["id"], ROW_OWNER.get(cid), "movie" if x["type"] == "movie" else "tv")[0] or 0), reverse=True)
     if cid in ROW_OWNER:
-        more = more[:ROW_MAX]  # R1 ranks a bounded refill after the animation guard thins her own pool.
+        more = more[:ROW_MAX]  # R1 ranks a bounded refill after the animation guard thins the member's own pool.
     # Own refills keep their context; borrowed cards carry only their overview.
     more = [x if x["id"] in own_ids else {**x, "description": card_parts(x)[1]} for x in more]
     return metas + more

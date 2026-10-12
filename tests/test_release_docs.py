@@ -7,6 +7,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseDocs(unittest.TestCase):
+    def test_readme_explains_adaptation_after_how_it_works(self):
+        text = (ROOT / 'README.md').read_text()
+        start = text.index('## What changes as you watch')
+        self.assertLess(text.index('## How it works'), start)
+        self.assertLess(start, text.index('## Rows'))
+        section = text[start:text.index('## Rows')]
+        self.assertIn('| What happens | What Skald changes | How soon |', section)
+        self.assertIn('OpenRouter', section)
+        self.assertNotIn('—', section)
+        self.assertGreaterEqual(len([line for line in section.splitlines() if line.startswith('| ')]) - 1, 8)
+
     def test_readme_person_token_skips_other_members(self):
         text = (ROOT / 'README.md').read_text()
         self.assertIn("other members' titles are skipped", text)
