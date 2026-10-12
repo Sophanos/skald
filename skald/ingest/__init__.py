@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 import datetime as dt
 import csv
+import json
 import re
 import pkgutil
 from importlib import import_module
@@ -59,6 +60,77 @@ def day(value):
 def csv_rows(path):
     with open(path, encoding="utf-8-sig", newline="") as fh:
         return list(csv.DictReader(fh))
+
+
+def iter_json_array(fh, initial=""):
+    """Decode one array item at a time, retaining only the current item and chunk."""
+    decoder = json.JSONDecoder()
+    buffer, eof = initial, False
+
+    def more():
+        nonlocal buffer, eof
+        chunk = fh.read(65536)
+        buffer += chunk
+        eof = not chunk
+
+    def whitespace():
+        nonlocal buffer
+        buffer = buffer.lstrip(" \t\r\n")
+        while not buffer and not eof:
+            more()
+            buffer = buffer.lstrip(" \t\r\n")
+
+    whitespace()
+    if not buffer:
+        raise json.JSONDecodeError("Expecting value", buffer, 0)
+    if buffer[0] != "[":
+        # Preserve the legacy JSON syntax and row-shape error classes.
+        while not eof:
+            more()
+        value = json.loads(buffer)
+        if isinstance(value, (dict, str)):
+            if not value:
+                return
+            raise AttributeError("export JSON must be an array of objects")
+        raise TypeError("export JSON must be an array")
+    buffer = buffer[1:]
+    whitespace()
+    if not buffer.startswith("]"):
+        while True:
+            while True:
+                try:
+                    value, end = decoder.raw_decode(buffer)
+                except json.JSONDecodeError:
+                    if eof:
+                        raise
+                    more()
+                    continue
+                # Numbers can decode successfully before their final digits arrive.
+                if end == len(buffer) and not eof:
+                    more()
+                    continue
+                tail = buffer[end:].lstrip(" \t\r\n")
+                if not tail and not eof:
+                    more()
+                    continue
+                if not tail or tail[0] not in ",]":
+                    if not eof:
+                        more()
+                        continue
+                    raise json.JSONDecodeError("Expecting ',' delimiter", buffer, end)
+                buffer = tail
+                break
+            yield value
+            if buffer[0] == "]":
+                break
+            buffer = buffer[1:]
+            whitespace()
+    if not buffer.startswith("]"):
+        raise json.JSONDecodeError("Expecting value", buffer, 0)
+    buffer = buffer[1:]
+    whitespace()
+    if buffer:
+        raise json.JSONDecodeError("Extra data", buffer, 0)
 
 
 def clean_title(title):

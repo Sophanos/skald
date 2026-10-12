@@ -38,9 +38,11 @@ def url_hint(url):
     return json.dumps({"kind": kind, "ids": ids, "title": title})
 
 
-def parse(path, **kwargs):
+def parse(path, temp_dir=None, **kwargs):
     out = []
-    with tempfile.TemporaryDirectory(prefix="skald-history-") as temp:
+    if temp_dir is not None:
+        Path(temp_dir).mkdir(parents=True, exist_ok=True, mode=0o700)
+    with tempfile.TemporaryDirectory(prefix="skald-history-", dir=temp_dir) as temp:
         copy = Path(temp) / "History"
         shutil.copyfile(path, copy)
         # Include uncheckpointed browser writes; temporary copies are deleted on exit.

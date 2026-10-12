@@ -70,7 +70,7 @@ def _candidates(source, candidates):
     return candidates
 
 
-def collect(specs, person, profile_map, *, server, stats=None):
+def collect(specs, person, profile_map, *, server, stats=None, temp_dir=None):
     grouped = defaultdict(list)
     for source, path in specs:
         _trusted(server, source)
@@ -84,19 +84,41 @@ def collect(specs, person, profile_map, *, server, stats=None):
                     raise FileNotFoundError()
                 if path.is_dir() and not sources()[source].SOURCE["dir"]:
                     raise ValueError("source needs a file")
-                files = list(path.rglob("*")) if path.is_dir() else [path]
-                if source == "chrome":
-                    files += [Path(str(path) + s) for s in ("-wal", "-shm") if Path(str(path) + s).is_file()]
-                for file in files:
-                    if file.is_file():
+                with ExitStack() as stack:
+                    input_path = path
+                    stream = any(p == Path("/dev/stdin") or (
+                        p.parent in (Path("/dev/fd"), Path("/proc/self/fd")) and p.name.isdigit())
+                        for p in (path, path.resolve()))
+                    try:
+                        stream = stream or os.path.samestat(path.stat(), os.fstat(0))
+                    except OSError:
+                        pass  # Stdin may be closed during a regular-file import.
+                    if stream or (not path.is_file() and not path.is_dir()):
+                        if temp_dir is not None:
+                            Path(temp_dir).mkdir(parents=True, exist_ok=True, mode=0o700)
+                        temp = stack.enter_context(tempfile.TemporaryDirectory(prefix="skald-export-", dir=temp_dir))
+                        input_path = Path(temp) / path.name
                         h = hashlib.sha256()
-                        with file.open("rb") as fh:
-                            for chunk in iter(lambda: fh.read(65536), b""):
+                        with path.open("rb") as src, input_path.open("xb") as dest:
+                            os.fchmod(dest.fileno(), 0o600)
+                            for chunk in iter(lambda: src.read(65536), b""):
+                                dest.write(chunk)
                                 h.update(chunk)
                         hashes.append(h.hexdigest())
-                local = {}
-                candidates += parse(source, path, profile_map=profile_map, stats=local)
-                _candidates(source, candidates)
+                    else:
+                        files = list(path.rglob("*")) if path.is_dir() else [path]
+                        if source == "chrome":
+                            files += [Path(str(path) + s) for s in ("-wal", "-shm") if Path(str(path) + s).is_file()]
+                        for file in files:
+                            if file.is_file():
+                                h = hashlib.sha256()
+                                with file.open("rb") as fh:
+                                    for chunk in iter(lambda: fh.read(65536), b""):
+                                        h.update(chunk)
+                                hashes.append(h.hexdigest())
+                    local = {}
+                    candidates += parse(source, input_path, profile_map=profile_map, stats=local, temp_dir=temp_dir)
+                    _candidates(source, candidates)
                 if stats is not None:
                     stats.setdefault("_sources", {}).setdefault(source, Counter()).update(local)
                     for key, value in local.items():
@@ -346,7 +368,8 @@ def import_command(args, engine, state, *, parser=parse):
     mapping = _mapping(args.profile_map)
     stats = {}
     try:
-        candidates = [c for path in args.files for c in parser(args.source, path, profile_map=mapping, stats=stats)]
+        candidates = [c for path in args.files for c in parser(args.source, path, profile_map=mapping, stats=stats,
+                      temp_dir=Path(os.environ.get("DATA_DIR", state)))]
     except ValueError:
         raise ValueError("invalid export; check source and profile mapping") from None
     _candidates(args.source, candidates)
@@ -519,7 +542,8 @@ def onboard(args, engine, state):
     if not specs:
         raise ValueError("onboard needs --source")
     stats = {}
-    collected = collect(specs, args.person, _mapping(args.profile_map), server=engine._server, stats=stats)
+    collected = collect(specs, args.person, _mapping(args.profile_map), server=engine._server, stats=stats,
+                        temp_dir=Path(os.environ.get("DATA_DIR", state)))
     skipped = {s for s, h, _ in collected if previous.get(s, {}).get("file") == h
                and previous[s]["status"] in ("applied", "skipped") and not args.again}
     candidates = [c for s, _, cs in collected if s not in skipped for c in cs]

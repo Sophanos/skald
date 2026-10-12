@@ -1,8 +1,7 @@
 import datetime as dt
 from html.parser import HTMLParser
-import json
 import re
-from . import Candidate, clean_title, day, interests
+from . import Candidate, clean_title, day, interests, iter_json_array
 
 
 SOURCE = {"hint": "Takeout watch history (JSON or HTML)", "dir": False, "profiles": False}
@@ -19,9 +18,9 @@ def html_day(text):
 
 
 class WatchHistory(HTMLParser):
-    def __init__(self):
+    def __init__(self, add):
         super().__init__()
-        self.rows = []
+        self.add = add
         self.parts = None
         self.link = False
 
@@ -45,29 +44,42 @@ class WatchHistory(HTMLParser):
             text = "".join(self.parts).translate(str.maketrans("\u00a0\u202f\u2009", "   "))
             lines = [line.strip() for line in text.splitlines() if line.strip()]
             if self.link and lines and re.match(r"^Watched\s", lines[0]):
-                self.rows.append({"title": lines[0], "time": html_day(lines[-1])})
+                self.add({"title": lines[0], "time": html_day(lines[-1])})
             self.parts = None
 
 def parse(path, **kwargs):
-    with open(path, encoding="utf-8") as fh:
-        content = fh.read()
-    if content.lstrip().startswith("<"):
-        history = WatchHistory()
-        history.feed(content)
-        rows = history.rows
-    else:
-        rows = json.loads(content)
     out = []
-    for row in rows:
+    newest = ""
+
+    def add(row):
+        nonlocal newest
+        stamp = day(row.get("time"))
+        newest = max(newest, stamp)
         text = re.sub(r"^Watched\s+", "", row.get("title", ""), flags=re.I)
         match = re.search(r"\b(?:trailer|teaser|official\s+clip)\b", text, re.I)
         if not match:
-            continue
+            return
         title = re.sub(r"\b(?:official|final|new|full)\s*$", "", text[:match.start()], flags=re.I)
         title = title.strip(" -–—|:")
         year_match = re.search(r"\((\d{4})\)", text)
         year = year_match[1] if year_match else ""
         title = re.sub(r"\(\d{4}\)", "", title).strip()
         if title:
-            out.append(Candidate(clean_title(title), year, "", {}, "interest", 1, day(row.get("time")), "youtube", conf=.5))
-    return interests(out, max((day(r.get("time")) for r in rows), default=""))
+            out.append(Candidate(clean_title(title), year, "", {}, "interest", 1, stamp, "youtube", conf=.5))
+
+    with open(path, encoding="utf-8") as fh:
+        content = fh.read(65536)
+        while content and not content.lstrip():
+            chunk = fh.read(65536)
+            if not chunk:
+                break
+            content += chunk
+        if content.lstrip().startswith("<"):
+            history = WatchHistory(add)
+            history.feed(content)
+            for chunk in iter(lambda: fh.read(65536), ""):
+                history.feed(chunk)
+        else:
+            for row in iter_json_array(fh, content):
+                add(row)
+    return interests(out, newest)

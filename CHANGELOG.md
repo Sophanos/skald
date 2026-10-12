@@ -4,6 +4,14 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.0.6
+
+Large YouTube, Chrome and Trakt exports use less memory when imported in the container.
+Piped imports are recognised as new files when their contents change.
+Piped and Chrome imports briefly use free disk space in the data folder for a temporary copy.
+
+**Data changes:** none.
+
 ## 1.0.5
 
 `skald import youtube` now reads the Takeout watch history as HTML, which is
