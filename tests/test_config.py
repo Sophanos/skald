@@ -138,7 +138,7 @@ class ConfigTests(unittest.TestCase):
             cfg, source = self.resolve(data, env)
             path = Path(data, "skald.json")
             self.assertEqual(source, "env")
-            self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(json.loads(path.read_text()), cfg)
             self.assertEqual(cfg["taste"]["household"], {"likes": "", "rewatch_collections": []})
             self.assertEqual(cfg["household"]["archived"], {})

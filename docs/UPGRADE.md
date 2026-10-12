@@ -21,6 +21,12 @@ data format.
 
 Check the watching app after the upgrade. AIOStreams may need a restart to see changed rows.
 
+If your older household uses `DATA/legacy.json`, run
+`docker compose exec engine skald setup adopt --yes` to enable laptop links,
+connector setup and imports. Adoption preserves the config and catalog ids.
+To undo it, remove `skald.json` (or the path set by `SKALD_CONFIG`) and
+`DATA/.skald-household`; Skald loads the unchanged `legacy.json` again.
+
 To roll back, stop the engine, restore the matching DATA backup and `.env`,
 check out the previous release, rebuild and start it.
 An older release refuses data in a newer format and asks you to upgrade Skald or

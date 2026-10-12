@@ -56,6 +56,7 @@ The older `--live` route uses SSH and has no default host; set `SKALD_SSH_HOST` 
 | `setup --status` | Show done, missing and one next command: `skald setup --status --json` |
 | `setup aiostreams` | Make a login with Skald and title details, or update one: `skald setup aiostreams --uuid <your uuid>` |
 | `setup link` | Issue a private laptop token: `skald setup link --name laptop --person alex` |
+| `setup adopt` | Make a legacy household editable without changing its config: `skald setup adopt --yes` |
 | `connectors test` | Probe a source without saving history: `skald connectors test jellyfin --json` |
 | `connectors` | Inspect saved source health: `skald --snapshot /path/copy connectors` |
 | `trakt login` | Authorize a configured Trakt app: `skald trakt login --person alex` |

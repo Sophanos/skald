@@ -4,6 +4,13 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.0.9
+
+`skald setup adopt --yes` makes an older household editable while preserving its config and catalog ids.
+
+**Data changes:** no format change or migration; adoption adds private `skald.json`
+and `.skald-household`. Remove both to roll back to the retained `legacy.json`.
+
 ## 1.0.8
 
 Connect MDBList per person to read watched history and watchlists with a free API key.

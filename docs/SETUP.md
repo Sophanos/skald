@@ -72,7 +72,11 @@ The optional `row_prefix` in household config sets catalog ids, for example
 digits, starting with a letter. Existing households keep their prefix in
 `DATA/legacy.json`; stored row ids are not rewritten.
 
-Older households kept in a separate configuration file are read-only in setup.
+Older households in `DATA/legacy.json` are read-only in setup until you run
+`docker compose exec engine skald setup adopt --yes`. It copies the config unchanged
+to `skald.json`, enabling `setup link`, `setup --connect` and imports. To roll back,
+remove `skald.json` (or the path set by `SKALD_CONFIG`) and `DATA/.skald-household`;
+`legacy.json` stays in place.
 
 For agents, every question has a flag. For example:
 

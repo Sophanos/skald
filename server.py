@@ -56,7 +56,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.0.8"
+VERSION = "1.0.9"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -372,7 +372,7 @@ def publish_config(data, path, cfg, *, replace=False, on_publish=None):
     fd, temp = tempfile.mkstemp(prefix=".skald-", dir=directory)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            os.fchmod(fh.fileno(), 0o644)
+            os.fchmod(fh.fileno(), 0o600)
             json.dump(cfg, fh, ensure_ascii=False, indent=1)
             fh.write("\n")
             fh.flush()

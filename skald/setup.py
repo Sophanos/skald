@@ -108,7 +108,7 @@ def household(data, names, lang, timezone, country, *, existing=None):
     path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
     existing = path.exists() if existing is None else existing
     if (data/'legacy.json').exists() and not existing:
-        raise ValueError('this existing household is read-only in setup; keep its current configuration')
+        raise ValueError('this existing household is read-only in setup; run skald setup adopt to make it editable')
     if not existing:
         members.load_config(str(data), {}, readonly=True)  # Refuse persisted events without their household config.
     cfg = members.validate_config(json.loads(path.read_text()), data=str(data)) if existing else members.fresh_config(names)
@@ -628,8 +628,34 @@ def run(args):
             (data/'credentials'/name).unlink(missing_ok=True)
         return {'ok': True, 'lines': ['MDBList ' + person + ': disconnected']}
     config_path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
+    if args.setup_action == 'adopt':
+        if config_path.exists():
+            raise ValueError(str(config_path) + ' already exists; household cannot be adopted')
+        legacy = data/'legacy.json'
+        if not legacy.is_file():
+            raise ValueError('no legacy.json household to adopt')
+        cfg = json.loads(legacy.read_text())
+        members.validate_config(cfg, data=str(data))
+        if not args.yes:
+            if args.json:
+                raise ValueError('use --yes with --json to adopt')
+            if input('Adopt this household? [y/N] ').strip().lower() != 'y':
+                raise ValueError('household adoption cancelled')
+        check_data(data)
+        stamp = data/'.skald-household'
+        stamped = os.path.lexists(stamp)
+        try:
+            if not members.publish_config(str(data), str(config_path), cfg):
+                raise ValueError(str(config_path) + ' already exists; household cannot be adopted')
+        except (OSError, members.ConfigError):
+            if not stamped and not config_path.exists():
+                stamp.unlink(missing_ok=True)
+            raise
+        return {'lines': ['Adopted household into ' + str(config_path) + '.',
+                          'Now use skald setup link, skald setup --connect, and imports.',
+                          'Rollback: remove ' + str(config_path) + ' and DATA/.skald-household; legacy.json still holds the old config.']}
     if (data/'legacy.json').exists() and not config_path.exists():
-        raise ValueError('this existing household is read-only in setup; keep its current configuration')
+        raise ValueError('this existing household is read-only in setup; run skald setup adopt to make it editable')
     check_data(data)
     from .migrate import ensure
     ensure(data)
@@ -671,7 +697,7 @@ def run(args):
         (' Key present.' if os.environ.get('OPENROUTER_API_KEY') else ' Optional key absent.')])
     path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
     if (data/'legacy.json').exists() and not path.exists():
-        raise ValueError('this existing household is read-only in setup; keep its current configuration')
+        raise ValueError('this existing household is read-only in setup; run skald setup adopt to make it editable')
     existing = path.exists()
     names = [name.strip().lower() for name in args.members.split(',')] if args.members is not None else None
     if not existing:
@@ -745,7 +771,7 @@ def run(args):
 
 def add_parser(commands):
     p = commands.add_parser('setup', help='set up a household on the machine holding DATA')
-    p.add_argument('setup_action', nargs='?', choices=['link', 'aiostreams'], help='link a laptop or make an AIOStreams login')
+    p.add_argument('setup_action', nargs='?', choices=['link', 'aiostreams', 'adopt'], help='link a laptop, make an AIOStreams login or adopt a legacy household')
     helps = {
         'aio-url': 'address where Skald reaches AIOStreams',
         'uuid': 'existing AIOStreams login UUID',
