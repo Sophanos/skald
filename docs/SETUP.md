@@ -157,6 +157,10 @@ AIOStreams may need a restart after rows change.
 **What you need:** a source account or an export. See [each source](CONNECTORS.md).
 **Worked when:** the connector test says reachable, auth OK and zero unmapped accounts.
 Use `--connect files` for laptop import instructions.
+For a free history and watchlist source, get a key at mdblist.com/preferences and run
+`skald setup --connect mdblist --person alex`. Paste it at the private prompt.
+Use the Plex webhook from MDBList Preferences or its Emby/Jellyfin plugins to record plays.
+See [MDBList](CONNECTORS.md#mdblist) for scripts, limits and disconnecting.
 Secrets go through a private prompt, `--secret-stdin`, or a named environment variable.
 They never belong in command arguments. After changing connectors, restart the engine.
 

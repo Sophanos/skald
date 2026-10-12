@@ -15,7 +15,7 @@ REMOTE_DATA = "/opt/skald/data"
 
 
 def _snapshot_file(name):
-    return name in DATA_FILES or bool(re.fullmatch(r"trakt-[a-z][a-z0-9]{1,15}\.history\.json", name))
+    return name in DATA_FILES or bool(re.fullmatch(r"(?:trakt|mdblist)-[a-z][a-z0-9]{1,15}\.history\.json", name))
 
 
 def command(operation):
@@ -24,7 +24,7 @@ def command(operation):
         script = ("import os,glob,sys; "
                   "sys.path.insert(0,'/opt/skald/app'); import server; "
                   "blocked=server._backup_credential_inodes(); "
-                  "files=[p for p in glob.glob('trakt-*.history.json') if not os.path.islink(p) and os.path.isfile(p) "
+                  "files=[p for p in (glob.glob('trakt-*.history.json')+glob.glob('mdblist-*.history.json')) if not os.path.islink(p) and os.path.isfile(p) "
                   "and (os.stat(p).st_dev,os.stat(p).st_ino) not in blocked]; "
                   f"sys.stdout.buffer.write(('\\0'.join({list(DATA_FILES)!r}+files)+'\\0').encode())")
         remote = f"cd {REMOTE_DATA} && DATA_DIR=" + shlex.quote(REMOTE_DATA) + " python3 -c " + shlex.quote(script) + " | tar --ignore-failed-read --null -T - -cf -"

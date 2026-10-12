@@ -4,6 +4,13 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.0.8
+
+Connect MDBList per person to read watched history and watchlists with a free API key.
+Setup shows each connection and can remove its private key.
+
+**Data changes:** none. MDBList keys are stored privately in DATA like Trakt credentials.
+
 ## 1.0.7
 
 A second `skald import` no longer erases titles still waiting for review from an earlier import.

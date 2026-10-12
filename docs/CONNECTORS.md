@@ -40,6 +40,41 @@ device flow needs configured client id and client secret references and a writab
 Normal polling can renew a configured refresh token; a plain access token must be replaced when it expires.
 Trakt export imports work without an API app.
 
+## MDBList
+
+**You get:** watched movies, watched shows from episodes, and watchlist interests for each member.
+**You need:** a free MDBList account and its API key from https://mdblist.com/preferences.
+MDBList must record plays first: use the Plex webhook URL generated in MDBList Preferences,
+or install the MDBList plugin for Emby or Jellyfin. MDBList can also sync from Trakt.
+Skald reads MDBList; it does not install scrobblers or send plays.
+
+```sh
+skald setup --connect mdblist --person alex
+skald connectors test mdblist
+skald setup --status
+```
+
+Paste the key at the private prompt. For scripts, `--yes --secret-stdin` reads one key line
+from stdin. Keys are saved per person under DATA/credentials/ with mode 0600;
+keep DATA outside your checkout. Never put the key in arguments or URLs you share.
+Repeat setup for another member; earlier connections are preserved.
+The connection test is read-only and never writes history.
+
+Restart after setup: `docker compose restart engine` (or `docker compose -f compose.stack.example.yaml restart skald`).
+The running engine syncs automatically like Trakt; no separate sync command is needed.
+It saves activity timestamps per person and skips unchanged watched and watchlist lists.
+Re-reading the same history adds no duplicate signals. IMDb ids use the existing TMDB lookup
+when no TMDB id is present; items without either id are skipped.
+
+Disconnect with `skald setup --disconnect mdblist --person alex`, then restart the engine.
+This removes the stored key and stops using that member's MDBList history; the history file is retained.
+A rejected key needs reconnecting with `--secret-stdin` to replace it. A rate limit stops the
+current sync and leaves the last good history; polling tries again later.
+
+**Limits:** the free account allows 1,000 requests per day and 1,000 reads per five minutes.
+Pages hold up to 500 items. Ratings are not supported. Show and season summary shapes are
+unverified; only summaries with show ids and a watched timestamp can be used.
+
 ## Jellyfin
 
 **You get:** watched titles, favourites and viewing progress mapped to household members.

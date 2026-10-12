@@ -45,10 +45,10 @@ def test(s, name=None, *, transport=None, now=None, show=False):
             row = {'name': cid, 'reachable': False, 'auth_ok': False, 'unmapped': 0,
                    'mapping_complete': False, 'plays_30d': 0, 'ok': False}
             try:
-                if cid == 'trakt_api':
+                if cid in ('trakt_api', 'mdblist'):
                     refs = cfg.get('accounts', {s.CONFIG['household']['trakt_member']: cfg.get('auth')})
                     for person, auth in refs.items():
-                        _, _, stats = s._connector_trakt_api({'id': 'trakt_api:' + person, 'person': person,
+                        _, _, stats = s.CONNECTOR_POLL[cid]({'id': cid + ':' + person, 'person': person,
                             'auth': auth, 'cursor': None}, now, readonly=True)
                         row['plays_30d'] += stats['plays_30d']
                     unmapped = []
@@ -79,6 +79,9 @@ def test(s, name=None, *, transport=None, now=None, show=False):
                 row['reachable'] |= code in (401, 403) or isinstance(error, s.TraktLoginRequired)
                 row['fix'] = 'Check the address, credential and database mount; run skald setup --connect ' + cid.removesuffix('_api')
                 row['error'] = 'authentication failed' if code in (401, 403) else 'connector probe failed'
+                if cid == 'mdblist':
+                    row['error'] = {401: 'MDBList key rejected', 403: 'MDBList key rejected',
+                                    429: 'MDBList rate limit; sync stopped, try later'}.get(code, 'connector probe failed')
             results.append(row)
     return {'ok': bool(results) and all(r['ok'] for r in results), 'connectors': results}
 
@@ -89,5 +92,7 @@ def text(result):
                f"{r['unmapped']} unmapped; {r['plays_30d']} plays in the last 30 days")
         if r.get('unmapped_names'):
             yield 'Unmapped: ' + ', '.join(r['unmapped_names'])
+        if r.get('error'):
+            yield r['error']
         if r.get('fix'):
             yield r['fix']

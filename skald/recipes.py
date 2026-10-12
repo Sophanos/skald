@@ -5,9 +5,11 @@ RECIPES = {
     'stremio': '''Stremio direct — should work, not yet tested by us.
 Open the printed member URL (or Together) in Stremio → Install.
 Skald only adds rows and search; keep your stream addons for playback.
-Skald does not see what you watch in Stremio; turn on Trakt in Stremio and run `skald setup --connect trakt`, or import history.''',
+Skald does not see what you watch in Stremio; turn on Trakt in Stremio and run `skald setup --connect trakt`, or connect MDBList with `skald setup --connect mdblist --person NAME`, or import history.
+Get a free key at mdblist.com/preferences; record plays with its Plex webhook or Emby/Jellyfin plugins.''',
     'aiostreams': '''AIOStreams in Stremio, self-hosted on the same machine — tested by us.
-Skald does not see what you watch in Stremio; turn on Trakt in Stremio and run `skald setup --connect trakt`, or import history.
+Skald does not see what you watch in Stremio; turn on Trakt in Stremio and run `skald setup --connect trakt`, or connect MDBList with `skald setup --connect mdblist --person NAME`, or import history.
+Get a free key at mdblist.com/preferences; record plays with its Plex webhook or Emby/Jellyfin plugins.
 Run `skald setup aiostreams` first. It makes a login with Skald and title details.
 Existing users: `skald setup aiostreams --uuid <your uuid>` adds Skald to your current login
 and changes nothing else. It asks before saving the additions.

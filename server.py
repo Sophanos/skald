@@ -56,7 +56,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.0.7"
+VERSION = "1.0.8"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -200,7 +200,7 @@ def validate_history_connectors(cfg, need, data=None, environ=None):
         need(isinstance(cid, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,47}", cid), "connectors.id")
         key = "connectors." + cid
         need(isinstance(c, dict) and set(c) <= {"kind", "enabled", "auth", "options", "accounts"}, key)
-        need("accounts" not in c or cid == "trakt_api", key + ".accounts")
+        need("accounts" not in c or cid in ("trakt_api", "mdblist"), key + ".accounts")
         need(c.get("kind") in ("file_drop", "manual_export", "api", "player", "availability"), key + ".kind")
         need(type(c.get("enabled")) is bool, key + ".enabled")
         need(c.get("auth") is None or cid == "nzbhydra" and c.get("auth") == "file:hydra.json" or
@@ -247,7 +247,7 @@ def validate_history_connectors(cfg, need, data=None, environ=None):
                 need(isinstance(opts.get(field), str) and opts[field].strip() and
                      not any(ord(ch) < 32 for ch in opts[field]), key + ".options." + field)
             need(opts.get("profile", "household") in (*cfg["household"]["members"], "household"), key + ".options.profile")
-        elif cid == "trakt_api":
+        elif cid in ("trakt_api", "mdblist"):
             need(c["kind"] == "api", key)
             if "accounts" in c:
                 accounts = c["accounts"]
@@ -256,7 +256,7 @@ def validate_history_connectors(cfg, need, data=None, environ=None):
                 need(all(reference(value) and value.startswith("file:") for value in accounts.values()), key + ".accounts")
                 need(c.get("auth") is None and len(set(accounts.values())) == len(accounts), key + ".accounts")
             else:
-                need(reference(c.get("auth")), key)
+                need(cid != "mdblist" and reference(c.get("auth")), key)
             need(all(reference(value) for value in opts.values()), key + ".options")
         elif cid == "nzbhydra":
             need(c["kind"] == "availability" and c.get("auth") == "file:hydra.json", key)
@@ -1788,12 +1788,34 @@ def real_play(e):
     return e["signal"] in ("loved", "liked", "watched") or (it.get("progress") or 0) >= 0.25 or (it.get("episodes_played") or 0) >= 1
 
 
+def _taste_accounts():
+    return {p: auth for cid in ("trakt_api", "mdblist")
+            for p, auth in CONFIG["connectors"].get(cid, {}).get("accounts", {}).items()}
+
+
 def read_trakt():
     """Account history, attributed by configured file rather than remote item fields."""
     accounts = CONFIG["connectors"].get("trakt_api", {}).get("accounts")
-    if accounts is not None:
-        return [{**it, "person": person} for person in accounts for it in _drop_read("trakt-" + person)]
-    return _drop_read("trakt")
+    items = ([{**it, "person": person} for person in accounts for it in _drop_read("trakt-" + person)]
+             if accounts is not None else _drop_read("trakt"))
+    if "mdblist" not in CONFIG["connectors"]:
+        return items
+    if accounts is None:
+        items = [{**it, "person": TRAKT_PERSON} for it in items]
+    positions = {(it["person"], it["type"], it["id"]): n for n, it in enumerate(items)}
+    for person in CONFIG["connectors"].get("mdblist", {}).get("accounts", {}):
+        for it in _drop_read("mdblist-" + person):
+            it = {**it, "person": person}
+            n = positions.get((person, it["type"], it["id"]))
+            if n is None:
+                items.append(it)
+                continue
+            old = items[n]
+            if old.get("rating") is not None:
+                continue
+            if (bool(it.get("played")), it.get("weight", 0)) > (bool(old.get("played")), old.get("weight", 0)):
+                items[n] = it
+    return items
 
 
 # --- connectors: references, local drops and bounded live adapters ---
@@ -1827,6 +1849,8 @@ _trakt_accounts = {}
 
 def _drop_path(cid):
     if cid.startswith("trakt-") and cid[6:] in CONFIG["connectors"].get("trakt_api", {}).get("accounts", {}):
+        return os.path.join(DATA, cid + ".history.json")
+    if cid.startswith("mdblist-") and cid[8:] in CONFIG["connectors"].get("mdblist", {}).get("accounts", {}):
         return os.path.join(DATA, cid + ".history.json")
     return {"history": os.path.join(DATA, "history.json"), "trakt": os.path.join(DATA, "trakt.json")}[cid]
 
@@ -1908,9 +1932,9 @@ def connector_seeds(now):
             enabled &= not per_person
         out[cid] = _connector(cid, cfg["kind"], TRAKT_PERSON if cid in ("trakt", "trakt_api") else "both", now,
                               auth=cfg.get("auth"), disabled=not enabled)
-        if cid == "trakt_api" and "accounts" in cfg:
+        if cid in ("trakt_api", "mdblist") and "accounts" in cfg:
             out[cid]["person"] = "both"
-            out[cid]["accounts"] = {p: _connector("trakt_api:" + p, "api", p, now, auth=auth, disabled=not enabled)
+            out[cid]["accounts"] = {p: _connector(cid + ":" + p, "api", p, now, auth=auth, disabled=not enabled)
                                     for p, auth in cfg["accounts"].items()}
     return out
 
@@ -1953,8 +1977,8 @@ def _connector_clean(cid, c, now):
         if c[field] is not None and (type(c[field]) not in (int, float) or not math.isfinite(c[field])):
             raise ValueError("connector time")
     if "accounts" in c:
-        c["accounts"] = {p: _connector_clean("trakt_api:" + p, account, now) for p, account in c["accounts"].items()
-                         if p in CONFIG["connectors"].get("trakt_api", {}).get("accounts", {})}
+        c["accounts"] = {p: _connector_clean(cid.split(":")[0] + ":" + p, account, now) for p, account in c["accounts"].items()
+                         if p in CONFIG["connectors"].get(cid.split(":")[0], {}).get("accounts", {})}
     return c
 
 
@@ -2789,41 +2813,200 @@ def _trakt_import_history(data, now):
 
 
 
+class MDBListKeyRejected(ValueError):
+    code = 401
+
+    def __init__(self):
+        super().__init__("MDBList key rejected; reconnect with skald setup --connect mdblist")
+
+
+class MDBListRateLimited(ValueError):
+    code = 429
+    headers = {}
+
+    def __init__(self):
+        super().__init__("MDBList rate limit; sync stopped, try later")
+
+
+def _mdblist_http(path, key, *, offset=None, budget=None):
+    params = {"apikey": key}
+    if offset is not None:
+        params.update(limit=500, offset=offset)
+    try:
+        return _http_get("https://api.mdblist.com" + path + "?" + urllib.parse.urlencode(params), budget=budget)
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403):
+            raise MDBListKeyRejected() from None
+        if error.code == 429:
+            raise MDBListRateLimited() from None
+        raise ValueError("MDBList request failed") from None
+    except Exception:
+        # The API key is in the URL; never propagate transport exception text.
+        raise ValueError("MDBList request failed") from None
+
+
+def _mdblist_pages(path, key, buckets, budget=None):
+    rows, offset = {bucket: [] for bucket in buckets}, 0
+    while True:
+        page = _mdblist_http(path, key, offset=offset, budget=budget)
+        if not isinstance(page, dict) or not isinstance(page.get("pagination"), dict):
+            raise SchemaMismatch()
+        for bucket in buckets:
+            batch = page.get(bucket, [])
+            if not isinstance(batch, list) or any(not isinstance(row, dict) for row in batch):
+                raise SchemaMismatch()
+            rows[bucket].extend(batch)
+        pagination = page["pagination"]
+        if not pagination.get("has_more"):
+            return rows
+        step = pagination.get("limit", 500)
+        if not any(page.get(bucket) for bucket in buckets) or type(step) is not int or step <= 0:
+            raise SchemaMismatch()
+        offset += step
+
+
+def _mdblist_title(row, kind):
+    title = row.get("movie") or row.get("show") or row
+    ids = title.get("ids") or {}
+    tid, imdb = ids.get("tmdb"), ids.get("imdb")
+    if type(tid) is not int or tid <= 0:
+        if not isinstance(imdb, str) or not re.fullmatch(r"tt[0-9]+", imdb):
+            return None
+        details = tmdb_details({"type": "movie" if kind == "movies" else "series", "id": imdb})
+        if not details:
+            return None
+        tid = details[1]["id"]
+    return {"tmdb": tid, "imdb": imdb, "title": title.get("title") or "Unknown title", "year": title.get("year"),
+            "genres": [], **({"plays": []} if kind == "movies" else {"eps": [], "eps_total": None})}
+
+
+def _mdblist_items(rows, now, watched):
+    grouped, summaries = {"movies": {}, "shows": {}}, {}
+    for bucket, batch in rows.items():
+        for row in batch:
+            episode = row.get("episode") if bucket == "episodes" else None
+            kind = "movies" if bucket == "movies" else "shows"
+            if watched and bucket in ("shows", "seasons") and not (row.get("show", {}).get("ids") and row.get("last_watched_at")):
+                continue
+            title = _mdblist_title({"show": episode.get("show", {})} if episode else row, kind)
+            if title is None:
+                continue
+            if watched and bucket in ("shows", "seasons"):
+                at = _connector_time(row["last_watched_at"])
+                if at is None:
+                    raise SchemaMismatch()
+                summary = {**title, "plays": [math.floor(at / 60 + 0.5)]}
+                if title["tmdb"] not in summaries or summary["plays"] > summaries[title["tmdb"]]["plays"]:
+                    summaries[title["tmdb"]] = summary
+                continue
+            item = grouped[kind].setdefault(title["tmdb"], title)
+            if watched:
+                at = _connector_time(row.get("last_watched_at"))
+                if at is None:
+                    raise SchemaMismatch()
+                minute = math.floor(at / 60 + 0.5)
+                play = [episode["season"], episode["number"], minute, 0] if episode else [0, 0, minute, 0]
+                value = minute if kind == "movies" else play
+                field = "plays" if kind == "movies" else "eps"
+                if value not in item[field]:
+                    item[field].append(value)
+    exported = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    doc = {"exported_at": exported, **{kind: list(items.values()) for kind, items in grouped.items()}}
+    items = _trakt_import_history(doc, now)["items"]
+    # Summary timestamps establish a watched show, not an invented episode.
+    summary_doc = {"exported_at": exported, "movies": [row for tid, row in summaries.items()
+                   if tid not in grouped["shows"]], "shows": []}
+    items.extend({**it, "type": "series"} for it in _trakt_import_history(summary_doc, now)["items"])
+    return items
+
+
+def _connector_mdblist(c, now, budget=None, *, readonly=False):
+    budget = budget if budget is not None else {"bytes": 0, "pages": 0}
+    if "accounts" in c:
+        return _connector_accounts(c, now, budget, _connector_mdblist)
+    key = _resolve_auth(c["auth"])
+    activities = _mdblist_http("/sync/last_activities", key, budget=budget)
+    if not isinstance(activities, dict):
+        raise SchemaMismatch()
+    path = os.path.join(DATA, "mdblist-" + c["person"] + ".history.json")
+    try:
+        with open(path) as fh:
+            old = json.load(fh)
+    except FileNotFoundError:
+        old = {}
+    doc = {"version": 1, "source": "mdblist", "activities": {}, "watched": [], "watchlist": []}
+    for field, bucket, endpoint, buckets in (
+            ("watched_at", "watched", "/sync/watched", ("movies", "episodes", "shows", "seasons")),
+            ("watchlisted_at", "watchlist", "/watchlist/items", ("movies", "shows"))):
+        stamp = activities.get(field)
+        if not readonly and stamp is not None and stamp == old.get("activities", {}).get(field):
+            doc[bucket] = old[bucket]
+        else:
+            rows = _mdblist_pages(endpoint, key, buckets, budget)
+            doc[bucket] = _mdblist_items(rows, now, bucket == "watched")
+        doc["activities"][field] = stamp
+    items = {(it["type"], it["id"]): it for it in doc["watchlist"]}
+    items.update({(it["type"], it["id"]): it for it in doc["watched"]})
+    doc["items"] = list(items.values())
+    if readonly:
+        return doc, None, {"plays_30d": sum(it.get("plays", 0) for it in doc["watched"]
+                                           if now - 30 * DAY <= (it.get("at") or 0) / 1000 <= now)}
+    previous = {(it["type"], it["id"]): it for it in old.get("items", [])}
+    changed = [it for it in doc["items"] if any(it.get(f) != previous.get((it["type"], it["id"]), {}).get(f)
+                                               for f in ("signal", "plays", "at", "episodes_played"))]
+    doc["exported_at"] = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    if doc["activities"] != old.get("activities") or doc["items"] != old.get("items"):
+        _connector_write("mdblist-" + c["person"] + ".history", doc, indent=2, newline=True)
+    events = list(trakt_events(now, [{**it, "person": c["person"]} for it in changed]))
+    cursor = [max((_connector_time(v) or 0 for v in doc["activities"].values()), default=0), len(doc["items"])]
+    return events, cursor, {"events": len(doc["items"]), "error": None}
+
+
+def _connector_accounts(c, now, budget, adapter):
+    accounts, events = copy.deepcopy(c["accounts"]), []
+    for account in accounts.values():
+        if "backoff_until" in budget:
+            account["last_error"] = "RateLimited"
+            continue
+        try:
+            new_events, cursor, stats = adapter(account, now, budget)
+        except Exception as error:
+            account["last_error"] = type(error).__name__
+            if adapter == _connector_mdblist:
+                account["health"] = {"state": "error", "error": type(error).__name__, "at": now}
+            if isinstance(error, MDBListKeyRejected):
+                account["health"]["fixHint"] = "MDBList key rejected; run skald setup --connect mdblist --person " + account["person"]
+            elif isinstance(error, MDBListRateLimited):
+                account["health"]["fixHint"] = "MDBList rate limit; sync stopped, try later"
+            if isinstance(error, TraktLoginRequired):
+                account["health"]["fixHint"] = "re-run skald trakt login --member " + account["person"]
+            if getattr(error, "code", None) == 429:
+                try:
+                    delay = float(error.headers.get("Retry-After", CONNECTOR_MIN))
+                except (TypeError, ValueError):
+                    delay = CONNECTOR_MIN
+                budget["backoff_until"] = now + (max(CONNECTOR_MIN, delay) if math.isfinite(delay) else CONNECTOR_MIN)
+            continue
+        account.pop("last_error", None)
+        new = _connector_advanced(account, cursor)
+        account.update(cursor=cursor, last_sync=now, health={"state": "ok", "error": None, "at": now})
+        if new:
+            account["last_new"] = now
+        account["counts"].update(events=stats["events"], new_last=len(new_events) if new else 0,
+                                 polls=account["counts"]["polls"] + 1)
+        account["interval"], account["next_due"] = connector_next(account, new, now)
+        events.extend(new_events)
+    cursor = [max(((a["cursor"] or [0, 0])[0] for a in accounts.values()), default=0),
+              sum(a["counts"]["events"] for a in accounts.values())]
+    return events, cursor, {"events": cursor[1], "error": None, "accounts": accounts,
+                            "backoff_until": budget.get("backoff_until", 0)}
+
+
 def _connector_trakt_api(c, now, budget=None, *, readonly=False):
     cfg = CONFIG["connectors"]["trakt_api"]
     budget = budget if budget is not None else {"bytes": 0, "pages": 0}
     if "accounts" in c:
-        accounts, events = copy.deepcopy(c["accounts"]), []
-        for account in accounts.values():
-            if "backoff_until" in budget:
-                account["last_error"] = "RateLimited"
-                continue
-            try:
-                new_events, cursor, stats = _connector_trakt_api(account, now, budget)
-            except Exception as error:
-                account["last_error"] = type(error).__name__
-                if isinstance(error, TraktLoginRequired):
-                    account["health"]["fixHint"] = "re-run skald trakt login --member " + account["person"]
-                if isinstance(error, (urllib.error.HTTPError, TraktLoginRequired)) and getattr(error, "code", None) == 429:
-                    try:
-                        delay = float(error.headers.get("Retry-After", CONNECTOR_MIN))
-                    except (TypeError, ValueError):
-                        delay = CONNECTOR_MIN
-                    budget["backoff_until"] = now + (max(CONNECTOR_MIN, delay) if math.isfinite(delay) else CONNECTOR_MIN)
-                continue
-            account.pop("last_error", None)
-            new = _connector_advanced(account, cursor)
-            account.update(cursor=cursor, last_sync=now, health={"state": "ok", "error": None, "at": now})
-            if new:
-                account["last_new"] = now
-            account["counts"].update(events=stats["events"], new_last=len(new_events) if new else 0,
-                                     polls=account["counts"]["polls"] + 1)
-            account["interval"], account["next_due"] = connector_next(account, new, now)
-            events.extend(new_events)
-        cursor = [max(((a["cursor"] or [0, 0])[0] for a in accounts.values()), default=0),
-                  sum(a["counts"]["events"] for a in accounts.values())]
-        return events, cursor, {"events": cursor[1], "error": None, "accounts": accounts,
-                                "backoff_until": budget.get("backoff_until", 0)}
+        return _connector_accounts(c, now, budget, _connector_trakt_api)
     reference = c["auth"] if c["id"].startswith("trakt_api:") else cfg["auth"]
     bundle = _read_trakt_auth(reference)
     renewed = False
@@ -2892,7 +3075,7 @@ def _connector_async(c, now):
 
 CONNECTOR_POLL = {"history": _connector_history, "trakt": _connector_trakt,
                   "aiostreams_db": _connector_player, "jellyfin": _connector_player, "plex": _connector_player,
-                  "trakt_api": _connector_trakt_api}
+                  "trakt_api": _connector_trakt_api, "mdblist": _connector_mdblist}
 
 
 def poll(c, now):
@@ -3080,7 +3263,7 @@ def trakt_entry(it, now):
     tid = int(it["id"][5:])
     age = (now - it["at"] / 1000) / DAY if it.get("at") else 999
     kind = "movie" if it["type"] == "movie" else "tv"
-    person = it["person"] if "accounts" in CONFIG["connectors"].get("trakt_api", {}) else TRAKT_PERSON
+    person = it.get("person", TRAKT_PERSON) if _taste_accounts() else TRAKT_PERSON
     return {"key": it["id"], "id": tid, "kind": kind, "stype": "movie" if kind == "movie" else "series",
             "title": it.get("title") or "", "year": str(it.get("year") or ""), "signal": it.get("signal") or "watched",
             "weight": float(it.get("weight") or 0), "age": age, "item": it, "who": "owner", "by": [person],
@@ -3182,7 +3365,7 @@ def tv_events(now, items, _ids=None):
 def trakt_events(now, trakt, _ids=None):
     ids = {} if _ids is None else _ids
     for it in trakt:
-        person = it["person"] if "accounts" in CONFIG["connectors"].get("trakt_api", {}) else TRAKT_PERSON
+        person = it.get("person", TRAKT_PERSON) if _taste_accounts() else TRAKT_PERSON
         kind = "movie" if it["type"] == "movie" else "tv"
         signal = it.get("signal") or "watched"
         yield _event(it["at"] / 1000 if it.get("at") else None, f"trakt:{kind}:{it['id']}", it["id"], kind,
@@ -3574,8 +3757,8 @@ def fold_events(stages, now):
                         entries.append(t)
                         continue
                     person = ev["who"]
-                    watch_fields = ("age", "genres", "title", "year") if "accounts" in CONFIG["connectors"].get("trakt_api", {}) else ()
-                    if "accounts" in CONFIG["connectors"].get("trakt_api", {}) and e["who"] not in ("tv", "both"):
+                    watch_fields = ("age", "genres", "title", "year") if _taste_accounts() else ()
+                    if _taste_accounts() and e["who"] not in ("tv", "both"):
                         old = {k: e[k] for k in ("signal", "weight", "item", "flags") + watch_fields}
                         old["wsrc"] = e.get("wsrc")
                         if "together" in e["by"]:
@@ -3680,9 +3863,9 @@ def profile_text(p, you="they"):
     lines = [f"What {you} told us {'they' if you == 'they' else 'he'} love: {p['likes']}"] if p.get("likes") else []
     owner = [e for e in p["entries"] if e.get("who") in ("owner", "both")]
     logs = [(TRAKT_PERSON, owner)]
-    if "accounts" in CONFIG["connectors"].get("trakt_api", {}):
+    if _taste_accounts():
         logs = [(person, [e for e in person_entries(p, person) if e.get("wsrc") == "trakt"])
-                for person in CONFIG["connectors"]["trakt_api"]["accounts"]]
+                for person in _taste_accounts()]
     for person, owner in logs:
         if not owner:
             continue
@@ -3734,7 +3917,7 @@ def taste_hash(name, items):
     signal = sorted((it["id"], classify(it, now)[0]) for it in items if name != "household" or attribute(it)[0] != GUEST)
     if name == "household":
         signal.append(recent_searches())
-        if "accounts" in CONFIG["connectors"].get("trakt_api", {}):
+        if _taste_accounts():
             signal.append(sorted((it["person"], it["id"], it.get("signal"), it.get("weight")) for it in read_trakt()))
         else:
             signal.append(sorted((it["id"], it.get("signal")) for it in read_trakt()))
@@ -4831,7 +5014,7 @@ def person_entries(p, person):
         own = (e.get("opinions") or {}).get(person)
         explicit = person in by or bool(own) or seed
         value = own or e.get("shared") or {"signal": e["signal"], "weight": e["weight"]}
-        if person == "together" and "accounts" in CONFIG["connectors"].get("trakt_api", {}):
+        if person == "together" and _taste_accounts():
             value = {**value, **{k: e[k] for k in ("age", "genres", "title", "year")}}
         if seed and e.get("who") != "remote":
             value = {"signal": "loved", "weight": max(value["weight"], SEED_WEIGHT), "item": {}, "flags": ["told"]}
@@ -4944,7 +5127,7 @@ def build_model(p):
     active = active_feedback()
     for person in PEOPLE:
         mine = person_entries(p, person)
-        if "accounts" in CONFIG["connectors"].get("trakt_api", {}):
+        if _taste_accounts():
             m.setdefault("panchors", {})[person] = {e["key"] for e in mine if e["weight"] > 0}
         m["nexp"][person] = sum(bool(e.get("explicit")) and e["weight"] > 0 for e in mine)
         m["paff"][person] = affinities(mine, store, df, n_all, hits, loose=m["nexp"][person] < 40, person=True)[0]
@@ -5073,7 +5256,7 @@ def maturity(m, person=None):
 
 def person_score(m, key, person=None, kind=None):
     raw, fids = score_key(m, key, person, kind)
-    if not HOUSEHOLD_PRIOR or person not in PEOPLE or "accounts" in CONFIG["connectors"].get("trakt_api", {}):
+    if not HOUSEHOLD_PRIOR or person not in PEOPLE or _taste_accounts():
         return raw, fids
     lam = min(1, (m or {}).get("nexp", {}).get(person, 0)/PRIOR_FULL)
     if lam == 1:
@@ -5206,7 +5389,7 @@ def anchor(m, key, fid, used=(), person=None, kind=None):
         by = m["ent"][hk][1]
         if person and person not in by and "together" not in by:
             continue
-        if person in PEOPLE and "accounts" in CONFIG["connectors"].get("trakt_api", {}) and hk not in m.get("panchors", {}).get(person, ()):
+        if person in PEOPLE and _taste_accounts() and hk not in m.get("panchors", {}).get(person, ()):
             continue
         raw = fit(v, hk, m.get("kinds", {}).get(hk))
         if fid[0] not in "xdn" and raw is not None and raw < 0.4:
@@ -7871,7 +8054,8 @@ def backup_state(now, *, archive_name=None):
     opened, skipped, files = {}, {}, {}
     tmp = None
     try:
-        for name in (*BACKUP_FILES, *("trakt-" + p + ".history.json" for p in CONFIG["connectors"].get("trakt_api", {}).get("accounts", {}))):
+        for name in (*BACKUP_FILES, *(source + "-" + p + ".history.json" for source, cid in (("trakt", "trakt_api"), ("mdblist", "mdblist"))
+                                        for p in CONFIG["connectors"].get(cid, {}).get("accounts", {}))):
             if name in ("skald.json", ".skald-household"):
                 continue
             if BACKUP_SECRET.search(name):
@@ -8892,7 +9076,7 @@ def row_animation(cid):
 
 def row_eligible(meta, cid, lang, p, animation=None):
     viewer, kind = _viewer.get(), "movie" if meta["type"] == "movie" else "tv"
-    if viewer in PEOPLE and "accounts" in CONFIG["connectors"].get("trakt_api", {}):
+    if viewer in PEOPLE and _taste_accounts():
         known = any(e["key"] == meta["id"] and e["kind"] == kind for e in p.get("entries", []))
         if known and not any(e["key"] == meta["id"] and e["kind"] == kind for e in person_entries(p, viewer)):
             return False

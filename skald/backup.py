@@ -73,7 +73,7 @@ def _hash(src):
 def _member(member, seen, total):
     name = member.name
     if member.type != tarfile.REGTYPE or not name or "/" in name or ".." in name or not (
-            name in (*BACKUP_FILES, "manifest.json") or re.fullmatch(r"trakt-[a-z][a-z0-9]{1,15}\.history\.json", name)):
+            name in (*BACKUP_FILES, "manifest.json") or re.fullmatch(r"(?:trakt|mdblist)-[a-z][a-z0-9]{1,15}\.history\.json", name)):
         raise ValueError("unapproved archive member")
     if name in seen:
         raise ValueError("duplicate archive member")
@@ -92,7 +92,7 @@ def _manifest(value, files):
         raise ValueError("invalid backup day") from None
     records, skipped = value.get("files"), value.get("skipped")
     if not isinstance(records, dict) or set(records) != set(files) or not isinstance(skipped, dict) \
-            or any(not (k in BACKUP_FILES or re.fullmatch(r"trakt-[a-z][a-z0-9]{1,15}\.history\.json", k)) or not isinstance(v, str) for k, v in skipped.items()):
+            or any(not (k in BACKUP_FILES or re.fullmatch(r"(?:trakt|mdblist)-[a-z][a-z0-9]{1,15}\.history\.json", k)) or not isinstance(v, str) for k, v in skipped.items()):
         raise ValueError("manifest members mismatch")
     for name, rec in records.items():
         if not isinstance(rec, dict) or type(rec.get("size")) is not int or type(rec.get("mtime")) is not int \

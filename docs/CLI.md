@@ -83,7 +83,8 @@ See [connector credentials and limits](CONNECTORS.md).
 | `--base` | The address your watching apps use, e.g. https://skald.example.org |
 | `--internal-base` | Skald address inside Docker for AIOStreams, e.g. http://skald:8080 |
 | `--watch` | Watching app: stremio, aiostreams or jellyfin-app |
-| `--connect` | Taste source: files, trakt, jellyfin, plex or aiostreams-db |
+| `--disconnect` | Remove a member MDBList connection and private key: `skald setup --disconnect mdblist --person alex` |
+| `--connect` | Taste source: files, trakt, mdblist, jellyfin, plex or aiostreams-db |
 | `--name` | Name for the laptop token created by `setup link` |
 | `--person` | Household member whose source or laptop token to use |
 | `--source-url` | Address of the Jellyfin or Plex server |
@@ -117,3 +118,9 @@ See [network setup](SETUP.md) and [upgrades](UPGRADE.md).
 
 For members with few ratings, doctor suggests an interview or importing a Netflix
 or IMDb export. Run `skald import --help` for the import path.
+
+MDBList: get a free key at mdblist.com/preferences, then run `skald setup --connect mdblist --person alex`.
+Use the private prompt or `--secret-stdin`. Run `skald connectors test mdblist` to check it.
+Restart the engine after setup; it syncs watched history and watchlists automatically.
+Use the Plex webhook from MDBList Preferences or MDBList plugins for Emby/Jellyfin to record plays.
+See [connectors](CONNECTORS.md#mdblist) for limits and disconnect instructions.

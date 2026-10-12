@@ -2,6 +2,8 @@
 
 Skald runs one container per household and serves personal rows and search as a Stremio addon. It learns from plays, ratings and imports. It does not play anything; your stream addons do.
 
+![Skald rows in Odin on a Mac for a test household: For You, This Week for Alex & Sam, More Like Your Favourites](docs/images/skald-odin.jpg)
+
 ## How it fits
 
 ```mermaid
@@ -28,9 +30,7 @@ flowchart LR
 | Plex | Keep playback; import history | Plex history connector or imports | No |
 | ElfHosted AIOStreams | Add Skald's HTTPS manifest URL | Trakt or imports | No |
 
-Stremio viewing reaches Skald only through Trakt.
-Stremio keeps viewing in your account, which addons cannot read. AIOStreams records no Stremio playback.
-The tested Stremio path shows all rows, title pages and AI search. Mixed rows show as “TV channel”.
+Stremio viewing reaches Skald only through Trakt. Stremio keeps viewing in your account, which addons cannot read. AIOStreams records no Stremio playback. The tested Stremio path shows all rows, title pages and AI search. Mixed rows show as “TV channel”.
 
 ## Quickstart
 
@@ -93,6 +93,7 @@ For the connector commands below, use the server prefix `docker compose -f compo
 | Chrome history database copy | `chrome History` |
 | Plain text, one title per line | `plain titles.txt` |
 | Trakt API | `skald setup --connect trakt` |
+| MDBList API, free: watched history and watchlist | `skald setup --connect mdblist` |
 | Jellyfin server history | `skald setup --connect jellyfin` |
 | Plex history | `skald setup --connect plex` |
 | AIOStreams database: watched state, progress, favourites and ratings from Jellyfin apps | `skald setup --connect aiostreams-db` |
@@ -107,8 +108,7 @@ Title search works without OpenRouter. With it, ask for “cozy mystery for a ra
 
 ## Privacy
 
-Household history and taste stay on your machine. TMDB receives title lookups. Optional OpenRouter receives taste and history context. AniList receives anime titles, possibly from your history. Optional NZBHydra receives titles for availability checks. Configured connectors receive history requests.
-Keep addon links, tokens, data and backups private. Anyone with the household addon link can choose any member's rows.
+Household history and taste stay on your machine. TMDB receives title lookups. Optional OpenRouter receives taste and history context. AniList receives anime titles, possibly from your history. Optional NZBHydra receives titles for availability checks. Configured connectors receive history requests. Keep addon links, tokens, data and backups private. Anyone with the household addon link can choose any member's rows.
 
 ## Status
 

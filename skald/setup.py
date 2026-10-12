@@ -75,7 +75,7 @@ def publish(data, cfg, *, replace=False, on_publish=None):
 def member_data(data, person, cfg):
     if cfg.get('taste', {}).get('people', {}).get(person):
         return True
-    if person in cfg['connectors'].get('trakt_api', {}).get('accounts', {}):
+    if any(person in cfg['connectors'].get(cid, {}).get('accounts', {}) for cid in ('trakt_api', 'mdblist')):
         return True
     for c in cfg['connectors'].values():
         opts = c.get('options', {})
@@ -90,7 +90,7 @@ def member_data(data, person, cfg):
     for path in data.iterdir():
         if path.name in ('skald.json', 'setup.json', 'legacy.json', 'addon.json') or path.is_symlink() or not path.is_file():
             continue
-        if path.name.startswith('trakt-' + person + '.'):
+        if path.name.startswith(('trakt-' + person + '.', 'mdblist-' + person + '.')):
             return True
         if path.suffix not in ('.json', '.jsonl'):
             continue
@@ -427,6 +427,9 @@ def status(data):
                 rated.update(engine._model['nexp'])
         steps['taste'] = not saved.get('connector_failed') and (steps['taste'] or bool(config['connectors']) or any(rated.values()))
         notes.append('taste: ' + '; '.join(config['household']['labels'][p] + ': ' + str(n) + ' rated' for p, n in rated.items()))
+    connections = {'mdblist': {p: bool(config['connectors'].get('mdblist', {}).get('enabled') and
+                                      p in config['connectors'].get('mdblist', {}).get('accounts', {}))
+                               for p in (config['household']['members'] if config else [])}}
     missing = [k for k, done in steps.items() if not done]
     commands = {'checks': 'skald setup', 'household': 'skald setup', 'address': 'skald setup --base YOUR_ADDRESS',
                 'watch': 'skald setup --watch stremio', 'taste': 'skald setup --connect files'}
@@ -446,7 +449,7 @@ def status(data):
     return {'release': members.VERSION, 'data_format': check(data)['format'], 'done': [k for k, done in steps.items() if done], 'missing': missing,
             'next': next_command, 'ok': not missing,
             'legacy_readonly': legacy, 'aiostreams_login': 'made for ' + ', '.join(logins) if logins else 'not made',
-            **({'notes': notes} if legacy else {})}
+            'notes': notes, 'connections': connections}
 
 
 def link(s, name, person, scopes, base):
@@ -508,18 +511,21 @@ def _configure_connector(s, args, ask, lines, show, stage, published):
         opts['profiles'] = {p: 'household' if who == 'together' else who for p, who in mapping.items()}
         c = {'kind': 'player', 'enabled': True, 'auth': None, 'options': opts}
     else:
-        instructions = {'trakt_api': 'Create a Trakt API app at https://trakt.tv/oauth/applications (may require VIP). Use its client id and an access token from your authorized account.',
+        instructions = {'mdblist': 'Get a free API key at https://mdblist.com/preferences. Paste it privately.',
+            'trakt_api': 'Create a Trakt API app at https://trakt.tv/oauth/applications (may require VIP). Use its client id and an access token from your authorized account.',
             'jellyfin': 'Create an API key in Jellyfin: Dashboard → Advanced → API Keys → Add.',
             'plex': 'Get a Plex token: open a media item in Plex Web → Get Info → View XML; copy X-Plex-Token privately.'}
         lines.append(instructions[cid])
         show()
-        if cid == 'trakt_api':
-            person = ask(args.person, 'Trakt member', cfg['household']['trakt_member'], '--person')
+        if cid in ('trakt_api', 'mdblist'):
+            person = ask(args.person, 'Source member', cfg['household']['trakt_member'], '--person')
             if person not in cfg['household']['members']:
                 raise ValueError('choose a household member with --person')
-        previous_auth = previous.get('accounts', {}).get(person) if cid == 'trakt_api' and 'accounts' in previous else previous.get('auth')
+        previous_auth = previous.get('accounts', {}).get(person) if cid in ('trakt_api', 'mdblist') and 'accounts' in previous else previous.get('auth')
         if cid == 'trakt_api' and person != cfg['household']['trakt_member'] and 'accounts' not in previous:
             previous_auth = None
+        if cid == 'mdblist' and args.auth_env:
+            raise ValueError('MDBList keys use private files; use --secret-stdin')
         auth = args.auth_env
         if auth:
             auth = 'env:' + auth
@@ -528,8 +534,12 @@ def _configure_connector(s, args, ask, lines, show, stage, published):
         else:
             if args.yes and not args.secret_stdin:
                 raise ValueError('secret needed; use --secret-stdin or --auth-env VARIABLE')
-            auth = stage(secret(args.secret_stdin, cid + ' secret'), 'trakt-' + person if cid == 'trakt_api' else cid)
-        if cid == 'trakt_api':
+            auth = stage(secret(args.secret_stdin, cid + ' secret'), cid.removesuffix('_api') + '-' + person if cid in ('trakt_api', 'mdblist') else cid)
+        if cid == 'mdblist':
+            accounts = dict(previous.get('accounts', {}))
+            accounts[person] = auth
+            c = {'kind': 'api', 'enabled': True, 'auth': None, 'accounts': accounts, 'options': {}}
+        elif cid == 'trakt_api':
             if args.client_id_env:
                 client = 'env:' + args.client_id_env
             elif previous.get('options', {}).get('client_id') and not args.secret_stdin:
@@ -600,6 +610,23 @@ def run(args):
     data = Path(os.environ.get('DATA_DIR', '/data'))
     if args.status:
         return status(data)
+    if args.disconnect:
+        if args.disconnect != 'mdblist':
+            raise ValueError('--disconnect supports mdblist')
+        path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
+        cfg = members.validate_config(json.loads(path.read_text()), data=str(data))
+        person = args.person
+        if person not in cfg['household']['members']:
+            raise ValueError('choose a household member with --person')
+        connector = cfg['connectors'].get('mdblist', {})
+        reference = connector.get('accounts', {}).pop(person, None)
+        if not connector.get('accounts'):
+            cfg['connectors'].pop('mdblist', None)
+        publish(data, cfg, replace=True)
+        if reference:
+            _, name = members._auth_reference(reference, str(data))
+            (data/'credentials'/name).unlink(missing_ok=True)
+        return {'ok': True, 'lines': ['MDBList ' + person + ': disconnected']}
     config_path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
     if (data/'legacy.json').exists() and not config_path.exists():
         raise ValueError('this existing household is read-only in setup; keep its current configuration')
@@ -688,10 +715,10 @@ def run(args):
         write_private(data/'setup.json', json.dumps(saved) + '\n')
         lines.extend(recipes.recipe(watch, urls[0], cfg['region']['lang'], s.addon_urls(internal_base)[0].replace(token, '<addon-token>') if internal_base and args.json else s.addon_urls(internal_base)[0] if internal_base else None).splitlines())
         if args.connect or not saved.get('taste') and not cfg['connectors']:
-            args.connect = ask(args.connect, 'Taste source: trakt, jellyfin, plex, aiostreams-db, files', 'files', '--connect')
+            args.connect = ask(args.connect, 'Taste source: trakt, mdblist, jellyfin, plex, aiostreams-db, files', 'files', '--connect')
             if args.connect == 'aiostreams-db':
                 args.connect = 'aiostreams_db'
-            if args.connect not in ('trakt', 'jellyfin', 'plex', 'aiostreams_db', 'files'):
+            if args.connect not in ('trakt', 'mdblist', 'jellyfin', 'plex', 'aiostreams_db', 'files'):
                 raise ValueError('choose a supported --connect source')
             result = configure_connector(s, args, ask, lines, show)
             saved['taste'] = args.connect
@@ -736,7 +763,8 @@ def add_parser(commands):
         'base': 'the address your watching apps use, e.g. https://skald.example.org',
         'internal-base': 'Skald address inside Docker for AIOStreams, e.g. http://skald:8080',
         'watch': 'watching app: stremio, aiostreams or jellyfin-app',
-        'connect': 'taste source: files, trakt, jellyfin, plex or aiostreams-db',
+        'disconnect': 'remove a member MDBList connection and its private key',
+        'connect': 'taste source: files, trakt, mdblist, jellyfin, plex or aiostreams-db',
         'name': 'name for the laptop token created by link',
         'person': 'household member whose source or laptop token to use',
         'source-url': 'address of the Jellyfin or Plex server',
@@ -749,7 +777,7 @@ def add_parser(commands):
     }
     for name in ('yes', 'json', 'status', 'check', 'secret-stdin', 'password-stdin'):
         p.add_argument('--' + name, action='store_true', default=False if name != 'json' else argparse.SUPPRESS, help=helps[name])
-    for name in ('members', 'lang', 'timezone', 'country', 'base', 'internal-base', 'watch', 'connect', 'name', 'person',
+    for name in ('members', 'lang', 'timezone', 'country', 'base', 'internal-base', 'watch', 'connect', 'disconnect', 'name', 'person',
                  'source-url', 'source-path', 'user-id', 'auth-env', 'client-id-env', 'aio-url', 'uuid', 'member'):
         p.add_argument('--' + name, help=helps[name])
     p.add_argument('--scopes', default='read,decide,events', help=helps['scopes'])
