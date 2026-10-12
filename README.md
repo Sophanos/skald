@@ -76,9 +76,9 @@ Only AIOStreams needs an HTTPS address for apps outside your home network. Set u
 
 Imports run on a laptop with Python 3.12 and a clone of this repo. First [make the laptop API reachable](docs/SETUP.md#6-link-a-laptop-optional).
 
-1. On the server: `docker compose -f compose.stack.example.yaml exec skald skald setup link --name laptop`. This token covers every member. Adding `--person alex` limits it to Alex; pushing another member's imports fails with 403.
+1. On the server: `docker compose -f compose.stack.example.yaml exec skald skald setup link --name laptop`. This token covers every member. Adding `--person alex` limits it to Alex; other members' titles are skipped when pushing.
 2. On the laptop: `python3 -m skald connect http://127.0.0.1:8081 --token-stdin`. Use your own API address and paste the token.
-3. Preview: `TMDB_API=YOUR_KEY python3 -m skald import imdb ratings.csv --person NAME --remote --resolve-online --dry-run`. To save, repeat without `--dry-run` and with `--yes`. Keep `TMDB_API` and `--resolve-online`. With `--remote` alone, even IMDb ids stay in review.
+3. Preview: `python3 -m skald import imdb ratings.csv --person NAME --remote --dry-run`. Your server resolves titles; the laptop needs no TMDB key. To save, repeat without `--dry-run` and with `--yes`. Without server lookups, use `--resolve-online` with `TMDB_API` on the laptop.
 4. `python3 -m skald push imports --remote` previews the send. Add `--apply` to send.
 
 For the connector commands below, use the server prefix `docker compose -f compose.stack.example.yaml exec skald`.

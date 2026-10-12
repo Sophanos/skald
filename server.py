@@ -56,7 +56,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -584,7 +584,7 @@ class BudgetExceeded(Exception):
     pass
 
 
-def tmdb(path, **params):
+def tmdb(path, *, _timeout=8, **params):
     params["api_key"] = API_KEY
     url = f"https://api.themoviedb.org/3/{path}?{urllib.parse.urlencode(params)}"
     hit = _cache.get(url)
@@ -592,7 +592,7 @@ def tmdb(path, **params):
         return hit[1]
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=8) as r:
+        with urllib.request.urlopen(req, timeout=_timeout) as r:
             data = json.load(r)
     except Exception:
         upstream_failed()
@@ -9185,6 +9185,15 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
         if cid not in MOODS_ROWS + LANE_ROWS:
             above = getattr(above, "deep", above)
         metas = row_list(cid, typ, lang)
+        if cid == rid('rewatch') and metas:
+            entries = p.get("entries", [])
+            if entries and who in PEOPLE: entries = person_entries(p, who)
+            watched = {(e["key"], e["kind"]) for e in entries
+                       for value in ((e,) if who in PEOPLE else (e, *(e.get("opinions") or {}).values()))
+                       if value["signal"] in ("loved", "liked", "watched") or value["item"].get("played")
+                       or value["item"].get("completed") or value["item"].get("rating") is not None
+                       or (value["item"].get("episodes_played") or 0) > 0 or (value["item"].get("progress") or 0) >= .7}
+            metas = [x for x in metas if (x["id"], "movie" if x["type"] == "movie" else "tv") in watched]
         names = feed(cid, lang).get("names") or {}
         animation = row_animation(cid)
         if cid == rid('episodes') and len(metas) < 12:
@@ -10837,6 +10846,45 @@ def api_decide(req):
         raise ApiError(400, path if valid and set(re.findall(r"[a-z_][a-z0-9_]*", path)) <= fields else "input") from None
 
 
+def api_resolve(req):
+    from pathlib import Path
+    from skald.ingest import Candidate, clean_title
+    from skald.ingest.resolve import Resolver
+    body = req["body"]
+    if not isinstance(body, dict) or set(body) != {"items"} or not isinstance(body["items"], list) or len(body["items"]) > 100:
+        raise ValueError("body")
+    candidates = []
+    for item in body["items"]:
+        if not isinstance(item, dict) or set(item) != {"title", "year", "kind", "ids"}:
+            raise ValueError("body")
+        if not isinstance(item["title"], str) or not isinstance(item["year"], str) or not re.fullmatch(r"(?:[0-9]{4})?", item["year"]) \
+                or item["kind"] not in ("", "movie", "tv") or not isinstance(item["ids"], dict):
+            raise ValueError("body")
+        for key, value in item["ids"].items():
+            pattern = {"imdb": r"tt[0-9]{1,12}", "tmdb": r"[1-9][0-9]{0,8}"}.get(key)
+            if pattern is None or not isinstance(value, (str, int)) or not re.fullmatch(pattern, str(value)):
+                raise ValueError("body")
+        candidates.append(Candidate(clean_title(item["title"]), item["year"], item["kind"], item["ids"]))
+    if not API_KEY:
+        raise ApiError(503, "Server has no TMDB key; use --resolve-online with TMDB_API on your laptop.")
+    deadline = time.monotonic() + 20
+    def lookup(path, **params):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("lookup deadline")
+        return tmdb(path, _timeout=min(8, remaining), **params)
+    # Only TMDB's normal cache survives; lookup requests never write household data.
+    with tempfile.TemporaryDirectory() as folder:
+        resolver = Resolver(lookup, cache=Path(folder) / "resolve.json", max_ai_usd=0)
+        results = []
+        for candidate in candidates:
+            try:
+                results.extend(resolver.resolve([candidate], persist=False))
+            except (OSError, urllib.error.URLError):
+                results.append(resolver.resolution(None, 0, "unresolved"))
+    return {"results": results}
+
+
 def api_session(req):
     member_view(req)
     view = session_view(req["viewer"])
@@ -10890,10 +10938,11 @@ def routes_view(req):
                         "example": route["example"]} for key, route in sorted(API_ROUTES.items())]}
 
 
-api("decide", get=("read", lambda req: {"types": decide_index()}), example={})
+api("decide", get=("read", lambda req: {"types": decide_index(), "person": req["viewer"]}), example={})
 api("decide/*", post=("decide", api_decide),
     tail=lambda name: name in DECISIONS and DECISIONS[name]["api"],
     example={"tail": "route_query", "body": {"in": {"query": "synthetic request"}, "no_llm": True}})
+api("resolve", post=("read", api_resolve), example={"body": {"items": []}})
 api("session", get=("read", api_session), post=("events", api_write_session, 201), example={"body": {"who": "both"}})
 api("titles/*", get=("read", api_title), tail=r"tmdb:[0-9]{1,9}",
     query={"kind": api_kind, "person": lambda p: api_person(p, None)},
@@ -10905,7 +10954,8 @@ api("metrics", get=("read", metrics_view if CONNECTOR_SEPARATE_ROUTE else lambda
     query={"days": api_days}, example={})
 if CONNECTOR_SEPARATE_ROUTE:
     api("connectors", get=("read", connectors_view), example={})
-api("events", post=("events", api_events), example={"body": {"stream": "imports", "events": []}})
+api("events", get=("events", lambda req: {"person": req["viewer"]}),
+    post=("events", api_events), example={"body": {"stream": "imports", "events": []}})
 api("routes", get=("read", routes_view), example={})
 api("interview/next", get=("read", lambda req: interview_next(api_person(req["query"].get("person"), req["viewer"]))),
     query={"person": lambda p: api_person(p, None)}, example={"query": {"person": PEOPLE[0]}})

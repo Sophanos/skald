@@ -3,10 +3,11 @@ import json
 import os
 from pathlib import Path
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from skald import remote
-from skald.__main__ import main
+from skald.__main__ import main, persist
 from test_api_routes import ApiCase
 from test_events_api import event
 
@@ -38,7 +39,9 @@ class CLIPushTests(ApiCase):
         (self.state / "imports.jsonl").write_text("".join(json.dumps(event(i)) + "\n" for i in range(1, n + 1)))
         (self.state / "undone.json").write_text(json.dumps([f"{1201+i:032x}" for i in range(3)]))
 
-    def send(self, path, body):
+    def send(self, path, body=None):
+        if path == "/api/v1/events" and body is None:
+            return {"person": None}
         self.assertEqual(path, "/api/v1/events")
         self.calls.append((self.clock(), body, len(json.dumps(body, allow_nan=False).encode())))
         if self.failures:
@@ -48,6 +51,66 @@ class CLIPushTests(ApiCase):
 
     def push(self):
         return remote.push_imports(self.state, apply=True, clock=self.clock, sleep=self.clock.sleep)
+
+    def test_bound_token_skips_in_preview_and_apply(self):
+        rows = [event(1, who="ben"), event(2, who="ana")]
+        (self.state / "imports.jsonl").write_text("".join(json.dumps(e) + "\n" for e in rows))
+        def send(path, body=None):
+            if body is None:
+                return {"person": "ben"}
+            self.assertEqual([e["who"] for e in body["events"]], ["ben"])
+            return self.s.intake(body["stream"], body["events"], {"viewer": "ben"})
+        for apply in (False, True):
+            with patch.object(remote, "request", side_effect=send):
+                out = io.StringIO()
+                code = main(["--state-dir", str(self.state), "push", "imports", "--remote", *(["--apply"] if apply else [])], out=out)
+            self.assertEqual(code, 0)
+            self.assertIn("Skipped 1 titles for ana: this laptop token is for ben only. Make a household token with `skald setup link --name laptop` (no --person).", out.getvalue())
+
+    def test_403_explains_refused_batch(self):
+        self.log(2)
+        with patch.object(remote, "request", side_effect=lambda path, body=None: {"person": None} if body is None else (_ for _ in ()).throw(ValueError("api 403: scope"))):
+            with self.assertRaisesRegex(ValueError, "Refused 2 imports titles.*token lacks events scope"):
+                self.push()
+
+    def test_bound_token_local_undo_then_push_keeps_server_authorization(self):
+        rows = [event(1), event(2, who="ana")]
+        self.s.write_imports(rows, keep_ids=True)
+        local = self.state / "local"
+        local.mkdir()
+        with patch.object(self.s, "DATA", str(local)):
+            self.s.save_imports(rows)
+            for row in rows:
+                self.s.undo_import(row["id"])
+            persist(SimpleNamespace(data_dir=local), self.state,
+                    {"log": True, "undone": [row["id"] for row in rows]})
+        def send(path, body=None):
+            if body is None:
+                return {"person": "ben"}
+            return self.s.intake(body["stream"], body["events"], {"viewer": "ben"})
+        with patch.object(remote, "request", side_effect=send):
+            self.assertEqual(remote.push_imports(self.state)["undone"], 2)
+            result = self.push()
+        self.assertEqual((result["undone"], result["already_absent"]), (1, 1))
+        self.assertEqual(self.s.read_imports(), [self.s.validate_import(rows[1])])
+
+    def test_events_only_token_preflight_and_push(self):
+        self.log(2)
+        def send(path, body=None):
+            code, reply = self.request(path, "GET" if body is None else "POST", body, client="events")
+            if code != 200:
+                raise ValueError(f"api {code}: " + reply["error"])
+            return reply
+        with patch.object(remote, "request", side_effect=send):
+            self.assertEqual(remote.push_imports(self.state)["count"], 2)
+            self.assertEqual(self.push()["accepted"], 2)
+
+    def test_preflight_403_explains_refusal(self):
+        self.log(2)
+        for reason, explanation in (("scope", "token lacks events scope"), ("origin", "server refused the request origin")):
+            with self.subTest(reason=reason), patch.object(remote, "request", side_effect=ValueError("api 403: " + reason)):
+                with self.assertRaisesRegex(ValueError, "Refused import push.*" + explanation):
+                    self.push()
 
     def test_1200_events_bytes_pacing_and_idempotency(self):
         self.log()
@@ -65,7 +128,7 @@ class CLIPushTests(ApiCase):
 
     def test_preview_never_sends_and_cli_bypasses_snapshot(self):
         self.log()
-        with patch.object(remote, "request", side_effect=AssertionError("preview sent")), \
+        with patch.object(remote, "request", side_effect=lambda path: {"person": None} if path == "/api/v1/events" else self.fail("preview sent")), \
                 patch("skald.__main__.Engine", side_effect=AssertionError("remote Engine")), \
                 patch("skald.__main__.live.pull", side_effect=AssertionError("remote ssh")):
             out = io.StringIO()
@@ -111,14 +174,14 @@ class CLIPushTests(ApiCase):
                    {"accepted": 0, "duplicates": 0, "rejected": []},
                    {"accepted": 1, "duplicates": 0, "rejected": [{"i": 1, "error": "private-value"}]})
         for reply in replies:
-            with patch.object(remote, "request", return_value=reply):
+            with patch.object(remote, "request", side_effect=lambda path, body=None: {"person": None} if body is None else reply):
                 with self.assertRaisesRegex(ValueError, "^api response$"):
                     self.push()
 
     def test_bad_logs_or_overlarge_item_fail_before_sending(self):
         self.log(1)
         (self.state / "undone.json").write_text('["bad"]')
-        with patch.object(remote, "request", side_effect=AssertionError("invalid log sent")):
+        with patch.object(remote, "request", side_effect=lambda path: {"person": None} if path == "/api/v1/events" else self.fail("invalid log sent")):
             with self.assertRaisesRegex(ValueError, "undo"):
                 self.push()
             (self.state / "undone.json").write_text('[]')

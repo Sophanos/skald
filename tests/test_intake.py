@@ -75,6 +75,11 @@ class IntakeTests(unittest.TestCase):
         self.opener = patch("urllib.request.build_opener", side_effect=AssertionError("network forbidden"))
         self.opener.start()
         self.addCleanup(self.opener.stop)
+        # These snapshot gates isolate paid decisions; the lookup API has synthetic transport tests.
+        lookup = patch("skald.remote.resolve_titles", side_effect=lambda candidates: Resolver(
+            self.server.tmdb, cache=self.state / "lookup.json").resolve(candidates, persist=False))
+        lookup.start()
+        self.addCleanup(lookup.stop)
         # Rank simulation itself has coverage in test_cli; these cases check intake/persistence.
         reaction = patch.object(Engine, "react", return_value=REACT)
         self.react = reaction.start()
@@ -112,7 +117,7 @@ class IntakeTests(unittest.TestCase):
         self.assertIsNone(result["plan"])
         self.assertFalse(self.state.exists())
 
-    def test_dry_run_remote_has_no_preflight_or_writes(self):
+    def test_dry_run_remote_has_no_paid_preflight_or_writes(self):
         with patch("skald.remote.request", side_effect=AssertionError("remote forbidden")):
             result = self.onboard("--dry-run", "--remote")
             imported = self.cli("import", "plain", str(self.specs[0][1]), "--person", BEN, "--dry-run", "--remote")
@@ -251,9 +256,11 @@ class IntakeTests(unittest.TestCase):
 
     def test_preflight_failure_zero_budget_and_remote_failure(self):
         with patch("skald.remote.request", return_value={"types": [{"type": "resolve_title", "available": False}]}) as req:
-            self.assertEqual(self.onboard("--remote", code=2), {"error": "remote resolve_title unavailable"})
+            result = self.onboard("--remote")
+            self.assertGreater(result["remote"]["pending"], 0)
+            self.assertEqual(result["remote"]["usd"], 0)
             self.assertEqual(req.call_count, 1)
-        self.assertFalse(self.state.exists())
+        shutil.rmtree(self.state)
         with patch("skald.remote.request", side_effect=AssertionError("zero budget")):
             self.onboard("--remote", "--max-ai-usd", "0")
         shutil.rmtree(self.state)

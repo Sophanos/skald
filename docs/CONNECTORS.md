@@ -128,10 +128,13 @@ python3 -m skald onboard --sources
 | One title per line | `python3 -m skald import plain titles.txt --dry-run` |
 
 Review first. Remove `--dry-run` and add `--yes` to save an import.
-With `--remote` alone, titles stay in review, even when they have IMDb ids.
-Add `--resolve-online` for TMDB lookups and set `TMDB_API` in the laptop environment.
+With `--remote`, your linked server resolves titles using its TMDB key; the laptop needs no TMDB key.
+Only title, year, kind and external ids go to the server for lookup, including in dry runs.
+Without server lookups, use `--resolve-online` and set `TMDB_API` in the laptop environment.
 Keep originals local. Run `push imports --remote` to preview the send;
 after a yes, add `--apply`. There is no SSH in this route.
+A token linked with `--person` sends only that member's titles and reports skipped titles in preview and apply.
+For everyone, make a household token with `skald setup link --name laptop` (no `--person`).
 The older route without `--remote` uses SSH and requires your explicit `SKALD_SSH_HOST`.
 
 **Limits:** ambiguous titles stay in a private review file. Do not guess.

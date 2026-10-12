@@ -371,7 +371,7 @@ class HistoryConnectors(unittest.TestCase):
     def test_member_b_ratings_never_enter_member_a_model_interests_or_rows(self):
         self.configure_accounts()
         item = {'id': 'tmdb:603', 'type': 'movie', 'title': 'Private B rating', 'year': 1999,
-                'person': 'ben', 'signal': 'interest', 'weight': 1, 'genres': ['action'], 'at': NOW*1000}
+                'person': 'ben', 'signal': 'interest', 'rating': 5, 'weight': 1, 'genres': ['action'], 'at': NOW*1000}
         with patch('time.time', return_value=NOW), redirect_stdout(io.StringIO()):
             profile = self.s.build_profile([], [], [item])
         self.assertEqual(self.s.person_entries(profile, 'ana'), [])

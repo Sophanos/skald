@@ -285,7 +285,7 @@ class ConnectorTests(unittest.TestCase):
         with patch.dict(os.environ,{'TMDB_API':'offline','DATA_DIR':str(self.data),'OPENROUTER_API_KEY':''}):
             spec.loader.exec_module(s)
         try:
-            self.assertEqual(len(s.API_ROUTES),11)
+            self.assertEqual(len(s.API_ROUTES),12)
             self.assertNotIn('connectors',s.API_ROUTES)
             view=s.API_ROUTES['metrics']['methods']['GET'][1]
             with patch.object(s,'metrics_view',return_value={'events':0}), patch.object(s,'connectors_view',return_value={'connectors':[]}):

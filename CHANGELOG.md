@@ -4,6 +4,23 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.0.3
+
+Importing on a laptop with `--remote` now matches titles through your own Skald
+server, so the laptop needs no TMDB key. Only titles, years and ids are sent,
+and `--dry-run` works the same way. `--resolve-online` still works without the
+server.
+
+A laptop token made for one member now pushes that member's titles and says
+how many it skipped for others, instead of failing the whole push. A refused
+push says why.
+
+Watch Again only shows titles you have watched or rated. A new household no
+longer gets a row of suggestions it never watched.
+
+**Data changes:** none. New API routes for title matching and token checks.
+Update the laptop and the server together.
+
 ## 1.0.2
 
 `skald setup aiostreams` creates an AIOStreams login with Skald and title details

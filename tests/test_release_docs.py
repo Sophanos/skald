@@ -7,6 +7,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseDocs(unittest.TestCase):
+    def test_readme_person_token_skips_other_members(self):
+        text = (ROOT / 'README.md').read_text()
+        self.assertIn("other members' titles are skipped", text)
+        self.assertNotIn("pushing another member's imports fails with 403", text)
+
     def test_readme_links_and_plain_quickstart(self):
         text = (ROOT/'README.md').read_text()
         self.assertLessEqual(len(text.splitlines()), 120)
@@ -20,6 +25,10 @@ class ReleaseDocs(unittest.TestCase):
         text = (ROOT/'docs/UPGRADE.md').read_text()
         commands = ('backup', 'git pull', 'docker compose build', 'docker compose up -d', 'skald setup --status')
         self.assertEqual(sorted(commands, key=text.index), list(commands))
+
+    def test_watch_includes_server_lookup_recipe(self):
+        self.assertIn('--remote --dry-run', recipes.watch_doc())
+        self.assertIn('The laptop needs no TMDB key', recipes.watch_doc())
 
     def test_watch_exact_shared_text(self):
         self.assertEqual((ROOT/'docs/WATCH.md').read_text(), recipes.watch_doc())

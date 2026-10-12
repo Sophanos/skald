@@ -196,7 +196,9 @@ class MemoryModelTests(unittest.TestCase):
             stack.enter_context(patch.object(s, 'row_list', side_effect=lambda c, *a: metas if c == cid else []))
             for name in ('fill_row', 'person_order', 'balance_row', 'polish_row', 'rotate_row', 'person_animation_sink', 'member_balance'):
                 stack.enter_context(patch.object(s, name, side_effect=lambda xs, *a, **kw: xs))
-            out = s.served_row(cid, 'tv' if cid in s.MIXED else 'movie', 'de-DE', {}, set(), (set(), set(), veto), who)
+            p = {'entries': [{'key': x['id'], 'kind': 'movie', 'title': x['name'], 'signal': 'watched',
+                              'weight': 2, 'item': {}, 'by': ['together']} for x in metas]}
+            out = s.served_row(cid, 'tv' if cid in s.MIXED else 'movie', 'de-DE', p, set(), (set(), set(), veto), who)
         self.assertFalse(any('_memory' in x for x in metas))
         return out
 

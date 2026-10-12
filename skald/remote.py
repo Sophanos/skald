@@ -61,11 +61,50 @@ def request(path, body=None):
         with urllib.request.build_opener(NoRedirect()).open(req, timeout=30) as response:
             return json.load(response)
     except urllib.error.HTTPError as err:
+        if err.code in (403, 503):
+            try:
+                reason = json.load(err).get("error")
+            except (ValueError, OSError, AttributeError):
+                reason = None
+            if reason in ("person", "scope", "src", "origin") or reason == "Server has no TMDB key; use --resolve-online with TMDB_API on your laptop.":
+                raise ValueError(reason if err.code == 503 else "api 403: " + reason) from None
         raise ValueError(f"api {err.code}") from None
     except (urllib.error.URLError, OSError):
         raise ValueError("api unavailable") from None
     except (UnicodeError, json.JSONDecodeError):
         raise ValueError("api response") from None
+
+
+def resolve_titles(candidates):
+    from .ingest.resolve import public_choice
+    results = []
+    start = 0
+    while start < len(candidates):
+        group = candidates[start:start + 100]
+        body = {"items": [{"title": c.title, "year": c.year, "kind": c.kind,
+                           "ids": {k: v for k, v in c.ids.items() if k in ("imdb", "tmdb")}} for c in group]}
+        while len(json.dumps(body, allow_nan=False).encode()) > 65536:
+            if len(group) == 1:
+                raise ValueError("title exceeds API body limit")
+            group.pop()
+            body["items"].pop()
+        start += len(group)
+        reply = request("/api/v1/resolve", body)
+        rows = reply.get("results") if isinstance(reply, dict) else None
+        if not isinstance(rows, list) or len(rows) != len(group):
+            raise ValueError("api response")
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != {"match", "conf", "method", "high_confidence", "choices"} \
+                    or type(row["conf"]) not in (int, float) or not 0 <= row["conf"] <= 1 \
+                    or row["method"] not in ("id", "search", "unresolved") or not isinstance(row["choices"], list):
+                raise ValueError("api response")
+            match = row["match"]
+            if match is not None:
+                if not isinstance(match, dict) or set(match) != {"key", "title", "year", "kind"} or not isinstance(match["key"], str) or not match["key"].startswith("tmdb:"):
+                    raise ValueError("api response")
+                public_choice({**match, "id": match["key"][5:]})
+            results.append(row)
+    return results
 
 
 def push_imports(state, apply=False, *, clock=None, sleep=None):
@@ -101,11 +140,31 @@ def push_imports(state, apply=False, *, clock=None, sleep=None):
             yield {"stream": stream, "events": batch}
 
     bodies = [*chunks("imports", events), *chunks("imports_undo", [{"id": i} for i in undone])]
+    refusal_reasons = {"scope": "this laptop token lacks events scope", "person": "these titles are outside this laptop token's person",
+                       "src": "this import source is not allowed", "origin": "the server refused the request origin"}
+    try:
+        index = request("/api/v1/events")
+    except ValueError as err:
+        if str(err).startswith("api 403"):
+            reason = refusal_reasons.get(str(err).removeprefix("api 403: "), "this laptop token cannot write these titles")
+            raise ValueError(f"Refused import push: {reason}.") from None
+        raise
+    if not isinstance(index, dict) or "person" not in index or index["person"] is not None and not isinstance(index["person"], str):
+        raise ValueError("api response; reconnect to an updated Skald server")
+    person, messages = index["person"], []
+    if person:
+        from collections import Counter
+        skipped = Counter(e.get("who", "unknown") for e in events if e.get("who") != person)
+        messages = [f"Skipped {n} titles for {who}: this laptop token is for {person} only. "
+                    "Make a household token with `skald setup link --name laptop` (no --person)."
+                    for who, n in sorted(skipped.items())]
+        events = [e for e in events if e.get("who") == person]
+        bodies = [*chunks("imports", events), *chunks("imports_undo", [{"id": i} for i in undone])]
     if not apply:
         return {"count": len(events), "undone": len(undone), "chunks": len(bodies),
                 "bytes": sum(len(json.dumps(b, allow_nan=False).encode()) for b in bodies),
-                "host": base.hostname, "requests": 0}
-    out = {"accepted": 0, "duplicates": 0, "rejected": [], "undone": 0, "already_absent": 0, "requests": 0}
+                "host": base.hostname, "requests": 0, "messages": messages}
+    out = {"accepted": 0, "duplicates": 0, "rejected": [], "undone": 0, "already_absent": 0, "requests": 0, "messages": messages}
     last, offset = None, 0
     for body in bodies:
         for attempt in range(2):
@@ -117,6 +176,9 @@ def push_imports(state, apply=False, *, clock=None, sleep=None):
                 reply = request("/api/v1/events", body)
                 break
             except ValueError as err:
+                if str(err).startswith("api 403"):
+                    reason = refusal_reasons.get(str(err).removeprefix("api 403: "), "this laptop token cannot write these titles")
+                    raise ValueError(f"Refused {len(body['events'])} {body['stream']} titles: {reason}.") from None
                 if str(err) != "api 429":
                     raise
                 if attempt:

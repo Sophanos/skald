@@ -32,7 +32,9 @@ class RowsR2(unittest.TestCase):
             stack.enter_context(patch.object(s, 'row_list', side_effect=lambda c, *a: metas.copy() if c == cid else []))
             for name in ('fill_row', 'balance_row', 'polish_row', 'rotate_row', 'remote_order'):
                 stack.enter_context(patch.object(s, name, side_effect=lambda xs, *a, **kw: xs))
-            return s.served_row(cid, typ, 'de-DE', {}, above if above is not None else set(), (set(), set()), who)
+            p = {'entries': [{'key': x['id'], 'kind': 'movie' if x['type'] == 'movie' else 'tv',
+                              'signal': 'watched', 'item': {}} for x in metas]}
+            return s.served_row(cid, typ, 'de-DE', p, above if above is not None else set(), (set(), set()), who)
 
     def test_rewatch_dedupes_catchup_and_refills_own_candidates(self):
         s = self.s

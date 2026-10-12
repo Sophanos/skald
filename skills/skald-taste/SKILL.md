@@ -33,8 +33,9 @@ Repeat `--source NAME=PATH` for multiple exports. A dry-run writes nothing and m
 paid API calls. Omit `--dry-run` to save the review and plan for an apply.
 Show the person counts, unresolved titles and the plan hash. `review_file` is relative
 to the state directory. With permission to send title metadata, add `--remote`.
-Only titles, years, media types and public TMDB choices reach the API.
-`--resolve-online` separately allows TMDB searches. Paid work uses the server budget.
+Only titles, years, media types and external ids reach the server for lookup, even in dry runs.
+`--remote` uses the server's TMDB key; the laptop needs no TMDB key.
+`--resolve-online` uses a laptop TMDB key instead. Optional paid decisions also send public TMDB choices and use the server budget.
 
 After a yes, use the same files and options plus `--yes --plan HASH`.
 A changed plan needs a new preview and yes. Unresolved titles stay in private `review.json`.
@@ -86,10 +87,11 @@ A bound token sees its own person + together. Use only the person's authorized C
 - `/api/v1/connectors`: GET → read; query []; tail null; example `{}`
 - `/api/v1/decide`: GET → read; query []; tail null; example `{}`
 - `/api/v1/decide/*`: POST → decide; query []; tail "custom"; example `{"tail":"route_query","body":{"in":{"query":"synthetic request"},"no_llm":true}}`
-- `/api/v1/events`: POST → events; query []; tail null; example `{"body":{"stream":"imports","events":[]}}`
+- `/api/v1/events`: GET → events, POST → events; query []; tail null; example `{"body":{"stream":"imports","events":[]}}`
 - `/api/v1/interview/next`: GET → read; query ["person"]; tail null; example `{"query":{"person":"ana"}}`
 - `/api/v1/metrics`: GET → read; query ["days"]; tail null; example `{}`
 - `/api/v1/profile`: GET → read; query ["person"]; tail null; example `{}`
+- `/api/v1/resolve`: POST → read; query []; tail null; example `{"body":{"items":[]}}`
 - `/api/v1/routes`: GET → read; query []; tail null; example `{}`
 - `/api/v1/rows`: GET → read; query ["lang","person","row"]; tail null; example `{}`
 - `/api/v1/session`: GET → read, POST → events; query []; tail null; example `{"body":{"who":"both"}}`

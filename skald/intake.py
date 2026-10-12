@@ -125,12 +125,14 @@ def collect(specs, person, profile_map, *, server, stats=None):
     return out
 
 
-def _provider(engine):
+def _provider(engine, *, required=True):
     from . import remote
     index = remote.request("/api/v1/decide")
     rows = index.get("types", []) if isinstance(index, dict) else []
     if not any(isinstance(x, dict) and x.get("type") == "resolve_title" and x.get("available") is True for x in rows):
-        raise ValueError("remote resolve_title unavailable")
+        if required:
+            raise ValueError("remote resolve_title unavailable")
+        return None
     provider = remote_provider()
     def checked(batch, max_usd):
         for item in batch:
@@ -150,10 +152,17 @@ def resolve(engine, state, candidates, *, online, remote, max_ai_usd, dry_run, c
             for name, value in (("API_KEY", os.environ["TMDB_API"]), ("urllib", urllib), ("tmdb", engine._network_tmdb)):
                 stack.enter_context(patch.object(s, name, value))
         resolver = Resolver(s.tmdb, cache=state / "resolve.json", max_ai_usd=max_ai_usd,
-                            namespace="tmdb" if online else "snapshot")
-        if remote and not dry_run and not cache_only and max_ai_usd > 0:
-            resolver.decide = _provider(engine)
+                            namespace="tmdb" if online else "server" if remote else "snapshot")
         resolutions = resolver.resolve(candidates, persist=False, cache_only=cache_only)
+        if remote and not online and not cache_only:
+            from .remote import resolve_titles
+            pending = [c for c, r in zip(candidates, resolutions) if r["method"] == "unresolved"]
+            for candidate, result in zip(pending, resolve_titles(pending)):
+                resolver.cache[resolver.cache_key(candidate)] = result
+            resolutions = resolver.resolve(candidates, persist=False)
+        if remote and not dry_run and not cache_only and max_ai_usd > 0 and (online or resolver.pending):
+            resolver.decide = _provider(engine, required=online)
+            resolutions = resolver.resolve(candidates, persist=False, cache_only=cache_only)
     return resolver, resolutions
 
 
@@ -348,7 +357,7 @@ def import_command(args, engine, state, *, parser=parse):
     accepted, merge = cross_source(accepted, existing=engine._server.read_imports(),
                                    profile=engine._profile["entries"], person=args.person)
     merge.update(stats)
-    label = ("TMDB search" if args.resolve_online else "snapshot metadata") + " + decide API" if args.remote else \
+    label = ("TMDB search" if args.resolve_online else "server TMDB search") + " + decide API" if args.remote else \
             "TMDB search" if args.resolve_online else "offline snapshot metadata + cached matches"
     result = {"candidates": len(candidates), "events": accepted, "review": review, "ai_usd": resolver.spent,
               "dry_run": args.dry_run, "resolution": label, "remote": _remote(resolver, resolutions, args.remote),
@@ -516,11 +525,11 @@ def onboard(args, engine, state):
     candidates = [c for s, _, cs in collected if s not in skipped for c in cs]
     cache_only = bool(args.yes and args.plan)
     resolver, resolutions = resolve(engine, state, candidates, online=args.resolve_online,
-                                    remote=args.remote and not interactive, max_ai_usd=args.max_ai_usd,
-                                    dry_run=args.dry_run, cache_only=cache_only)
-    if interactive and args.remote and not args.dry_run and not cache_only and args.max_ai_usd > 0:
+                                    remote=args.remote, max_ai_usd=args.max_ai_usd,
+                                    dry_run=args.dry_run or interactive, cache_only=cache_only)
+    if interactive and args.remote and not args.dry_run and not cache_only and args.max_ai_usd > 0 and resolver.pending:
         if _prompt(f"send {resolver.pending} titles (title, year, kind only) to the decide API? [y/N]").lower() == "y":
-            resolver.decide = _provider(engine)
+            resolver.decide = _provider(engine, required=args.resolve_online)
             resolutions = resolver.resolve(candidates, persist=False)
     accepted, review = _review(engine, candidates, resolutions, args.person, resolver,
                                interactive and not args.yes and not cache_only)

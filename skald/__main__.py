@@ -126,7 +126,7 @@ def parser():
     imp.add_argument("--profile-map", action="append", default=[], metavar="NAME=PERSON")
     imp.add_argument("--max-ai-usd", type=float, default=.05)
     imp.add_argument("--resolve-online", action="store_true", help="opt-in: TMDB search; exports stay local")
-    imp.add_argument("--remote", action="store_true", help="resolve through the decide API")
+    imp.add_argument("--remote", action="store_true", help="resolve titles through the linked server")
     imports = cmd(commands, "imports").add_subparsers(dest="imports", required=True)
     cmd(imports, "list")
     undo = cmd(imports, "undo")
@@ -780,6 +780,9 @@ def main(argv=None, out=None):
             else:
                 print(f"{data['count']} events · {data['undone']} undo ids · {data['chunks']} chunks · "
                       f"{data['bytes']} bytes → {data['host']} · preview; use --apply", file=out)
+            if not args.json:
+                for message in data.get("messages", []):
+                    print(message, file=out)
             return 1 if args.apply and data["rejected"] else 0
         if args.command in ("onboard", "me"):
             intake._state(state)

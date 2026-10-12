@@ -37,12 +37,15 @@ or `~/.local/share/skald`. Change that with `--state-dir PATH`.
 |---|---|
 | `connect` | Save your laptop API address and token privately: `skald connect https://tv.example.org` |
 | `onboard` | Show export instructions and guide review: `skald onboard --sources` |
-| `import` | Preview an export: `skald --snapshot /path/copy import imdb ratings.csv --person alex --dry-run` |
+| `import` | Preview an export: `skald import imdb ratings.csv --person alex --remote --dry-run` |
 | `imports list` | List local imports: `skald --snapshot /path/copy imports list` |
 | `imports undo` | Undo a selected local import: `skald --snapshot /path/copy imports undo IMPORT_ID` |
 | `push imports` | Preview sending resolved titles: `skald push imports --remote` |
 
 Review the preview, then add `--apply` after approval. The `--remote` route uses HTTP, without SSH.
+With `--remote`, titles resolve on your server; no laptop TMDB key is needed, even for dry runs.
+Use `--resolve-online` with laptop `TMDB_API` for lookups without the server.
+Per-person tokens skip other members' titles in preview and apply; a household token sends everyone's.
 The older `--live` route uses SSH and has no default host; set `SKALD_SSH_HOST` explicitly.
 
 ## Connect sources

@@ -67,7 +67,7 @@ class ApiRoutesTests(ApiCase):
                     self.assertEqual(code, status)
 
     def test_registry(self):
-        self.assertEqual(len(self.s.API_ROUTES), 12)
+        self.assertEqual(len(self.s.API_ROUTES), 13)
         self.contract()
 
     def test_routes_self_description(self):
@@ -144,7 +144,8 @@ class ApiRoutesTests(ApiCase):
             for key, spec in s.API_ROUTES.items():
                 if "GET" not in spec["methods"]:
                     continue
-                for client in (None, "read", "ben", "ana"):
+                clients = ("events", "ben", "ana") if spec["methods"]["GET"][0] == "events" else (None, "read", "ben", "ana")
+                for client in clients:
                     path, body = self.example(key, spec, "GET")
                     if key == "interview/next" and client in self.s.PEOPLE:
                         path = "/api/v1/interview/next?person=" + client

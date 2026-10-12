@@ -154,8 +154,16 @@ class LaptopTests(unittest.TestCase):
             export = Path(folder)/'titles.txt'
             export.write_text('Synthetic title\n')
             out = io.StringIO()
-            self.assertEqual(main(['--state-dir', str(Path(folder)/'state'), 'import', 'plain', str(export),
-                '--person', 'alex', '--remote', '--dry-run', '--json'], out=out), 0)
+            from skald.ingest.resolve import Resolver
+            reply = {"results": [Resolver(lambda *a, **kw: {}, cache=Path(folder)/'resolve.json').resolution(
+                {"id": 42, "title": "Synthetic title", "year": "2000", "kind": "movie"}, 1, "search")]}
+            with patch.object(remote, 'request', return_value=reply) as lookup, \
+                    patch('skald.live.pull', side_effect=AssertionError('ssh forbidden')):
+                self.assertEqual(main(['--state-dir', str(Path(folder)/'state'), 'import', 'plain', str(export),
+                    '--person', 'alex', '--remote', '--dry-run', '--json'], out=out), 0, out.getvalue())
+            lookup.assert_called_once_with('/api/v1/resolve', {'items': [
+                {'title': 'Synthetic title', 'year': '', 'kind': '', 'ids': {}}]})
+            self.assertEqual(len(json.loads(out.getvalue())['events']), 1)
             self.assertEqual(json.loads(out.getvalue())['candidates'], 1)
 
     def test_persistent_state_and_explicit_live_host(self):

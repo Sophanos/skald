@@ -74,4 +74,15 @@ Set `MANIFEST_CACHE_TTL=*:21600,skald:600` in .env.aiostreams to re-read Skald's
 every 10 minutes; "skald" is its Docker hostname. Restart AIOStreams after changing the setting.
 Rows appear once they have enough titles; a new household starts with a few and gains more as Skald learns your taste.
 
+Import a file on your laptop, then preview before sending:
+Your linked server resolves titles with --remote. The laptop needs no TMDB key.
+Without server lookups, use --resolve-online with TMDB_API on the laptop.
+python3 -m skald import netflix ViewingActivity.csv --person NAME --remote --dry-run
+Other sources: imdb ratings.csv; letterboxd ratings.csv; trakt export-folder;
+youtube watch-history.json; chrome History (copy the browser database first).
+Use python3 -m skald onboard --sources for export instructions.
+Save a reviewed import with the same command without --dry-run and with --yes.
+python3 -m skald push imports --remote
+After reviewing the preview: python3 -m skald push imports --remote --apply
+
 Plex playback should work, not yet tested by us. Skald does not supply streams.

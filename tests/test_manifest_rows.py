@@ -90,6 +90,9 @@ class ManifestRows(unittest.TestCase):
         self.assertEqual({r['id'] for r in self.rows()}, {s.rid('top10'), s.rid('search')})
         cid = s.rid('rewatch')
         for n in (5, 6, 0, 6):
+            s._profiles['household'] = {'entries': [
+                {'key': x['id'], 'kind': 'movie', 'title': x['name'], 'signal': 'watched', 'item': {}}
+                for x in cards(n)]}
             self.put(cid, cards(n))
             self.assertEqual(cid in {r['id'] for r in self.rows()}, n >= s.ROW_MIN)
 
@@ -103,6 +106,87 @@ class ManifestRows(unittest.TestCase):
             self.assertIn(cid, {r['id'] for r in self.rows('together')})
             with s.addon_scope(member):
                 self.assertEqual(len(s.row_metas(cid, 'tv', s.LANG, who=member)), 5)
+
+    def test_search_only_watch_again_is_empty_and_unlisted(self):
+        s, cid = self.s, self.s.rid('rewatch')
+        s._profiles['household'] = {'entries': [], 'searches': ['comfort classics']}
+        self.put(cid, [], 'movie')
+        self.put(s.rid('rewatchai'), cards(13), 'movie')
+        for scope in (None, s.PEOPLE[0], 'together'):
+            with self.subTest(scope=scope), s.addon_scope(scope):
+                who = s.SCOPES[scope] if scope else 'none'
+                self.assertEqual(s.row_metas(cid, 'tv', s.LANG, who=who), [])
+                self.assertNotIn(cid, {r['id'] for r in self.rows(scope)})
+
+    def test_watch_again_keeps_watched_ai_picks_in_ai_order(self):
+        s, cid = self.s, self.s.rid('rewatch')
+        picks = cards(6)
+        s._profiles['household'] = {'entries': [
+            {'key': x['id'], 'kind': 'movie', 'title': x['name'], 'signal': signal, 'item': {}}
+            for x, signal in zip(picks, ('watched', 'loved', 'liked', 'watched', 'opened', 'interest'))]}
+        self.put(cid, [], 'movie')
+        self.put(s.rid('rewatchai'), [picks[i] for i in (3, 5, 1, 4, 0, 2)], 'movie')
+        self.assertEqual([x['id'] for x in s.row_metas(cid, 'tv', s.LANG)],
+                         [picks[i]['id'] for i in (3, 1, 0, 2)])
+
+    def test_watch_again_member_evidence_filters_cached_and_ai_picks(self):
+        s, cid = self.s, self.s.rid('rewatch')
+        member, other = s.PEOPLE[:2]
+        picks = cards(4)
+        s._profiles['household'] = {'entries': [
+            {'key': x['id'], 'kind': 'movie', 'stype': 'movie', 'title': x['name'],
+             'signal': 'watched', 'weight': 2, 'item': {}, 'by': [person]}
+            for x, person in zip(picks[:3], (member, other, 'together'))]}
+        self.put(cid, picks[1:] + [picks[0]])
+        for scope, expected in ((member, [2, 0]), (other, [1, 2]), ('together', [1, 2, 0])):
+            with self.subTest(scope=scope), s.addon_scope(scope):
+                self.assertEqual([x['id'] for x in s.row_metas(cid, 'tv', s.LANG, who=s.SCOPES[scope])],
+                                 [picks[i]['id'] for i in expected])
+        self.put(cid, [], 'movie')
+        self.put(s.rid('rewatchai'), picks, 'movie')
+        with s.addon_scope(member):
+            self.assertEqual([x['id'] for x in s.row_metas(cid, 'tv', s.LANG, who=member)],
+                             [picks[i]['id'] for i in (0, 2)])
+
+    def test_watch_again_accepts_watch_and_rating_evidence_with_matching_type(self):
+        s, cid = self.s, self.s.rid('rewatch')
+        picks = cards(8)
+        items = ({'played': True}, {'completed': True}, {'rating': 6}, {'episodes_played': 1},
+                 {'progress': .7}, {'progress': .2}, {}, {})
+        s._profiles['household'] = {'entries': [
+            {'key': x['id'], 'kind': 'tv' if i in (3, 7) else 'movie', 'title': x['name'],
+             'signal': 'watched' if i == 7 else 'interest', 'item': item}
+            for i, (x, item) in enumerate(zip(picks, items))]}
+        picks[3]['type'] = 'series'
+        self.put(cid, picks)
+        self.assertEqual([x['id'] for x in s.row_metas(cid, 'tv', s.LANG)], [x['id'] for x in picks[:5]])
+
+    def test_watch_again_keeps_merged_tv_trakt_rating_for_household_and_together(self):
+        s, cid = self.s, self.s.rid('rewatch')
+        member, other = s.PEOPLE[:2]
+        picks = cards(2)
+        now = s.time.time()
+        tv = [dict(id=x['id'], type='movie', progress=.3, at=now * 1000) for x in picks]
+        trakt = [{**tv[0], 'title': picks[0]['name'], 'person': member,
+                  'signal': 'interest', 'weight': .3, 'rating': 5}]
+        with patch.dict(s.CONFIG['connectors'], {'trakt_api': {'accounts': {member: 'file:unused.json'}}}), \
+                patch.object(s, 'tmdb_details', side_effect=lambda it: ('movie', {
+                    'id': int(it['id'][5:]), 'title': picks[int(it['id'][5:])]['name']})), \
+                patch.object(s, 'session_at', return_value=None), \
+                patch.object(s, 'person_loves', return_value=[]):
+            entries, _, _ = s.fold_events((('tv', s.tv_events(now, tv)),
+                                          ('trakt', s.trakt_events(now, trakt))), now)
+            self.assertEqual(entries[0]['item']['progress'], .3)
+            self.assertNotIn('rating', entries[0]['item'])
+            self.assertEqual(entries[0]['opinions'][member]['item']['rating'], 5)
+            s._profiles['household'] = {'entries': entries}
+            self.put(cid, [], 'movie')
+            self.put(s.rid('rewatchai'), picks, 'movie')
+            for scope in (member, None, 'together', other):
+                with self.subTest(scope=scope), s.addon_scope(scope):
+                    who = s.SCOPES[scope] if scope else 'none'
+                    self.assertEqual([x['id'] for x in s.row_metas(cid, 'tv', s.LANG, who=who)],
+                                     [] if scope == other else [picks[0]['id']])
 
     def test_pinned_names_and_visibility_use_same_row(self):
         s, cid = self.s, self.s.MOODS_ROWS[0]

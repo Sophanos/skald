@@ -45,8 +45,9 @@ every 10 minutes; "skald" is its Docker hostname. Restart AIOStreams after chang
 Rows appear once they have enough titles; a new household starts with a few and gains more as Skald learns your taste.''',
 }
 FILES = '''Import a file on your laptop, then preview before sending:
-The laptop needs TMDB_API for title lookups.
-python3 -m skald import netflix ViewingActivity.csv --person {person} --remote --resolve-online --dry-run
+Your linked server resolves titles with --remote. The laptop needs no TMDB key.
+Without server lookups, use --resolve-online with TMDB_API on the laptop.
+python3 -m skald import netflix ViewingActivity.csv --person {person} --remote --dry-run
 Other sources: imdb ratings.csv; letterboxd ratings.csv; trakt export-folder;
 youtube watch-history.json; chrome History (copy the browser database first).
 Use python3 -m skald onboard --sources for export instructions.
@@ -62,7 +63,7 @@ def recipe(watch, manifest, lang, internal=None):
 
 
 def watch_doc():
-    return '# Where you watch\n\n' + RECOMMENDED + '\n' + '\n\n'.join(recipe(k, 'YOUR_PRINTED_MANIFEST_URL', '<lang>') for k in RECIPES) + '\n\nPlex playback should work, not yet tested by us. Skald does not supply streams.\n'
+    return '# Where you watch\n\n' + RECOMMENDED + '\n' + '\n\n'.join(recipe(k, 'YOUR_PRINTED_MANIFEST_URL', '<lang>') for k in RECIPES) + '\n\n' + FILES.format(person='NAME') + '\n\nPlex playback should work, not yet tested by us. Skald does not supply streams.\n'
 
 RECOMMENDED = '''## Recommended: the setup we run
 
