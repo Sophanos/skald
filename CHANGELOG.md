@@ -4,6 +4,12 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.0.7
+
+A second `skald import` no longer erases titles still waiting for review from an earlier import.
+
+**Data changes:** none.
+
 ## 1.0.6
 
 Large YouTube, Chrome and Trakt exports use less memory when imported in the container.

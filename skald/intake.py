@@ -387,10 +387,11 @@ def import_command(args, engine, state, *, parser=parse):
               "merge": merge, "learned": learned(engine, accepted, merge, args.person)}
     if not args.dry_run:
         _json(state / "resolve.json", resolver.cache)
-        _json(state / "review.json", review)
+        pairs = {(args.source, args.person)} | {(c.src, c.person or args.person) for c in candidates}
+        pending = _save_review(state, review, pairs)
         result.update(engine.ingest(accepted))
         result["_persist"] = {"log": result["added"] > 0, "undone": []}
-        if review:
+        if pending:
             result["review_file"] = "review.json"
     return result
 
