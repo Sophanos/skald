@@ -58,10 +58,11 @@ class MoodPickTests(ApiCase):
     def test_cap_budget_and_internal_index(self):
         s = self.s
         for gate in ("cap", "budget"):
-            reset(s)
-            s._learn["moodpicks"] = {}
-            with patch.object(s, "OR_KEY", "replay"), patch.object(s, "mood_state", return_value="Synthetic tonight"), \
+            with patch.object(s.time, "time", return_value=NOW), patch.object(s, "OR_KEY", "replay"), \
+                    patch.object(s, "mood_state", return_value="Synthetic tonight"), \
                     patch.object(s, "openrouter", side_effect=s.BudgetExceeded) as llm:
+                reset(s)
+                s._learn["moodpicks"] = {}
                 if gate == "cap":
                     s._usage["calls"]["feed:mood_pick"] = 3
                 self.assertEqual(self.pick(), self.rule)
