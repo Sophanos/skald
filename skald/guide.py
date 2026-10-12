@@ -23,8 +23,8 @@ HOWTO = {
                    "url": "https://letterboxd.com/settings/data/", "file_glob": ["letterboxd*", "ratings.csv", "diary.csv", "watched.csv"], "wait": "minutes", "checked": None},
     "imdb": {"steps": ["Open Your ratings or Your watchlist.", "Choose Export and download the CSV.", "Use Custom setup if the filename is simply ratings.csv."],
              "url": "https://help.imdb.com/article/imdb/track-movies-tv/ratings-faq/G67Y87TFYYP6TWAV", "file_glob": ["imdb*.csv", "IMDb*.csv"], "wait": "minutes", "checked": None},
-    "youtube": {"steps": ["Open Google Takeout and select YouTube and YouTube Music.", "Select history and choose JSON format.", "Create the export, download it, and unzip watch-history.json."],
-                "url": "https://takeout.google.com/", "file_glob": ["watch-history.json"], "wait": "days", "checked": None},
+    "youtube": {"steps": ["Open Google Takeout and select YouTube and YouTube Music.", "Select history; JSON or HTML format works.", "Create the export, download it, and unzip watch-history.json or watch-history.html."],
+                "url": "https://takeout.google.com/", "file_glob": ["watch-history.json", "watch-history.html"], "wait": "days", "checked": None},
     "chrome": {"steps": ["Close Chrome before copying its History database.", "On macOS: ~/Library/Application Support/Google/Chrome/Default/History.", "On Linux: ~/.config/google-chrome/Default/History.", "On Windows: %LOCALAPPDATA%/Google/Chrome/User Data/Default/History."],
                "url": "https://chromium.googlesource.com/chromium/src/+/main/docs/user_data_dir.md", "file_glob": ["History"], "wait": "minutes", "checked": None},
 }

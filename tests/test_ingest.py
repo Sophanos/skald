@@ -1,6 +1,7 @@
 import copy
 from dataclasses import asdict
 import datetime as dt
+import io
 import json
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from skald.engine import Engine
-from skald.ingest import Candidate, parse, rating_signal
+from skald.ingest import Candidate, interests, parse, rating_signal
 from skald.ingest.chrome import url_hint
 from skald.ingest.resolve import Resolver, match_score, remote_provider
 
@@ -50,6 +51,43 @@ class ParserTests(unittest.TestCase):
         raw = json.dumps([asdict(c) for c in rows])
         self.assertNotIn("http", raw)
         self.assertNotIn("cooking", raw)
+
+    def test_youtube_html_json_parity(self):
+        rows = parse("youtube", FIXTURES / "watch-history.html")
+        self.assertEqual(rows, parse("youtube", FIXTURES / "watch-history-html.json"))
+        self.assertEqual([(r.title, r.year, r.last_ts) for r in rows], [
+            ("Arrival", "2016", "2026-10-11"),
+            ("Rock & Roll's \"Return\"", "", "2026-09-09"),
+            ("Castle", "", "2026-10-10"),
+            ("Dark", "", "2026-10-09"),
+        ])
+
+    def test_youtube_html_content_detection_reads_once(self):
+        content = (FIXTURES / "watch-history.html").read_text()
+        expected = parse("youtube", FIXTURES / "watch-history-html.json")
+        with patch("builtins.open", return_value=io.StringIO(" \n" + content)) as opened:
+            self.assertEqual(parse("youtube", "/dev/stdin"), expected)
+        opened.assert_called_once_with("/dev/stdin", encoding="utf-8")
+
+    def test_youtube_html_watched_whitespace(self):
+        content = (FIXTURES / "watch-history.html").read_text()
+        expected = parse("youtube", FIXTURES / "watch-history-html.json")
+        for whitespace in (" ", "\t", "\u00a0", "\u202f", "\u2009"):
+            with self.subTest(whitespace=repr(whitespace)), patch(
+                    "builtins.open", return_value=io.StringIO(
+                        content.replace("Watched\u00a0", "Watched" + whitespace))):
+                self.assertEqual(parse("youtube", "history"), expected)
+
+    def test_youtube_html_unknown_date(self):
+        content = '''<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">
+Watched <a href="https://www.youtube.com/watch?v=synthetic">Unknown Trailer</a><br>
+<a href="https://www.youtube.com/channel/synthetic">Channel</a><br>unknown date<br></div>'''
+        with patch("builtins.open", return_value=io.StringIO(content)), \
+                patch("skald.ingest.youtube.interests", wraps=interests) as filtered:
+            self.assertEqual(parse("youtube", "history"), [])
+        candidates, newest = filtered.call_args.args
+        self.assertEqual(candidates[0].last_ts, "")
+        self.assertEqual(newest, "")
 
     def test_letterboxd_all_exports(self):
         rows = parse("letterboxd", FIXTURES / "letterboxd")

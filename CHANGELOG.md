@@ -4,6 +4,14 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.0.5
+
+`skald import youtube` now reads the Takeout watch history as HTML, which is
+what Google Takeout gives you by default, as well as JSON. You no longer need to
+redo the export just to pick JSON.
+
+**Data changes:** none.
+
 ## 1.0.4
 
 Rows that come back no longer land at the bottom in AIOStreams. Once you have

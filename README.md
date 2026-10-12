@@ -89,7 +89,7 @@ For the connector commands below, use the server prefix `docker compose -f compo
 | IMDb ratings or watchlist CSV | `imdb ratings.csv` |
 | Letterboxd export with ratings, diary, watched and likes | `letterboxd export-folder` |
 | Trakt JSON export | `trakt export-folder` |
-| YouTube Takeout history | `youtube watch-history.json` |
+| YouTube Takeout history | `youtube watch-history.json` or `youtube watch-history.html` |
 | Chrome history database copy | `chrome History` |
 | Plain text, one title per line | `plain titles.txt` |
 | Trakt API | `skald setup --connect trakt` |
