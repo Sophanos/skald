@@ -154,10 +154,10 @@ python3 -m skald onboard --sources
 
 | Export | Import command (add your member with `--person alex --remote`) |
 |---|---|
-| Netflix viewing CSV | `python3 -m skald import netflix ViewingActivity.csv --dry-run` |
+| Netflix CSV from [Viewing activity](https://help.netflix.com/en/node/101917), "Download all" | `python3 -m skald import netflix ViewingActivity.csv --dry-run` |
 | IMDb ratings/watchlist CSV | `python3 -m skald import imdb ratings.csv --dry-run` |
 | Letterboxd export folder | `python3 -m skald import letterboxd export-folder --dry-run` |
-| Trakt JSON export folder | `python3 -m skald import trakt export-folder --dry-run` |
+| Trakt zip from [Trakt Settings → Data](https://app.trakt.tv/settings/data), "Export now" | `python3 -m skald import trakt trakt-export.zip --dry-run` |
 | YouTube Takeout JSON | `python3 -m skald import youtube watch-history.json --dry-run` |
 | Chrome database copy | `python3 -m skald import chrome History --dry-run` |
 | One title per line | `python3 -m skald import plain titles.txt --dry-run` |

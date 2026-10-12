@@ -54,6 +54,8 @@ def test(s, name=None, *, transport=None, now=None, show=False):
                     unmapped = []
                 elif cid in ('jellyfin', 'plex', 'aiostreams_db'):
                     opts = cfg['options']
+                    if cid == 'aiostreams_db':
+                        row['skipped'] = len(opts.get('archived', {}))
                     users = source_users(s, cid, opts)
                     row.update(reachable=True, auth_ok=True)
                     selected = (opts['profiles'].keys() | opts.get('archived', {}).keys()) if cid == 'aiostreams_db' else \
@@ -90,7 +92,8 @@ def test(s, name=None, *, transport=None, now=None, show=False):
 def text(result):
     for r in result['connectors']:
         yield (f"{r['name']}: reachable {'yes' if r['reachable'] else 'no'}; auth {'OK' if r['auth_ok'] else 'not OK'}; "
-               f"{r['unmapped']} unmapped; {r['plays_30d']} plays in the last 30 days")
+               f"{r['unmapped']} unmapped; {r['plays_30d']} plays in the last 30 days" +
+               (f"; {r['skipped']} profiles skipped" if 'skipped' in r else ''))
         if r.get('unmapped_names'):
             yield 'Unmapped: ' + ', '.join(r['unmapped_names'])
         if r.get('error'):

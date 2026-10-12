@@ -78,6 +78,7 @@ def collect(specs, person, profile_map, *, server, stats=None, temp_dir=None):
     out = []
     for source, paths in grouped.items():
         hashes, candidates = [], []
+        title_counts = {}
         for path in paths:
             try:
                 if not path.exists():
@@ -117,12 +118,16 @@ def collect(specs, person, profile_map, *, server, stats=None, temp_dir=None):
                                         h.update(chunk)
                                 hashes.append(h.hexdigest())
                     local = {}
-                    candidates += parse(source, input_path, profile_map=profile_map, stats=local, temp_dir=temp_dir)
+                    candidates += parse(source, input_path, profile_map=profile_map, stats=local, temp_dir=temp_dir, title_counts=title_counts)
                     _candidates(source, candidates)
                 if stats is not None:
-                    stats.setdefault("_sources", {}).setdefault(source, Counter()).update(local)
+                    source_stats = stats.setdefault("_sources", {}).setdefault(source, Counter())
                     for key, value in local.items():
-                        stats[key] = stats.get(key, 0) + value
+                        if key.startswith("trakt_"):
+                            source_stats[key] = stats[key] = value
+                        else:
+                            source_stats[key] += value
+                            stats[key] = stats.get(key, 0) + value
             except (ValueError, OSError, sqlite3.Error, TypeError, AttributeError, OverflowError) as error:
                 if isinstance(error, FileNotFoundError):
                     reason = "file not found"
@@ -366,11 +371,13 @@ def _remote(resolver, resolutions, enabled):
 def import_command(args, engine, state, *, parser=parse):
     _trusted(engine._server, args.source)
     mapping = _mapping(args.profile_map)
-    stats = {}
+    stats, title_counts = {}, {}
     try:
         candidates = [c for path in args.files for c in parser(args.source, path, profile_map=mapping, stats=stats,
-                      temp_dir=Path(os.environ.get("DATA_DIR", state)))]
-    except ValueError:
+                      temp_dir=Path(os.environ.get("DATA_DIR", state)), title_counts=title_counts)]
+    except ValueError as error:
+        if str(error).startswith("invalid Trakt zip"):
+            raise
         raise ValueError("invalid export; check source and profile mapping") from None
     _candidates(args.source, candidates)
     resolver, resolutions = resolve(engine, state, candidates, online=args.resolve_online, remote=args.remote,

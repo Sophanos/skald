@@ -156,6 +156,53 @@ class AIOStreamsTests(unittest.TestCase):
         self.assertEqual(self.fake.configs['existing'], before)
         self.assertIn('update Skald address', out.getvalue())
 
+    def test_adopt_replaces_other_skald_address_in_place(self):
+        presets = [{'type': 'custom', 'instanceId': 'other', 'options': {
+            'name': 'Other addon', 'manifestUrl': 'https://other.example/manifest.json'}},
+            {'type': 'custom', 'instanceId': 'abc', 'enabled': False, 'options': {
+                'name': 'Skald', 'manifestUrl': 'https://other-skald.example/manifest.json', 'extra': 1}}]
+        self.existing(presets)
+        self.fake.meta = [{'name': 'meta'}]
+        expected = copy.deepcopy(presets)
+        with setup.server(self.data) as s:
+            expected[1]['options']['manifestUrl'] = s.addon_urls('http://skald:8080')[1 + list(s.SCOPES).index('alex')]
+        code, text = self.run_setup('--uuid', 'existing', '--member', 'alex',
+            '--password-stdin', stdin='fake-password\n')
+        self.assertEqual(code, 0, text)
+        self.assertEqual(self.fake.configs['existing']['presets'], expected)
+        self.assertIn('replace other Skald address', text)
+        self.assertNotIn('add Skald', text)
+
+    def test_adopt_prefers_our_skald_over_other_skald(self):
+        presets = [{'type': 'custom', 'instanceId': 'foreign', 'options': {
+            'name': 'Skald', 'manifestUrl': 'https://other-skald.example/manifest.json'}},
+            {'type': 'custom', 'instanceId': 'ours', 'options': {
+                'name': 'Skald', 'manifestUrl': 'https://skald.example.org/old/manifest.json'}}]
+        self.existing(presets)
+        self.fake.meta = [{'name': 'meta'}]
+        expected = copy.deepcopy(presets)
+        with setup.server(self.data) as s:
+            expected[1]['options']['manifestUrl'] = s.addon_urls('http://skald:8080')[0]
+        code, text = self.run_setup('--uuid', 'existing', '--password-stdin', stdin='fake-password\n')
+        self.assertEqual(code, 0, text)
+        self.assertEqual(self.fake.configs['existing']['presets'], expected)
+        self.assertIn('update Skald address', text)
+        self.assertNotIn('replace other Skald address', text)
+
+    def test_saved_login_keeps_other_skald_preset(self):
+        self.run_setup()
+        uid = self.saved()['household']['uuid']
+        other = self.fake.configs[uid]['presets'][0]
+        other['options']['manifestUrl'] = 'https://other-skald.example/manifest.json'
+        before = copy.deepcopy(other)
+        code, text = self.run_setup()
+        self.assertEqual(code, 0, text)
+        self.assertEqual(self.fake.configs[uid]['presets'][0], before)
+        self.assertEqual(sum(p.get('options', {}).get('name') == 'Skald'
+            for p in self.fake.configs[uid]['presets']), 2)
+        self.assertIn('add Skald', text)
+        self.assertNotIn('replace other Skald address', text)
+
     def test_protected_key_sent_never_stored(self):
         self.fake.protected = True
         code, text = self.run_setup('--secret-stdin', stdin='access-secret\n')
@@ -269,7 +316,7 @@ class AIOStreamsTests(unittest.TestCase):
         presets = [{'type': 'custom', 'instanceId': 'aaa', 'options': {
             'name': 'Other', 'manifestUrl': 'https://skald.example.org/other/en-US/manifest.json'}},
             {'type': 'custom', 'instanceId': 'bbb', 'options': {
-            'name': 'Skald', 'manifestUrl': 'https://unrelated.example/manifest.json'}}]
+            'name': 'Other Skald', 'manifestUrl': 'https://unrelated.example/manifest.json'}}]
         self.existing(presets)
         before = json.dumps(presets).encode()
         code, text = self.run_setup('--uuid', 'existing', '--password-stdin', stdin='old-password\n')

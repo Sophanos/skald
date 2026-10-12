@@ -92,7 +92,8 @@ def skill_block():
         server = load_server(data)
         try:
             lines = [BEGIN, "", "## Skald decisions and taste API", "",
-                     "A bound token sees its own person + together. Use only the person's authorized CLI or API.", ""]
+                     "A bound token sees its own person + together. Use only the person's authorized CLI or API.",
+                     'Search command previews require the exact `yes NN` code shown first in the card name. Open a card to read its details. Plain `yes` and prefixes save nothing. Identical mutation requests within 60 seconds return their first result.', ""]
             for name, spec in sorted(server.DECISIONS.items()):
                 if not spec["api"]:
                     continue

@@ -43,6 +43,7 @@ def parser():
                         "onboard": "set up and resume local exports", "me": "show what Skald knows about you", "forget": "forget imported signals",
                         "correct": "correct a memory fact", "push": "preview or push resolved imports", "decide": "run a structured decision", "interview": "rate interview anchors to start a taste",
                         "backup": "inspect or restore backups", "verify": "verify an archive", "restore": "restore an archive", "eval": "run offline evaluation",
+                        "suggest": "show weekly habits that could become shelves",
                         "addon-url": "print private addon URLs for local DATA_DIR",
                         "trakt": "authorize the configured Trakt connector", "login": "sign in with a Trakt device code"}
         c = parent.add_parser(name, help=descriptions[name], description=descriptions[name])
@@ -52,8 +53,34 @@ def parser():
     def person(c, required=False):
         c.add_argument("--person", choices=PEOPLE if not required else (*PEOPLE, "both"), required=required)
 
+    shelf = commands.add_parser("shelf", help="edit fixed standing wish slots").add_subparsers(dest="shelf_op", required=True, help="shelf operation to run")
+    for op in ("add", "replace", "list", "stop", "count"):
+        c = shelf.add_parser(op, help="edit shelf " + op)
+        c.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+        scope = c.add_mutually_exclusive_group(required=op != "list")
+        scope.add_argument("--person", choices=PEOPLE)
+        scope.add_argument("--together", action="store_true", help="use the shared Together slots")
+        if op in ("add", "replace"):
+            c.add_argument("text", help="free text viewing wish")
+            c.add_argument("--name", default="")
+            c.add_argument("--when", default="always", help="always, or weekdays and logical hours, e.g. sun 05-12")
+            c.add_argument("--yes", action="store_true")
+            c.add_argument("--plan")
+            c.add_argument("--slot", type=int, required=op == "replace", help="select a fixed slot number")
+        elif op == "stop":
+            c.add_argument("slot", help="shelf name or slot number")
+        elif op == "count":
+            c.add_argument("count", type=int, help="number of slots, 0..10")
+
     from . import setup
     setup.add_parser(commands)
+    command = commands.add_parser("command", help="preview, apply or undo a personal change")
+    command.add_argument("text", nargs="?", default="", help="one personal change; repeat text with --plan")
+    command.add_argument("--person", required=True)
+    command.add_argument("--yes", action="store_true", help="apply the preview")
+    command.add_argument("--plan", help="apply only this preview hash")
+    command.add_argument("--undo", action="store_true", help="revert the last command")
+    command.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="print JSON")
     connect = commands.add_parser("connect", help="link this laptop to the API")
     connect.add_argument("url")
     connect.add_argument("--token-stdin", action="store_true")
@@ -97,6 +124,9 @@ def parser():
         "--person", "--member", dest="person", choices=PEOPLE if not members.CONFIG_ERROR else None)
     cmd(commands, "learn")
     cmd(commands, "metrics").add_argument("--days", type=int, default=21)
+    suggestions = cmd(commands, "suggest")
+    suggestions.add_argument("--person", choices=PEOPLE, required=True)
+    suggestions.add_argument("--dismiss", help="dismiss one suggestion id for 90 days")
     memory = cmd(commands, "memory")
     person(memory)
     memory.add_argument("--explain")
@@ -604,6 +634,9 @@ def text_output(args, data, out):
         for e in data.get("events", []):
             line(f"{e.get('id', 'preview'):32} {e['who']:7} {e['action']:10} {e['src']:10} {e['title']} ({e['conf']:.2f}, n={e['n']})")
         if args.command == "import":
+            if args.source == "trakt" and data["dry_run"]:
+                line("Trakt: " + ", ".join(f"{name.replace('_', ' ')} {data['merge'].get('trakt_' + name, 0)}"
+                                         for name in ("watched_movies", "watched_series", "watchlist", "ratings", "favorites", "hidden")))
             line(f"{data['candidates']} candidates · {len(data['events'])} accepted · {len(data['review'])} to review · {'dry run' if data['dry_run'] else 'saved'}")
         elif args.command == "push":
             line(f"{data['count']} local events · " + (f"uploaded {data['uploaded']} merged events" if data["apply"] else "preview; use --apply to upload"))
@@ -667,7 +700,7 @@ def main(argv=None, out=None):
                     print("\n".join(backup.text(data)), file=out)
                 return 0 if ok else 1
         from .migrate import check, ensure, FORMAT
-        if not known.snapshot and not known.live:
+        if not known.snapshot and not known.live and known.command != "suggest":
             local_data = os.environ.get("DATA_DIR", "/data")
             if check(local_data)["format"] < FORMAT:
                 ensure(local_data)
@@ -687,6 +720,52 @@ def main(argv=None, out=None):
             p.print_help(file=out)
             if not (state / "onboard.json").exists():
                 print("start with: skald onboard", file=out)
+            return 0
+        if args.command == "suggest":
+            from .engine import suggestions
+            if args.live:
+                raise ValueError("suggest reads local data only; omit --live")
+            if args.snapshot and args.dismiss:
+                raise ValueError("dismiss uses local DATA_DIR; omit --snapshot")
+            data = suggestions(args.snapshot or os.environ.get("DATA_DIR", "/data"), args.person, members.CONFIG, args.dismiss)
+            if args.json:
+                print(json.dumps(data, ensure_ascii=False), file=out)
+            else:
+                for row in data["suggestions"]:
+                    print(f"{row['id']}  {row['name']}: {row['text']} ({row['evidence']['weeks']} weeks; {row['when']})", file=out)
+                if not data["suggestions"]:
+                    print("No suggestions.", file=out)
+            return 0
+        if args.command == "shelf":
+            if args.live or args.snapshot:
+                raise ValueError("shelf uses local DATA_DIR; omit --snapshot and --live")
+            from . import setup
+            with setup.server(Path(os.environ.get("DATA_DIR", "/data")),
+                              report=lambda line: print(line, file=sys.stderr if args.json else out)) as s:
+                s.require_config(s.CONFIG_SOURCE, s.CONFIG_ERROR)
+                scope = "together" if args.together else args.person
+                if args.shelf_op == "list":
+                    data = s.shelf_list(scope)
+                else:
+                    kwargs = {k: getattr(args, k) for k in ("text", "name", "when", "slot", "count", "plan") if hasattr(args, k)}
+                    data = s.shelf_change(scope, args.shelf_op, apply=getattr(args, "yes", False) or args.shelf_op in ("stop", "count"), **kwargs)
+            print(json.dumps(data, ensure_ascii=False, indent=None if args.json else 2), file=out)
+            return 0
+        if args.command == "command":
+            from . import commands, setup
+            with setup.server(Path(os.environ.get("DATA_DIR", "/data")),
+                              report=lambda line: print(line, file=sys.stderr if args.json else out)) as s:
+                if args.undo:
+                    data = commands.undo(s, commands.people(s, viewer=args.person))
+                else:
+                    data = commands.preview(s, args.text, args.person)
+                    if data is None:
+                        raise ValueError("Skald cannot set this yet")
+                    if args.plan and args.plan != data["plan"]:
+                        raise ValueError("Plan changed; preview again")
+                    if args.yes or args.plan:
+                        data = commands.apply(s, data)
+            print(json.dumps(data, ensure_ascii=False) if args.json else data["name"] + ("? Plan: " + data["plan"] if "plan" in data else ""), file=out)
             return 0
         if args.command in ("setup", "connect") or args.command == "connectors" and args.connector_action == "test":
             from . import setup, connectors
@@ -723,7 +802,7 @@ def main(argv=None, out=None):
                         print(label + " " + person + ": " + ("connected" if connected else "not connected"), file=out)
                 print("AIOStreams login: " + data["aiostreams_login"], file=out)
                 print("Next: " + data["next"], file=out)
-            elif args.setup_action in ("link", "adopt", "prefs") or args.disconnect:
+            elif args.setup_action in ("link", "adopt", "prefs", "rows") or args.disconnect:
                 print("\n".join(data["lines"]), file=out)
             return 0 if data.get("ok", True) else 1
         if args.command == "onboard" and args.sources and not args.snapshot and not args.live:

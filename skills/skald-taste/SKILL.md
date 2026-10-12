@@ -22,6 +22,8 @@ Run on the server where DATA lives; prefix with `docker compose exec engine` for
 Stremio direct, or `docker compose -f compose.stack.example.yaml exec skald` for the stack.
 Use configured member names. Keys go only through the private prompt or stdin,
 never in arguments or conversation. Scripts add `--yes --secret-stdin`.
+After changing connectors, restart Skald now (`docker compose restart engine`, or `docker compose -f compose.stack.example.yaml restart skald` for the stack) so it starts reading.
+A new household's first row build takes several minutes; rows fill in as they are built, and later builds reuse the cache.
 
 - Stremio: `skald setup --connect stremio --person MEMBER`. Paste an auth key
   privately, or leave it blank for private email and password prompts. `--key-stdin`
@@ -41,7 +43,7 @@ never in arguments or conversation. Scripts add `--yes --secret-stdin`.
   Remove a member's Stremio or MDBList connection with
   `skald setup --disconnect stremio --person MEMBER` or
   `skald setup --disconnect mdblist --person MEMBER`. This removes its key but keeps history.
-  Other sources have no setup disconnect command. Restart the engine after connector changes.
+  Other sources have no setup disconnect command.
 
 ## Set up watching and adopt older households
 
@@ -119,6 +121,7 @@ contents into the conversation beyond titles the person asks about.
 ## Skald decisions and taste API
 
 A bound token sees its own person + together. Use only the person's authorized CLI or API.
+Search command previews require the exact `yes NN` code shown first in the card name. Open a card to read its details. Plain `yes` and prefixes save nothing. Identical mutation requests within 60 seconds return their first result.
 
 ### explain_pick (serving)
 - inp: `{"key":"tmdb:N","kind":["movie","tv"],"person":["ana","ben","together","guest",null]}`
@@ -131,6 +134,12 @@ A bound token sees its own person + together. Use only the person's authorized C
 - out: `{"v":"int","person":["ana","ben"],"maturity":{"state":["too_new","learning","ready","guest"],"explicit":"int","need":"int"},"progress":{"positives":"int","need":"int","negatives_with_reason":"int","need_neg":"int"},"done":"bool","done_reason":["ready","answers",null],"anchors":[{"key":"tmdb:N","kind":["movie","tv"],"title":"str","year":["str",""],"experience":["cozy_case","banter_duo","will_they","slow_romance","period_society","forbidden_love","found_family","mentor_bond","second_chance","tearjerker","grief_healing","heartwarming","coming_of_age","underdog","rivalry_training","epic_quest","magic_wonder","team_spectacle","hero_burden","dynasty_power","frontier_grit","political_intrigue","war_sacrifice","antihero","revenge","heist","whodunit","mind_bender","dread","survival","competence","courtroom","family_secrets","big_ideas","time_twist","dystopia","feel_good","dark_comedy","slice_of_life","true_story","passion_art","sports_glory","nostalgia"]},12]}`
 - CLI: `python3 -m skald decide interview_next --in '{"person":"ana"}'`
 - API: `python3 -m skald decide interview_next --remote --in '{"person":"ana"}'`
+
+### parse_command (LLM)
+- inp: `{"query":"str"}`
+- out: `{"op":["hide","show","exclude_genre","include_genre","focus","unfocus","discovery","years","like","dislike","shelf_add","shelf_stop","shelf_count",null],"kind":["movie","tv","series","languages","countries",null],"values":[["str","int",null],10],"person":["str",null]}`
+- CLI: `python3 -m skald decide parse_command --in '{"query":"Synthetic command 0"}'`
+- API: `python3 -m skald decide parse_command --remote --in '{"query":"Synthetic command 0"}'`
 
 ### rank_titles (serving)
 - inp: `{"choices":[{"key":"tmdb:N","kind":["movie","tv"]},25],"person":["ana","ben","together","guest",null]}`
@@ -146,10 +155,11 @@ A bound token sees its own person + together. Use only the person's authorized C
 
 ### route_query (LLM)
 - inp: `{"query":"str"}`
-- out: `{"choice":["title","discover","request",null],"confidence":["float",null]}`
+- out: `{"choice":["title","discover","request","command",null],"confidence":["float",null]}`
 - CLI: `python3 -m skald decide route_query --in '{"query":"Synthetic text 0"}'`
 - API: `python3 -m skald decide route_query --remote --in '{"query":"Synthetic text 0"}'`
 
+- `/api/v1/command`: POST → events; query []; tail null; example `{"body":{"plan":"preview hash"}}`
 - `/api/v1/connectors`: GET → read; query []; tail null; example `{}`
 - `/api/v1/decide`: GET → read; query []; tail null; example `{}`
 - `/api/v1/decide/*`: POST → decide; query []; tail "custom"; example `{"tail":"route_query","body":{"in":{"query":"synthetic request"},"no_llm":true}}`
@@ -161,7 +171,17 @@ A bound token sees its own person + together. Use only the person's authorized C
 - `/api/v1/routes`: GET → read; query []; tail null; example `{}`
 - `/api/v1/rows`: GET → read; query ["lang","person","row"]; tail null; example `{}`
 - `/api/v1/session`: GET → read, POST → events; query []; tail null; example `{"body":{"who":"both"}}`
+- `/api/v1/shelves`: GET → read, POST → events; query []; tail null; example `{"body":{"plan":"preview hash"}}`
 - `/api/v1/taste`: GET → read; query ["days","person"]; tail null; example `{}`
 - `/api/v1/titles/*`: GET → read; query ["kind","person"]; tail "tmdb:[0-9]{1,9}"; example `{"tail":"tmdb:900001","query":{"kind":"movie"}}`
 
 <!-- skald:decide-api:end -->
+
+## Personal changes
+
+Use `skald command --person MEMBER "CHANGE"` when someone asks to change their settings or taste.
+Preview first. Repeat the same text with `--plan HASH` only after that person says yes. Search confirmation instead requires the exact `yes NN` code printed on the preview card.
+Use `skald command --person MEMBER --undo` when they ask to revert the last change.
+Ordinary one-off searches stay unsaved. An explicit row request previews an always-on shelf. Children can manage their own shelves; other settings need a grown-up.
+
+Search `every sunday morning a classic for us` or `weekday evenings something light for me` for a scheduled shelf in the household timezone (Sunday 05-12 or weekdays 18-24). Use `for MEMBER` for a named person, or `for us`, `for both`, `for both of us`, `for everyone` or `for together` for a Together shelf. `make me a row of heist films` creates an always-on shelf. `stop Classics` or `stop the sunday shelf` previews stopping an existing shelf with that name; unmatched names stay title searches; `undo` restores it. `show 6 shelves` or `fewer shelves` previews a slot count change (0..10). After shelf changes Skald asks AIOStreams to reload row names for logins made by `skald setup aiostreams`; Stremio installed with Skald's own link may need the link reinstalled to show new names. Full shelves ask you to stop one first. `my settings` or `settings` lists personal and Together shelves. A member id or full label also works in `my settings for NAME`, `NAME settings`, `NAME's settings`, `settings NAME` or `settings for NAME`. `help` shows five search examples. `ideas` and `suggest` offer at most two habit suggestions; `yes NN` creates one and `no NN` dismisses it for 90 days. The exact `yes NN` code comes first in each preview or suggestion card name. Open a card to read its details. Command cards appear once, in movie search results; paired series requests return no command cards. Shared links ask for a member. Children can manage their own shelves; fills keep their age filter, and they cannot change Together or other people's shelves.

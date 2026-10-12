@@ -3,6 +3,7 @@ from contextlib import contextmanager, redirect_stdout
 import argparse
 import base64
 import copy
+import fcntl
 import getpass
 import hashlib
 import http.client
@@ -25,14 +26,24 @@ from .intake import write_private
 
 
 @contextmanager
-def server(data):
+def server(data, *, report=None):
     spec = importlib.util.spec_from_file_location('skald_setup_server', Path(__file__).resolve().parents[1]/'server.py')
     s = importlib.util.module_from_spec(spec)
     s._CONFIG_READONLY = True
     with patch.dict(os.environ, {'DATA_DIR': str(data)}), redirect_stdout(io.StringIO()):
         spec.loader.exec_module(s)
     try:
+        from .aio_refresh import refresh
+        changed = False
+        def rows_changed():
+            nonlocal changed
+            changed = True
+        s.aio_rows_changed = rows_changed
         yield s
+        if changed:
+            line = refresh(data)
+            if line:
+                (report or (lambda line: print(line, file=sys.stderr)))(line)
     finally:
         s._decide_queue.put(False)
         s._decide_queue.join()
@@ -296,6 +307,11 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
                         options.get('name') == 'Skald' and any(address.startswith(root + '/') for root in roots)):
                         found = preset
                         break
+                replacing_other = False
+                if found is None and args.uuid:
+                    found = next((preset for preset in presets if preset.get('type') == 'custom'
+                                  and preset.get('options', {}).get('name') == 'Skald'), None)
+                    replacing_other = found is not None
                 changes = []
                 def unused(preferred):
                     used = {p.get('instanceId') for p in presets}
@@ -309,7 +325,7 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
                     changes.append('add Skald')
                 elif found['options']['manifestUrl'] != url:
                     found['options']['manifestUrl'] = url
-                    changes.append('update Skald address')
+                    changes.append('replace other Skald address' if replacing_other else 'update Skald address')
                 manifest = request(aio + '/stremio/' + login['uuid'] + '/' + encrypted + '/manifest.json')
                 details = any(isinstance(r, dict) and r.get('name') == 'meta' and
                               (not r.get('idPrefixes') or 'tmdb:' in r['idPrefixes']) for r in manifest.get('resources', []))
@@ -391,6 +407,9 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
     return result
 
 
+RESTART = 'restart Skald (docker compose restart engine)'
+
+
 def startup_digest(config):
     config = copy.deepcopy(config)
     for traits in config.get('taste', {}).get('people', {}).values():
@@ -405,6 +424,12 @@ def record_startup(data, config):
         print(f'could not record startup marker: {error}; setup --status may ask for a restart', file=sys.stderr)
 
 
+def restart_required(data, config):
+    marker = Path(data)/'.skald-startup'
+    # CONFIG is loaded once; setup.json and credential contents are not cached there.
+    return not marker.exists() or marker.read_text().strip() != startup_digest(config)
+
+
 def status(data):
     saved = state(data)
     path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
@@ -414,6 +439,9 @@ def status(data):
              'household': bool(config) or legacy, 'address': bool(saved.get('base')),
              'watch': bool(saved.get('watch')), 'taste': not saved.get('connector_failed') and (bool(saved.get('taste')) or bool(config and config['connectors']))}
     notes = []
+    if config and 'aiostreams_db' in config['connectors']:
+        skipped = len(config['connectors']['aiostreams_db']['options'].get('archived', {}))
+        notes.append('AIOStreams: ' + str(skipped) + ' profiles skipped')
     if legacy:
         config, _ = members.load_config(str(data), readonly=True)
         if os.environ.get('TMDB_API') and not saved.get('tmdb_checked'):
@@ -444,11 +472,11 @@ def status(data):
     logins = aiostreams_logins(data)
     if saved.get('watch') in ('aiostreams', 'jellyfin-app') and not logins and all(steps.get(k, False) for k in ('checks', 'household', 'address', 'watch')):
         next_command = 'skald setup aiostreams'
-    if config and not legacy and next_command == 'nothing left':
-        marker = data/'.skald-startup'
-        # CONFIG is loaded once; setup.json and credential contents are not cached there.
-        if not marker.exists() or marker.read_text().strip() != startup_digest(config):
-            next_command = 'restart Skald (docker compose restart engine)'
+    if config and not legacy and restart_required(data, config):
+        if next_command == 'nothing left':
+            next_command = RESTART
+        else:
+            notes.append(RESTART)
     from .migrate import check
     return {'release': members.VERSION, 'data_format': check(data)['format'], 'done': [k for k, done in steps.items() if done], 'missing': missing,
             'next': next_command, 'ok': not missing,
@@ -505,15 +533,26 @@ def _configure_connector(s, args, ask, lines, show, stage, published):
     if cid == 'aiostreams_db':
         lines.append('Mount the AIOStreams SQLite database read-only into the engine, including its WAL files.')
         opts = {'path': ask(args.source_path, 'AIOStreams database path inside the engine', old_options.get('path'), '--source-path')}
-        if old_options.get('archived'):
-            opts['archived'] = old_options['archived']
+        archived = dict(old_options.get('archived', {}))
+        opts['profiles'] = dict(old_options.get('profiles', {}))
         users = connectors.source_users(s, cid, opts)
-        mapping = {**old_options.get('profiles', {}), **parse_mapping(args.map, cfg)}
+        mapping = {p.lower(): who for p, who in parse_mapping(args.map, cfg, cid).items()}
         for uid in users:
-            if uid not in mapping:
+            if uid not in mapping and uid not in opts['profiles'] and uid not in archived:
                 default = next((v['member'] for v in aiostreams_logins(s.DATA).values() if v['uuid'].startswith(uid) or uid.startswith(v['uuid'][:8])), None)
-                mapping[uid] = ask(None, 'Member for profile ' + uid + ' (or together)', 'together' if default == 'household' else default, '--map')
-        opts['profiles'] = {p: 'household' if who == 'together' else who for p, who in mapping.items()}
+                who = ask(None, 'Member for profile ' + uid + ' (or together or skip)', 'together' if default == 'household' else default, '--map')
+                mapping.update(parse_mapping([uid + '=' + who], cfg, cid))
+        for p, who in mapping.items():
+            if who == 'skip':
+                opts['profiles'].pop(p, None)
+                archived[p] = 'household'
+            else:
+                archived.pop(p, None)
+                opts['profiles'][p] = 'household' if who == 'together' else who
+        if not opts['profiles']:
+            raise ValueError('map at least one profile to a member or together; not all profiles can be skipped')
+        if archived:
+            opts['archived'] = archived
         c = {'kind': 'player', 'enabled': True, 'auth': None, 'options': opts}
     else:
         instructions = {'stremio': 'Paste your Stremio auth key privately, or leave it blank to sign in with email and password.',
@@ -574,7 +613,7 @@ def _configure_connector(s, args, ask, lines, show, stage, published):
             if 'section' in old_options:
                 opts['section'] = old_options['section']
             users = connectors.source_users(s, cid, opts, auth)
-            mapping = parse_mapping(args.map, cfg)
+            mapping = parse_mapping(args.map, cfg, cid)
             if cid == 'jellyfin':
                 prior_users = old_options.get('users', {old_options.get('user_id'): old_options.get('profile', 'household')})
                 mapping = {**{uid: person for uid, person in prior_users.items() if uid in users}, **mapping}
@@ -601,16 +640,24 @@ def _configure_connector(s, args, ask, lines, show, stage, published):
     result = connectors.test(s, cid)
     lines.extend(connectors.text(result))
     if result['ok']:
+        history = None
+        if cid == 'aiostreams_db' and old_options and any(old_options.get(k) != opts[k] for k in ('path', 'profiles')):
+            history = s._aiostreams_db(opts)
         s.CONFIG = publish(Path(s.DATA), cfg, replace=True, on_publish=published)
+        if history is not None:
+            # Changed history inputs invalidate the hashes checked by refresh_profiles().
+            s._connector_write('history', history)
     return result
 
 
-def parse_mapping(values, cfg):
+def parse_mapping(values, cfg, cid=None):
     result = {}
     for value in values:
         uid, sep, person = value.rpartition('=')
-        if not sep or not uid or person not in (*cfg['household']['members'], 'together'):
-            raise ValueError('use --map SOURCE_ID=MEMBER, or SOURCE_ID=together')
+        if cid == 'aiostreams_db' and person == 'skip' and 'skip' in cfg['household']['members']:
+            raise ValueError('cannot use skip with a household member named skip; rename that member first')
+        if not sep or not uid or person not in (*cfg['household']['members'], 'together') and not (cid == 'aiostreams_db' and person == 'skip'):
+            raise ValueError('use --map SOURCE_ID=MEMBER, or SOURCE_ID=together, or SOURCE_ID=skip for aiostreams-db')
         result[uid] = person
     return result
 
@@ -620,6 +667,8 @@ def prefs_line(cfg, person):
     years = '-'.join(str(y) if y is not None else '' for y in prefs.get('years', [None, None]))
     excluded = prefs.get('excluded_genres', {})
     extra = ['hide ' + ', '.join(prefs['hide'])] if prefs.get('hide') else []
+    if 'kids_age' in prefs:
+        extra.append('child, age ' + str(prefs['kids_age']))
     focus = prefs.get('focus', {})
     for label, values in [('movie genres', focus.get('genres', {}).get('movie', [])),
                           ('series genres', focus.get('genres', {}).get('series', [])),
@@ -681,6 +730,24 @@ def run(args):
                           'Rollback: remove ' + str(config_path) + ' and DATA/.skald-household; legacy.json still holds the old config.']}
     if (data/'legacy.json').exists() and not config_path.exists():
         raise ValueError('this existing household is read-only in setup; run skald setup adopt to make it editable')
+    if args.setup_action == 'rows':
+        if not config_path.exists():
+            raise ValueError('set up a household before choosing rows')
+        check_data(data)
+        from . import commands, shelves
+        with server(data) as s:
+            with commands._LOCK, shelves.LOCK, os.fdopen(os.open(data/'shelves.lock', os.O_RDWR | os.O_CREAT, 0o600), 'a') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                cfg = commands.config(s)
+                before = cfg['household'].get('rows')
+                if args.row_keys == 'all':
+                    cfg['household'].pop('rows', None)
+                else:
+                    cfg['household']['rows'] = [k.strip() for k in (args.row_keys or '').split(',')]
+                cfg = publish(data, cfg, replace=True)
+            if before != cfg['household'].get('rows'):
+                s.aio_rows_changed()
+        return {'ok': True, 'lines': ['Rows: ' + (', '.join(cfg['household']['rows']) if 'rows' in cfg['household'] else 'all default rows') + '.']}
     if args.setup_action == 'prefs':
         if not config_path.exists():
             raise ValueError('set up a household before changing preferences')
@@ -688,7 +755,7 @@ def run(args):
         if args.person not in cfg['household']['members']:
             raise ValueError('choose a household member with --person')
         values = (args.discovery, args.years, args.exclude_movie_genres, args.exclude_series_genres,
-                  args.hide, args.show, args.focus_movie_genres, args.focus_series_genres, args.focus_languages, args.focus_countries)
+                  args.kids_age, args.hide, args.show, args.focus_movie_genres, args.focus_series_genres, args.focus_languages, args.focus_countries)
         if args.clear and any(v is not None for v in values):
             raise ValueError('use --clear without preference flags')
         if not args.clear and all(v is None for v in values):
@@ -698,6 +765,13 @@ def run(args):
             traits.pop('prefs', None)
         else:
             prefs = traits.setdefault('prefs', {})
+            if args.kids_age is not None:
+                if args.kids_age == 'off':
+                    prefs.pop('kids_age', None)
+                elif args.kids_age.isdigit() and 3 <= int(args.kids_age) <= 17:
+                    prefs['kids_age'] = int(args.kids_age)
+                else:
+                    raise ValueError('--kids-age needs an age from 3 to 17, or off')
             for action, raw in (('hide', args.hide), ('show', args.show)):
                 if raw is not None:
                     words = [v.strip() for v in raw.split(',')]
@@ -722,8 +796,11 @@ def run(args):
                 if raw is not None:
                     prefs.setdefault('excluded_genres', {})[kind] = [g.strip() for g in raw.split(',')] if raw.strip() else []
         check_data(data)
-        cfg = publish(data, cfg, replace=True)
-        return {'ok': True, 'lines': [prefs_line(cfg, args.person)]}
+        from . import commands
+        lines = [prefs_line(cfg, args.person)]
+        with server(data, report=lines.append) as s:
+            commands.apply(s, {'people': [args.person], 'name': 'Setup prefs for '+args.person}, cfg=cfg)
+        return {'ok': True, 'lines': lines}
     check_data(data)
     from .migrate import ensure
     ensure(data)
@@ -775,6 +852,18 @@ def run(args):
     tz = args.timezone if existing else ask(args.timezone, 'Timezone', 'UTC', '--timezone')
     country = args.country if existing else ask(args.country, 'Country', 'United States', '--country')
     cfg = household(data, names, lang, tz, country, existing=existing) if not existing or names is not None or any((lang, tz, country)) else members.validate_config(json.loads(path.read_text()), data=str(data))
+    if not args.yes and not args.json and not saved.get('children_asked'):
+        if ask(None, 'Any children watching?', 'no', '').lower() in ('y', 'yes'):
+            person = ask(None, 'Which member is the child?', None, '--person')
+            if person not in cfg['household']['members']:
+                raise ValueError('choose a household member')
+            age = ask(None, 'Child age (3..17)', None, '--kids-age')
+            if not age.isdigit() or not 3 <= int(age) <= 17:
+                raise ValueError('child age must be from 3 to 17')
+            cfg['taste'].setdefault('people', {}).setdefault(person, {}).setdefault('prefs', {})['kids_age'] = int(age)
+            cfg = publish(data, cfg, replace=True)
+        saved['children_asked'] = True
+        write_private(data/'setup.json', json.dumps(saved) + '\n')
     lines.append('Household: ' + ', '.join(cfg['household']['members']) + '; ' + cfg['region']['lang'] + '; ' + cfg['region']['tz'] + '; ' + cfg['region']['country'] + '.')
     internal_base = args.internal_base or saved.get('internal_base') or os.environ.get('SKALD_INTERNAL_BASE')
     if internal_base:
@@ -821,6 +910,8 @@ def run(args):
                 saved['connector_failed'] = True
             else:
                 saved.pop('connector_failed', None)
+                if (data/'.skald-startup').exists() and restart_required(data, s.CONFIG):
+                    lines.append(RESTART + ' now so it starts reading.')
     write_private(data/'setup.json', json.dumps(saved) + '\n')
     result = status(data)
     with tempfile.TemporaryDirectory(prefix='skald-setup-doctor-') as temp:
@@ -839,7 +930,8 @@ def run(args):
 
 def add_parser(commands):
     p = commands.add_parser('setup', help='set up a household on the machine holding DATA')
-    p.add_argument('setup_action', nargs='?', choices=['link', 'aiostreams', 'adopt', 'prefs'], help='link a laptop, make an AIOStreams login, adopt a legacy household or set member preferences')
+    p.add_argument('setup_action', nargs='?', choices=['link', 'aiostreams', 'adopt', 'prefs', 'rows'], help='link a laptop, make an AIOStreams login, adopt a legacy household, set member preferences or choose home rows')
+    p.add_argument('row_keys', nargs='?', help='with rows: comma-separated keys (' + ', '.join(members.ROW_KEYS) + '), or all for default rows')
     helps = {
         'aio-url': 'address where Skald reaches AIOStreams',
         'uuid': 'existing AIOStreams login UUID',
@@ -867,7 +959,7 @@ def add_parser(commands):
         'auth-env': 'environment variable holding the source token or API key',
         'client-id-env': 'environment variable holding the Trakt client id',
         'scopes': 'comma-separated laptop permissions (default: read,decide,events)',
-        'map': 'map a source account to a member: SOURCE_ID=MEMBER or SOURCE_ID=together (repeatable)',
+        'map': 'map a source account: SOURCE_ID=MEMBER, SOURCE_ID=together or SOURCE_ID=skip for aiostreams-db (repeatable)',
     }
     for name in ('yes', 'json', 'status', 'check', 'secret-stdin', 'password-stdin'):
         p.add_argument('--' + name, action='store_true', default=False if name != 'json' else argparse.SUPPRESS, help=helps[name])
@@ -876,6 +968,7 @@ def add_parser(commands):
         p.add_argument('--' + name, help=helps[name])
     p.add_argument('--key-stdin', dest='secret_stdin', action='store_true', help='read the source key from stdin (same as --secret-stdin)')
     p.add_argument('--discovery', choices=['balanced', 'mainstream', 'gems'], help='member discovery style (default: balanced)')
+    p.add_argument('--kids-age', help='limit child rows and search by age 3..17; off clears the limit')
     p.add_argument('--years', help='release years: FROM-TO, FROM- or -TO; use --years=-2000 for an upper bound')
     p.add_argument('--exclude-movie-genres', help='comma-separated TMDB movie genre names; empty clears exclusions')
     p.add_argument('--exclude-series-genres', help='comma-separated TMDB series genre names; empty clears exclusions')

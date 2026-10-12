@@ -19,6 +19,7 @@ or `~/.local/share/skald`. Change that with `--state-dir PATH`.
 | `explain` | Show scoring details: `skald --snapshot /path/copy explain tmdb:123` |
 | `rows` | Preview rows: `skald --snapshot /path/copy rows --n 10` |
 | `learn` | Inspect viewing signals: `skald --snapshot /path/copy learn` |
+| `suggest` | Read your weekly habits: `skald suggest --person alex`. Use `--dismiss ID` to hide a theme for 90 days in private DATA_DIR. Listing writes nothing; a read-only copy also works with `--snapshot`. |
 | `memory` | Inspect saved preferences: `skald --snapshot /path/copy memory` |
 | `metrics` | Show recent activity: `skald --snapshot /path/copy metrics --days 7` |
 
@@ -56,8 +57,9 @@ The older `--live` route uses SSH and has no default host; set `SKALD_SSH_HOST` 
 | `setup --status` | Show done, missing and one next command: `skald setup --status --json` |
 | `setup aiostreams` | Make a login with Skald and title details, or update one: `skald setup aiostreams --uuid <your uuid>` |
 | `setup link` | Issue a private laptop token: `skald setup link --name laptop --person alex` |
-| `setup prefs` | Set member rows: `skald setup prefs --person alex --discovery gems --years 1990- --exclude-movie-genres horror --exclude-series-genres reality,talk --hide documentaries,anime --focus-movie-genres horror,drama --focus-series-genres drama --focus-languages es --focus-countries ES`; `--hide` adds movies, series, documentaries, animation or anime; `--show anime` removes a hide; focus ranks without filtering; empty focus lists clear that group. Reset with `skald setup prefs --person alex --clear`. Omitted flags keep other settings; `setup --status` shows each member. |
+| `setup prefs` | Set member rows: `skald setup prefs --person alex --discovery gems --years 1990- --exclude-movie-genres horror --exclude-series-genres reality,talk --hide documentaries,anime --focus-movie-genres horror,drama --focus-series-genres drama --focus-languages es --focus-countries ES`; `--hide` adds movies, series, documentaries, animation or anime; `--show anime` removes a hide; focus ranks without filtering; empty focus lists clear that group. `--kids-age 8` (3..17) limits all Skald rows and search for that child; `--kids-age off` clears it. Other addons and streams are not filtered; use the app's profile lock too. TMDB ratings can be missing (titles are hidden) or wrong. Reset with `skald setup prefs --person alex --clear`. Omitted flags keep other settings; `setup --status` shows each member. |
 | `setup adopt` | Make a legacy household editable without changing its config: `skald setup adopt --yes` |
+| `setup rows KEY,KEY,...` | Choose home rows in Skald's usual order: `skald setup rows episodes,foryou,top10,digital,toprated`. The two movie lists are opt-in; search stays available. `skald setup rows all` restores default rows. See [setup](SETUP.md) for valid keys. Changes refresh AIOStreams rows. |
 | `connectors test` | Probe a source without saving history: `skald connectors test jellyfin --json` |
 | `connectors` | Inspect saved source health: `skald --snapshot /path/copy connectors` |
 | `trakt login` | Authorize a configured Trakt app: `skald trakt login --person alex` |
@@ -96,7 +98,7 @@ See [connector credentials and limits](CONNECTORS.md).
 | `--auth-env` | Environment variable holding the source token or API key |
 | `--client-id-env` | Environment variable holding the Trakt client id |
 | `--scopes` | Comma-separated laptop permissions; default: read,decide,events |
-| `--map` | Map `SOURCE_ID=MEMBER` or `SOURCE_ID=together`; repeat for each account |
+| `--map` | Map `SOURCE_ID=MEMBER` or `SOURCE_ID=together`; repeat for each account; `SOURCE_ID=skip` ignores another household's AIOStreams profile |
 
 Other command flags use `--person` to select a member, `--base` for the watching
 address, and `--token-stdin` to read a laptop token privately. `addon-url --rotate-addon-token` replaces all addon links; reinstall them in your apps.
@@ -133,3 +135,18 @@ Use the private prompt or `--secret-stdin`. Run `skald connectors test mdblist` 
 Restart the engine after setup; it syncs watched history and watchlists automatically.
 Use the Plex webhook from MDBList Preferences or MDBList plugins for Emby/Jellyfin to record plays.
 See [connectors](CONNECTORS.md#mdblist) for limits and disconnect instructions.
+
+### Personal commands
+
+Search `every sunday morning a classic for us` or `weekday evenings something light for me` for a scheduled shelf in the household timezone (Sunday 05-12 or weekdays 18-24). Use `for MEMBER` for a named person, or `for us`, `for both`, `for both of us`, `for everyone` or `for together` for a Together shelf. `make me a row of heist films` creates an always-on shelf. `stop Classics` or `stop the sunday shelf` previews stopping an existing shelf with that name; unmatched names stay title searches; `undo` restores it. `show 6 shelves` or `fewer shelves` previews a slot count change (0..10). After shelf changes Skald asks AIOStreams to reload row names for logins made by `skald setup aiostreams`; Stremio installed with Skald's own link may need the link reinstalled to show new names. Full shelves ask you to stop one first. `my settings` or `settings` lists personal and Together shelves. A member id or full label also works in `my settings for NAME`, `NAME settings`, `NAME's settings`, `settings NAME` or `settings for NAME`. `help` shows five search examples. `ideas` and `suggest` offer at most two habit suggestions; `yes NN` creates one and `no NN` dismisses it for 90 days. The exact `yes NN` code comes first in each preview or suggestion card name. Open a card to read its details. Command cards appear once, in movie search results; paired series requests return no command cards. Shared links ask for a member. Children can manage their own shelves; fills keep their age filter, and they cannot change Together or other people's shelves.
+
+`skald command --person ana "hide anime"` previews a change and prints its plan hash. Repeat the same text with `--yes` or `--plan HASH` to apply it. Use `skald command --person ana --undo` to revert the last command.
+Title reactions, genre exclusions, focus, discovery and years use the same writer as search. In search, type the exact “yes NN” code from the preview; plain “yes” changes nothing. Identical mutation requests within 60 seconds repeat their first result.
+The API previews with `POST /api/v1/decide/parse_command`, body `{"in":{"query":"hide anime"},"person":"ana"}`. Apply within ten minutes with `POST /api/v1/command`, body `{"plan":"HASH"}`, or undo with `{"undo":true}`.
+Bound tokens can change only their own person. Guest and child tokens cannot change settings.
+
+## Shelves
+
+`skald shelf add --person ana --when "sun 05-12" --name "Sunday Classics" "a classic film"` previews a wish and prints its plan hash. Repeat with `--yes` or `--plan HASH` to apply. Use `--together` instead of `--person` for shared slots.
+`skald shelf list [--person ana]` lists wishes. `skald shelf stop --person ana NAME` stops one; a slot number also works. `skald shelf replace --person ana --slot 1 --yes "another wish"` replaces it.
+`skald shelf count --person ana 6` or `skald shelf count --together 3` changes the number of slots. These commands use local DATA_DIR. GET `/api/v1/shelves` lists a bound member's own wishes plus Together; POST accepts `{ "plan": "HASH" }` from a local preview. Child and guest tokens cannot use this API.

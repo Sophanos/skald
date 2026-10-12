@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_FILES = (".skald-format", "skald.json", "legacy.json", "profile.json", "emb.json", "facets.json", "learn.json", "taste.json", "trakt.json",
-              "feeds.json", "shown.json", "history.json", "feedback.jsonl", "imports.jsonl", "online.json", "memory.json", "interview.json", "taste_ring.json", "connectors.json")
+              "feeds.json", "shown.json", "history.json", "feedback.jsonl", "imports.jsonl", "online.json", "memory.json", "interview.json", "taste_ring.json", "connectors.json", "shelves.json", "undo.jsonl")
 
 
 def data_files(config):
@@ -612,3 +612,49 @@ class Engine:
         stats["tired_titles"] = [{"key": k, "title": title} for k, title in sorted(s.tired_keys().items())]
         stats["credited"] = {k: time.strftime("%Y-%m-%d", time.gmtime(at)) for k, at in s._learn["credited"].items()}
         return plain(stats)
+
+
+def suggestions(data, person, config, dismiss=None):
+    """Read local cached inputs; only an explicit dismissal writes a private file."""
+    from .intake import write_private
+    from .suggest import DAY, suggest
+    import hashlib
+    data = Path(data)
+    def read(name, default):
+        path = data / name
+        return json.loads(path.read_text()) if path.exists() else default
+    children = {p for p, prefs in config["taste"].get("people", {}).items() if prefs.get("prefs", {}).get("kids_age") is not None}
+    searches = [json.loads(line) for line in (data / "searches.jsonl").read_text().splitlines() if line.strip()] if (data / "searches.jsonl").exists() else []
+    cache = read("facets.json", {}).get("items", {})
+    sources = [("history.json", None)] + [(source + "-" + person + ".history.json", person)
+        for source, cid in (("trakt", "trakt_api"), ("mdblist", "mdblist"), ("stremio", "stremio"))
+        if person in config["connectors"].get(cid, {}).get("accounts", {})]
+    plays = []
+    for filename, owner in sources:
+        for item in read(filename, {}).get("items", []):
+            if (owner or item.get("person") or item.get("profile")) != person or not item.get("at"):
+                continue
+            if not (item.get("played") or (item.get("progress") or 0) >= .25 or (item.get("episodes_played") or 0) >= 1):
+                continue
+            key = item.get("id")
+            kind = "movie" if item.get("type") == "movie" else "tv" if item.get("type") == "series" else None
+            facts = cache.get(key, {})
+            plays.append({"key": key, "person": person, "t": item["at"] / 1000, "kind": kind,
+                          "genres": item.get("genres") or facts.get("g") or [],
+                          "origin_country": item.get("origin_country") or facts.get("oc") or []})
+    plays = list({(r["person"], r["t"], r.get("key")): r for r in plays}.values())
+    now = time.time()
+    dismissed = read("suggest-dismissed.json", [])
+    rows = [] if person in children else suggest([r for r in searches if r.get("p") == person], plays,
+        config["region"]["tz"], read("wishes.json", []) + read("shelves.json", {}).get("wishes", []), dismissed, now)
+    for r in rows:
+        r["id"] = hashlib.sha256(json.dumps([person, r["text"]], ensure_ascii=False).encode()).hexdigest()[:8]
+    if dismiss:
+        hit = next((r for r in rows if r["id"] == dismiss), None)
+        if hit is None:
+            raise ValueError("unknown suggestion id for this person")
+        dismissed = [r for r in dismissed if r.get("t", 0) >= now - 90 * DAY]
+        dismissed.append({"person": person, "text": hit["text"], "t": now})
+        write_private(data / "suggest-dismissed.json", json.dumps(dismissed, ensure_ascii=False) + "\n")
+        rows = [r for r in rows if r is not hit]
+    return {"person": person, "suggestions": rows}

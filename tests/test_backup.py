@@ -231,7 +231,8 @@ class BackupTests(ServerCase):
         import re
         names = {n for n in re.findall(r'os\.path\.join\(\s*\w+\s*,\s*"([^"/]+)"\s*\)',
                                       (ROOT / 'server.py').read_text()) if not n.endswith('.tmp')}
-        self.assertEqual(names | {'skald.json', '.skald-format'}, set(self.s.BACKUP_FILES) | set(self.s.BACKUP_SKIP))
+        names.update(re.findall(r"Path\(s.DATA\) / '([^'/]+)'", (ROOT / 'skald/shelves.py').read_text()))
+        self.assertEqual(names | {'skald.json', '.skald-format', 'commands.json'}, set(self.s.BACKUP_FILES) | set(self.s.BACKUP_SKIP))
         self.assertFalse(set(self.s.BACKUP_FILES) & set(self.s.BACKUP_SKIP))
         self.assertTrue(all(self.s.BACKUP_SKIP.values()))
         self.assertTrue({'addon.json', 'remote.json', 'clients.json', 'hydra.json'} <= set(self.s.BACKUP_SKIP))

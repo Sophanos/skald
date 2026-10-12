@@ -4,6 +4,24 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.3.0
+
+Each member can set a kids age with `skald setup prefs --kids-age N|off`; their rows, search and details then show only titles certified for that age, and unknown or adult titles stay hidden.
+Households with a child get a Family row picked for the youngest child's age; Together rows learn from adult plays only.
+Shelves are standing rows with optional weekday and time windows: up to 10 per person and for Together (4 and 2 by default), managed with `skald shelf` or from search.
+Search can change settings in plain words; each change shows a preview card and applies only after its exact "yes NN" code, with undo and a help card.
+`skald suggest` and search cards offer shelves based on repeated searches and attributed plays.
+Command cards in Odin lead with their code and a readable name and open to a details page.
+After a shelf or row change Skald asks AIOStreams to reload rows at once for logins made by `skald setup aiostreams`.
+`skald setup rows KEY,...` chooses which Home rows show, in Skald's usual order; two opt-in movie rows, Latest Digital Releases and Top Rated Movies, are new, and `skald setup rows all` restores the defaults.
+In a shared AIOStreams database, `--map PROFILE=skip` ignores another household's profile.
+`skald import trakt` reads the Trakt export zip directly, and Trakt favorites count as loved.
+`skald setup --connect` now says when Skald needs a restart to start reading, and status shows a pending restart even while other steps remain.
+`skald setup aiostreams --uuid` replaces a custom Skald preset that points at another engine instead of adding a second one.
+
+**Data changes:** no format bump or migration (DATA format stays 1); adds optional `kids_age` and `shelves` member preferences and `household.shelves` and `household.rows` in `skald.json`, new private `shelves.json` and `commands.json`, and a person field in `searches.jsonl`.
+Version 1.2.0 ignores the household keys but rejects `kids_age` or `shelves` member preferences; clear them with `skald setup prefs --person NAME --clear` before rolling back. Child links are not age-filtered on 1.2.0.
+
 ## 1.2.0
 
 Each member can hide movies, series, documentaries, animation or anime with `skald setup prefs --hide`, `--show` and `--clear`.

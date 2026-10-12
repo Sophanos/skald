@@ -176,7 +176,7 @@ def smoke(count, setup=None, keyless=False):
                 listed = {(r['id'], r['type']) for r in manifest['catalogs']}
                 for cid, typ in catalogs:
                     minimum = 1 if cid == rid('episodes', s.CONFIG) else s.ROW_MIN
-                    if s.feed(cid, s.LANG) and cid != rid('top10', s.CONFIG) and len(rows[cid + ':' + typ]) < minimum:
+                    if cid not in s.SHELF_ROWS and s.feed(cid, s.LANG) and cid != rid('top10', s.CONFIG) and len(rows[cid + ':' + typ]) < minimum:
                         assert (cid, typ) not in listed, 'listed sparse built row'
                 if keyless:
                     assert 'OPENROUTER_API_KEY' not in os.environ and not s.OR_KEY, 'fixture LLM key'

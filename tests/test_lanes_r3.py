@@ -64,6 +64,8 @@ class LanesR3(unittest.TestCase):
     def test_build_excludes_every_built_front_and_all_moods(self):
         s, front, deep = self.s, [], []
         for i, cid in enumerate(s.DEDUPE_ORDER[:s.DEDUPE_ORDER.index(s.LANES[0])]):
+            if not s.row_enabled(cid):
+                continue
             xs = cards(14, 1000+i*100)
             rows = {'movie': xs, 'series': []} if cid == rid('top10', s.CONFIG) else {'series': xs} if cid == rid('episodes', s.CONFIG) else {'tv': xs}
             s._feeds[cid, 'de-DE'] = {'metas': rows}

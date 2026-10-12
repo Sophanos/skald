@@ -66,6 +66,7 @@ class ScopedAddon(unittest.TestCase):
 
     def test_manifest_only_identity_fields_differ_and_pin_cache_is_shared(self):
         s = self.s
+        self.stack.enter_context(patch.object(s, 'shelf_rows', return_value=[]))
         code, headers, raw = request(s, 'manifest.json')
         self.assertEqual(code, 200)
         self.assertEqual(headers['Cache-Control'], 'public, max-age=3600')

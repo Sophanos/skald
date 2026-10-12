@@ -62,11 +62,13 @@ class IntakeS3Tests(unittest.TestCase):
                 stats = {}
                 c, = parse('trakt', self.root, stats=stats)
                 self.assertEqual((c.title, c.signal), ('Synthetic', 'seen'))
-                self.assertEqual(stats, {'skipped_trakt': 7})
+                self.assertEqual(stats, {'skipped_trakt': 3, 'trakt_watched_movies': 1,
+                                         'trakt_watched_series': 0, 'trakt_watchlist': 0,
+                                         'trakt_ratings': 0, 'trakt_favorites': 0, 'trakt_hidden': 0})
         (self.root / 'watched.json').unlink()
-        for path in (self.root, self.root / 'lists-lists.json'):
-            with self.subTest(unsupported_only=str(path)), self.assertRaises(ValueError):
-                parse('trakt', path)
+        self.assertEqual(parse('trakt', self.root), [])
+        with self.assertRaises(ValueError):
+            parse('trakt', self.root / 'lists-lists.json')
 
     def test_letterboxd_current_rating_newest_diary_and_likes(self):
         cases = [(1.5, 4.5, False, 'love', '2026-10-11'),

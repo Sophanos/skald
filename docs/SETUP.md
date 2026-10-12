@@ -1,5 +1,8 @@
 # Set up Skald
 
+Skald may suggest a shelf when it sees a weekly habit; it never creates one by itself.
+Use `skald suggest --person alex` to review your own habits. Children get no suggestions.
+
 We recommend the [setup we run](WATCH.md): Odin on Apple TV connects to AIOStreams
 in Jellyfin mode. AIOStreams reaches Skald inside Docker. Only AIOStreams needs HTTPS.
 First run `mkdir -p data && sudo chown 65534 data && sudo chmod 700 data`.
@@ -9,6 +12,8 @@ keys in `.env`. Make `SECRET_KEY` with `openssl rand -hex 32` and set `BASE_URL`
 AIOStreams' public HTTPS address in `.env.aiostreams`. Keep both files private.
 AIOStreams stores its database in its own named volume at `/app/data`.
 Its database setting is `DATABASE_URI=sqlite://./data/db.sqlite`.
+When connecting with `skald setup --connect aiostreams-db`, use `--map PREFIX=skip` or answer `skip` at the profile prompt to ignore another household's profile; at least one profile must map to a member or `together`.
+Events already recorded stay when a profile is skipped, just as when it moves between members.
 AIOStreams is a separate project with its own [docs and licence](https://github.com/Viren070/AIOStreams).
 We reference its published image.
 
@@ -73,6 +78,8 @@ The optional `row_prefix` in household config sets catalog ids, for example
 digits, starting with a letter. Existing households keep their prefix in
 `DATA/legacy.json`; stored row ids are not rewritten.
 
+Choose home rows with `skald setup rows episodes,foryou,top10,digital,toprated`. This saves `household.rows`; Skald keeps its usual row order and search still works. Valid keys are episodes, foryou, week, upcoming, catchup, rewatch, because, leap, top10, people (For NAME), moods, lanes, docs, studios, anime, shelves, digital and toprated. The opt-in Latest Digital Releases lists movies released digitally in your country in the last 60 days, most popular first; Top Rated Movies uses TMDB ratings and at least 200 votes. Both respect age and hide settings. Run `skald setup rows all` to restore the default rows, without these two opt-in lists. Changes ask AIOStreams to refresh its rows.
+
 Each member can set discovery, years, unwanted genres, hidden categories and focus:
 
 ```sh
@@ -98,13 +105,28 @@ clear their lists. Each matching group adds one point, with ties keeping the
 discovery order. Older cached titles without countries get no country point
 until the worker fills them; it retries failures and fetches at most 200 per pass.
 
+Interactive setup asks once whether any children watch, then asks for the member and age.
+Couples without children never see family rows or kids titles in Together rows.
+Family Picks uses the youngest child's age and adult taste, with every member's hides.
+
+Set a child with `skald setup prefs --person mia --kids-age 8` (ages 3..17).
+Use `--kids-age off` to clear it. This limits every Skald row, including New Episodes,
+and search on the child's member link, or when the child is chosen in Who's watching.
+Household-country ratings take priority, with US ratings as a fallback. Use a two-letter
+country code in setup outside United States, United Kingdom, Germany, France, Spain,
+Italy, Netherlands, Australia and Canada.
+Missing ratings hide the title; TMDB ratings can also be wrong. Skald limits only its own
+rows and search. Other addons and streams in the app are not filtered, so also use the
+app's own profile lock.
+Give the child their own link in their own app profile; the shared-link Who's watching picker is best effort because apps may cache rows; after setting an age, clear the app cache or reinstall the addon.
+
 Settings live in `skald.json` under `taste.people.<name>.prefs`, with optional
-`discovery`, `years: [from, to]` (null means open), and
+`kids_age: 8`, `discovery`, `years: [from, to]` (null means open), and
 `excluded_genres: {"movie": [...], "series": [...]}`, `hide: ["documentaries", "anime"]`, and
 `focus: {"genres": {"movie": [...], "series": [...]}, "languages": [...], "countries": [...]}`. Absent settings keep the usual
 rows. Changes apply on the next row request without a restart; watching apps may
 cache rows briefly. Started titles in New Episodes skip hides, genre exclusions and years.
-Together respects genre and category hides from any member, except movies/series, and keeps its years and order. Search stays unchanged. `--clear` removes
+Together respects genre and category hides from any member, except movies/series, and keeps its years and order. Other preferences leave search unchanged. `--clear` removes
 all settings for that person; status shows each member on one line.
 
 Older households in `DATA/legacy.json` are read-only in setup until you run
@@ -248,3 +270,20 @@ Allow time for the first rows to build. Title search works while rows are buildi
 Print links again with `skald addon-url --base YOUR_ADDRESS`.
 Rotate a leaked addon link with `skald addon-url --rotate-addon-token --base YOUR_ADDRESS`.
 That replaces every installed link. Reinstall them in your apps.
+
+### Change settings from search
+
+Search `every sunday morning a classic for us` or `weekday evenings something light for me` for a scheduled shelf in the household timezone (Sunday 05-12 or weekdays 18-24). Use `for MEMBER` for a named person, or `for us`, `for both`, `for both of us`, `for everyone` or `for together` for a Together shelf. `make me a row of heist films` creates an always-on shelf. `stop Classics` or `stop the sunday shelf` previews stopping an existing shelf with that name; unmatched names stay title searches; `undo` restores it. `show 6 shelves` or `fewer shelves` previews a slot count change (0..10). After shelf changes Skald asks AIOStreams to reload row names for logins made by `skald setup aiostreams`; Stremio installed with Skald's own link may need the link reinstalled to show new names. Full shelves ask you to stop one first. `my settings` or `settings` lists personal and Together shelves. A member id or full label also works in `my settings for NAME`, `NAME settings`, `NAME's settings`, `settings NAME` or `settings for NAME`. `help` shows five search examples. `ideas` and `suggest` offer at most two habit suggestions; `yes NN` creates one and `no NN` dismisses it for 90 days. The exact `yes NN` code comes first in each preview or suggestion card name. Open a card to read its details. Command cards appear once, in movie search results; paired series requests return no command cards. Shared links ask for a member. Children can manage their own shelves; fills keep their age filter, and they cannot change Together or other people's shelves.
+
+Search “hide anime”, “no more horror” or “I loved Dark” to preview one change. Type the exact “yes NN” code shown in the preview to apply it within ten minutes. Plain “yes” and partial codes change nothing. A new command replaces the preview.
+AIOStreams keeps search answers for 5 minutes by default (CATALOG_CACHE_TTL), so retyping the same text can show the earlier card; change the wording to refresh.
+Search “undo” (also “rückgängig”) to revert. Skald keeps the last 20 commands per person.
+Member links always apply to that member. Shared and Together links use the named person, then Who's watching; add a name if neither identifies a member. “Everyone” means every adult for settings, and Together for shelves.
+Children can manage their own shelves; other settings still need a grown-up. “Help” lists examples; “my settings” shows settings and recent commands.
+
+## Shelves
+
+Each person has `prefs.shelves` slots (default 4); `household.shelves` sets Together slots (default 2). Both accept 0..10. Use `skald shelf count --person ana 6` or `skald shelf count --together 3`. Shelf contents and search answers can still take up to 5 minutes (AIOStreams `CATALOG_CACHE_TTL`).
+Add a wish with `skald shelf add --person ana --name "Sunday Classics" --when "sun 05-12" "a classic film"`. Review the preview, then repeat with `--yes` or `--plan HASH`. A parent can add wishes for a child; fills respect their age limit. Stop a wish by name or slot number with `skald shelf stop`.
+`--when always` fills once and stays until replaced or stopped. Schedules accept `daily`, `weekdays`, `weekend`, or comma-separated days (`mon,wed,fri`) followed by hours. Hours use the household timezone and a day starting at 05:00; 24..29 means after midnight. Outside the window, the slot is empty. Slots stay declared even when fewer than six eligible titles remain.
+OpenRouter handles free text. Without it, use discover filters such as `genre:drama year:1990-2000 country:US` (underscores for genre spaces); other wishes report "needs OpenRouter". Each wish uses at most one AI call per window. Taste and preference changes refilter its cached picks.

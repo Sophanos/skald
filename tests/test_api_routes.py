@@ -37,6 +37,8 @@ class ApiCase(unittest.TestCase):
 
     def example(self, key, spec, method):
         example = spec["example"]
+        if key == "shelves" and method == "POST":
+            example = {"body": {"plan": self.s.shelf_change("together", "count", count=2)["plan"]}}
         path = "/api/v1/" + key.replace("*", example.get("tail", ""))
         if example.get("query"):
             path += "?" + urllib.parse.urlencode(example["query"])
@@ -64,10 +66,10 @@ class ApiRoutesTests(ApiCase):
                         repeat = path + "?unknown=x&unknown=x"
                     self.assertEqual(self.request(repeat, method, body)[0], 400)
                     code, _ = self.request(path, method, body)
-                    self.assertEqual(code, status)
+                    self.assertEqual(code, 400 if key == "command" else status)
 
     def test_registry(self):
-        self.assertEqual(len(self.s.API_ROUTES), 13)
+        self.assertEqual(len(self.s.API_ROUTES), 15)
         self.contract()
 
     def test_routes_self_description(self):

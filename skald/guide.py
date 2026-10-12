@@ -15,8 +15,8 @@ from .engine import Engine
 
 # Network verification is deliberately unavailable in this worktree.
 HOWTO = {
-    "trakt": {"steps": ["Open Trakt Settings → Data export.", "Request an export and download the JSON files.", "Keep the files together in an export folder."],
-              "url": "https://trakt.tv/settings/data", "file_glob": ["trakt*.json", "watched-*.json", "ratings-*.json", "watchlist-*.json", "history-*.json"], "wait": "minutes", "checked": None},
+    "trakt": {"steps": ["Open Trakt Settings → Data.", "Choose Export now and download the zip.", "Import the zip as is; no need to unzip."],
+              "url": "https://app.trakt.tv/settings/data", "file_glob": ["trakt-export*.zip", "trakt*.json", "watched-*.json", "ratings-*.json", "watchlist-*.json", "history-*.json"], "wait": "minutes", "checked": None},
     "netflix": {"steps": ["Open Account → Profiles → Viewing activity.", "Choose the profile, then Download all.", "For a multi-profile export, add --profile-map NAME=PERSON."],
                 "url": "https://help.netflix.com/en/node/101917", "file_glob": ["ViewingActivity*.csv", "NetflixViewingHistory*.csv"], "wait": "minutes", "checked": None},
     "letterboxd": {"steps": ["Open Settings → Import & Export.", "Export your data and unzip the download.", "Use the folder containing ratings.csv and diary.csv."],

@@ -49,6 +49,73 @@ class SetupTests(unittest.TestCase):
         self.assertIn('checksRun', result['doctor'])
         self.assertEqual(result['next'], 'restart Skald (docker compose restart engine)')
 
+    def prepare_restart_tests(self):
+        from skald import setup
+        setup.household(self.data, ['alex', 'sam'], 'en-US', 'UTC', 'United States')
+        setup.write_private(self.data/'setup.json', json.dumps({'base': 'https://tv.example',
+            'watch': 'aiostreams', 'taste': 'files', 'tmdb_checked': True}))
+        setup.record_startup(self.data, json.loads((self.data/'skald.json').read_text()))
+
+    def test_fresh_connect_does_not_print_restart_now(self):
+        from skald import setup
+        out = io.StringIO()
+        with patch.object(setup, 'check_tmdb', return_value=True):
+            self.assertEqual(main(['setup', '--yes', '--members', 'alex,sam',
+                '--base', 'https://tv.example', '--watch', 'aiostreams', '--connect', 'files'], out=out), 0)
+        self.assertFalse((self.data/'.skald-startup').exists())
+        self.assertNotIn('now so it starts reading', out.getvalue())
+
+    def test_connect_prints_restart_before_pending_aiostreams(self):
+        from skald import setup, connectors
+        self.prepare_restart_tests()
+        hint = 'restart Skald (docker compose restart engine) now so it starts reading.'
+        with patch.object(setup, 'check_tmdb', return_value=True), \
+                patch.object(connectors, 'source_users', return_value={'a1b2c3d4': 'Synthetic profile'}), \
+                patch.object(connectors, 'test', return_value={'ok': True}), \
+                patch.object(connectors, 'text', return_value=['Connector OK']):
+            for source in ('aiostreams-db', 'files'):
+                with self.subTest(source=source):
+                    out = io.StringIO()
+                    args = ['setup', '--yes', '--connect', source]
+                    if source == 'aiostreams-db':
+                        args += ['--source-path', '/synthetic/db.sqlite', '--map', 'a1b2c3d4=alex']
+                    self.assertEqual(main(args, out=out), 0, out.getvalue())
+                    self.assertEqual(out.getvalue().splitlines().count(hint), 1)
+                    self.assertIn('Next: skald setup aiostreams', out.getvalue())
+            setup.record_startup(self.data, json.loads((self.data/'skald.json').read_text()))
+            out = io.StringIO()
+            self.assertEqual(main(['setup', '--yes', '--connect', 'files'], out=out), 0)
+            self.assertNotIn(hint, out.getvalue())
+
+    def test_failed_connect_does_not_print_restart_now(self):
+        from skald import setup, connectors
+        self.prepare_restart_tests()
+        (self.data/'.skald-startup').unlink()
+        out = io.StringIO()
+        with patch.object(setup, 'check_tmdb', return_value=True), \
+                patch.object(connectors, 'source_users', return_value={'a1b2c3d4': 'Synthetic profile'}), \
+                patch.object(connectors, 'test', return_value={'ok': False}), \
+                patch.object(connectors, 'text', return_value=['Connector failed']):
+            self.assertEqual(main(['setup', '--yes', '--connect', 'aiostreams-db',
+                '--source-path', '/synthetic/db.sqlite', '--map', 'a1b2c3d4=alex'], out=out), 1)
+        self.assertNotIn('now so it starts reading', out.getvalue())
+
+    def test_status_restart_note_keeps_pending_command(self):
+        from skald import setup
+        self.prepare_restart_tests()
+        restart = 'restart Skald (docker compose restart engine)'
+        self.assertNotIn(restart, setup.status(self.data)['notes'])
+        for marker in ('different startup config', None):
+            with self.subTest(marker=marker):
+                if marker is None:
+                    (self.data/'.skald-startup').unlink()
+                else:
+                    setup.write_private(self.data/'.skald-startup', marker)
+                out = io.StringIO()
+                self.assertEqual(main(['setup', '--status'], out=out), 0)
+                self.assertIn('Note: ' + restart, out.getvalue())
+                self.assertIn('Next: skald setup aiostreams', out.getvalue())
+
     def test_setup_json_contains_recipe_and_private_urls(self):
         from skald import setup
         out = io.StringIO()
@@ -70,7 +137,7 @@ class SetupTests(unittest.TestCase):
 
     def test_interactive_checks_print_before_questions(self):
         from skald import setup
-        answers = iter(['alex,sam', 'en-US', 'UTC', 'United States', 'https://tv.example', 'stremio', 'files'])
+        answers = iter(['alex,sam', 'en-US', 'UTC', 'United States', '', 'https://tv.example', 'stremio', 'files'])
         out = io.StringIO()
         def answer(prompt):
             print(prompt, file=out)
