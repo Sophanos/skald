@@ -321,9 +321,108 @@ class AIOStreamsTests(unittest.TestCase):
         self.assertIn("keep Skald's row order", out.getvalue())
         self.assertEqual(self.fake.configs['existing']['upstreamCatalogOrder'], ['other-addon', 'skd1a2b'])
 
+    def scope_entries(self, person='household'):
+        with setup.server(self.data) as s, s.addon_scope(None if person == 'household' else person):
+            rows = [(cid, typ) for cid, types, _ in s.feed_rows(s.LANG)
+                    for typ in (('tv',) if cid in s.MIXED and 'tv' in types else types)]
+            rows += [(s.rid('search'), typ) for typ in ('movie', 'series')]
+        return [{'id': 'skd1a2b.' + cid, 'type': typ, 'enabled': True} for cid, typ in rows]
+
+    def test_catalog_modifications_refill_slots_and_insert_hidden_rows(self):
+        self.run_setup()
+        uid = self.saved()['household']['uuid']
+        rows = self.scope_entries()
+        rows[0].update(enabled=False, extra={'keep': 'FAKE-DEBRID-KEY'})
+        others = [{'id': 'other.a', 'type': 'movie', 'enabled': False, 'extra': [1]},
+                  {'id': 'other.b', 'type': 'series', 'name': 'keep'},
+                  {'id': 'skd1a2bX.unrelated', 'type': 'tv', 'enabled': True}]
+        self.fake.configs[uid]['catalogModifications'] = [others[0], rows[2], others[1], rows[0], *rows[3:], others[2]]
+        self.fake.calls.clear()
+        code, text = self.run_setup()
+        self.assertEqual(code, 0, text)
+        after = self.fake.configs[uid]['catalogModifications']
+        self.assertEqual(after, [others[0], rows[0], rows[1], others[1], *rows[2:], others[2]])
+        self.assertEqual(json.dumps([e for e in after if e in others]).encode(), json.dumps(others).encode())
+        self.assertIn("keep Skald's rows in place (" + str(len(rows)) + ' rows)', text)
+        self.assertNotIn('fake-password', text)
+        self.assertNotIn('encrypted', text)
+        self.assertEqual(sum(c[0] == 'PUT' for c in self.fake.calls), 1)
+        self.fake.calls.clear()
+        code, text = self.run_setup()
+        self.assertEqual(code, 0, text)
+        self.assertIn('AIOStreams already set up', text)
+        self.assertFalse(any(c[0] == 'PUT' for c in self.fake.calls))
+
+    def test_catalog_modifications_uuid_confirms_and_inserts_first_row(self):
+        self.run_setup('--member', 'alex')
+        uid = self.saved()['alex']['uuid']
+        rows = self.scope_entries('alex')
+        other = {'id': 'other.a', 'type': 'movie', 'extra': 'FAKE-DEBRID-KEY'}
+        before = [other, *rows[1:]]
+        self.fake.configs[uid]['catalogModifications'] = copy.deepcopy(before)
+        for answer in ('n', 'y'):
+            with self.subTest(answer=answer), patch('builtins.input', return_value=answer) as ask, patch('getpass.getpass', return_value='fake-password'):
+                self.fake.calls.clear()
+                out = io.StringIO()
+                self.assertEqual(main(['setup', 'aiostreams', '--member', 'alex', '--uuid', uid], out=out), 0, out.getvalue())
+                ask.assert_called_once_with('Save? [y/N] ')
+                self.assertNotIn('FAKE-DEBRID-KEY', out.getvalue())
+                self.assertNotIn('fake-password', out.getvalue())
+                self.assertEqual(self.fake.configs[uid]['catalogModifications'], [other, *rows] if answer == 'y' else before)
+                self.assertEqual(any(c[0] == 'PUT' for c in self.fake.calls), answer == 'y')
+
+    def test_catalog_modifications_without_skald_append_block(self):
+        self.run_setup()
+        uid = self.saved()['household']['uuid']
+        other = {'id': 'other.a', 'type': 'movie', 'enabled': False}
+        self.fake.configs[uid]['catalogModifications'] = [other]
+        code, text = self.run_setup()
+        self.assertEqual(code, 0, text)
+        self.assertEqual(self.fake.configs[uid]['catalogModifications'], [other, *self.scope_entries()])
+
+    def test_catalog_modifications_retired_entry_keeps_first_skald_place(self):
+        self.run_setup()
+        uid = self.saved()['household']['uuid']
+        other = {'id': 'other.a', 'type': 'movie'}
+        retired = {'id': 'skd1a2b.retired', 'type': 'tv', 'enabled': False, 'extra': 1}
+        self.fake.configs[uid]['catalogModifications'] = [other, retired, other]
+        code, text = self.run_setup()
+        self.assertEqual(code, 0, text)
+        self.assertEqual(self.fake.configs[uid]['catalogModifications'],
+                         [other, *self.scope_entries(), retired, other])
+
+    def test_new_login_catalog_modifications_from_aio_defaults(self):
+        transport = self.fake.__call__
+        def defaults(req, timeout):
+            reply = transport(req, timeout)
+            if req.get_method() == 'POST':
+                self.fake.configs['a1b2c3d1-fake']['catalogModifications'] = [{'id': 'other.a', 'type': 'movie'}]
+            return reply
+        with patch('urllib.request.OpenerDirector.open', side_effect=defaults):
+            code, text = self.run_setup('--json')
+        self.assertEqual(code, 0, text)
+        self.assertEqual(self.fake.configs['a1b2c3d1-fake']['catalogModifications'],
+                         [{'id': 'other.a', 'type': 'movie'}, *self.scope_entries()])
+        self.assertIn("keep Skald's rows in place", text)
+        self.assertNotIn('fake-password', text)
+
+    def test_empty_catalog_modifications_stay_empty(self):
+        self.run_setup()
+        uid = self.saved()['household']['uuid']
+        self.fake.configs[uid]['catalogModifications'] = []
+        self.fake.calls.clear()
+        code, text = self.run_setup()
+        self.assertEqual(code, 0, text)
+        self.assertIn('AIOStreams already set up', text)
+        self.assertEqual(self.fake.configs[uid]['catalogModifications'], [])
+        self.assertFalse(any(c[0] == 'PUT' for c in self.fake.calls))
+
     def test_status_done_and_missing_taste(self):
         self.run_setup()
         with patch.dict(os.environ, {'TMDB_API': 'fake'}):
+            self.assertEqual(setup.status(self.data)['next'], 'restart Skald (docker compose restart engine)')
+            with setup.server(self.data) as s:
+                setup.record_startup(self.data, s.CONFIG)
             self.assertEqual(setup.status(self.data)['next'], 'nothing left')
             saved = setup.state(self.data)
             saved.pop('taste')

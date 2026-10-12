@@ -148,6 +148,7 @@ Run `skald setup aiostreams --uuid <your uuid>` to add Skald and missing title d
 Use `--aio-url` for the AIOStreams address; `--member NAME|together|all` makes member logins.
 Passwords use a private prompt or `--password-stdin`. Protected instances ask for their access key (`--secret-stdin` reads it first).
 New passwords are shown once and saved privately in DATA/credentials/aiostreams.json. Reruns use saved logins.
+If rows come back at the bottom in AIOStreams, run `skald setup aiostreams` again.
 AIOStreams may need a restart after rows change.
 
 ## 5. Connect taste sources
@@ -188,6 +189,12 @@ These commands use HTTP, without SSH.
 **What it does:** prints a doctor summary and the next command.
 **What you need:** follow that command on the Docker host when it is a Docker command.
 **Worked when:** `docker compose exec engine skald setup --status` has no missing steps.
+If status asks for a restart, run `docker compose restart engine`, then check again.
+The engine records the configuration it loaded at startup; changed settings or a
+missing startup record need a restart before status can confirm them.
+For older read-only households, status shows the TMDB key as present but not checked
+and reports members' rated counts. An unrecorded address or watching app is a note,
+not a missing step. Status does not save these records or check the running engine.
 Restart the engine after setup so it loads the saved settings, then install the printed URL.
 Allow time for the first rows to build. Title search works while rows are building.
 Print links again with `skald addon-url --base YOUR_ADDRESS`.

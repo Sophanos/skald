@@ -114,3 +114,6 @@ values and defaults. Fact correction is not implemented yet.
 | `eval` | Run offline checks: `skald --snapshot /path/copy eval` |
 
 See [network setup](SETUP.md) and [upgrades](UPGRADE.md).
+
+For members with few ratings, doctor suggests an interview or importing a Netflix
+or IMDb export. Run `skald import --help` for the import path.

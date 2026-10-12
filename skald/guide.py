@@ -60,7 +60,7 @@ def member(engine, person, profile=None):
         label = "too new — " if maturity.get("state") == "too_new" else ""
         line = f"{person.title()}: {label}{count} of {target} rated"
         if label:
-            line += f"; next: skald interview --person {person}"
+            line += f"; next: skald interview --person {person} or import a Netflix or IMDb export (skald import --help)"
     else:
         maturity = None
         line = f"{person.title()}: explicit {explicit}"

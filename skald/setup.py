@@ -4,6 +4,7 @@ import argparse
 import base64
 import copy
 import getpass
+import hashlib
 import http.client
 import importlib.util
 import io
@@ -200,6 +201,43 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
             if cid in own_catalogs:
                 return prefix
         return None
+    def keep_catalog_places(config, manifest, person):
+        modifications = config.get('catalogModifications')
+        prefix = catalog_prefix(manifest)
+        if not modifications or not prefix:
+            return None
+        prefix += '.'
+        with s.addon_scope(None if person == 'household' else person):
+            rows = [(prefix + cid, typ) for cid, types, _ in s.feed_rows(s.LANG)
+                    for typ in (('tv',) if cid in s.MIXED and 'tv' in types else types)]
+        rows += [(prefix + s.rid('search'), typ) for typ in ('movie', 'series')]
+        existing = {(entry['id'], entry['type']): entry for entry in modifications
+                    if entry['id'].startswith(prefix)}
+        groups, leading = [], []
+        for key in rows:
+            if key in existing:
+                groups.append([*leading, existing[key]])
+                leading = []
+            else:
+                entry = {'id': key[0], 'type': key[1], 'enabled': True}
+                (groups[-1] if groups else leading).append(entry)
+        # Keep retired catalog entries too, including the user's hidden settings.
+        groups.extend([entry] for key, entry in existing.items() if key not in rows)
+        if leading and groups:
+            groups[0][:0] = leading
+            leading = []
+        slots = iter(groups)
+        ordered = []
+        for entry in modifications:
+            if entry['id'].startswith(prefix):
+                ordered.extend(next(slots))
+            else:
+                ordered.append(entry)
+        ordered.extend(leading)
+        if ordered != modifications:
+            config['catalogModifications'] = ordered
+            return "keep Skald's rows in place (" + str(len(rows)) + ' rows)'
+        return None
     try:
         internal = args.internal_base or saved.get('internal_base') or os.environ.get('SKALD_INTERNAL_BASE')
         base = remote.validate_base(args.base or internal or saved.get('base') or '')
@@ -281,6 +319,9 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
                     changes.append('add The Movie Database (title details)')
                 if access is not None and config.get('accessKey') != access:
                     changes.append('update instance access key')
+                catalog_change = keep_catalog_places(config, manifest, person)
+                if catalog_change:
+                    changes.append(catalog_change)
                 save_config = bool(changes)
                 order_id = catalog_prefix(manifest)
                 order_needed = not order_id or order_id not in config.get('upstreamCatalogOrder', [])
@@ -317,8 +358,13 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
                     raise ValueError('AIOStreams has no Skald catalogs yet; run skald setup aiostreams again when rows appear')
                 config = request(aio + '/api/v1/user', login=login)['data']['userData']
                 order = config.setdefault('upstreamCatalogOrder', [])
-                if order_id not in order:
+                order_changed = order_id not in order
+                if order_changed:
                     order.append(order_id)
+                catalog_change = keep_catalog_places(config, manifest, person)
+                if catalog_change:
+                    lines.append(catalog_change)
+                if order_changed or catalog_change:
                     if access is not None:
                         config['accessKey'] = access
                     request(aio + '/api/v1/user', method='PUT', body={'config': config}, login=login)
@@ -345,6 +391,17 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
     return result
 
 
+def startup_digest(config):
+    return hashlib.sha256(json.dumps(config, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+
+
+def record_startup(data, config):
+    try:
+        write_private(Path(data)/'.skald-startup', startup_digest(config) + '\n')
+    except OSError as error:
+        print(f'could not record startup marker: {error}; setup --status may ask for a restart', file=sys.stderr)
+
+
 def status(data):
     saved = state(data)
     path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
@@ -353,6 +410,23 @@ def status(data):
     steps = {'checks': bool(saved.get('tmdb_checked') and os.environ.get('TMDB_API')),
              'household': bool(config) or legacy, 'address': bool(saved.get('base')),
              'watch': bool(saved.get('watch')), 'taste': not saved.get('connector_failed') and (bool(saved.get('taste')) or bool(config and config['connectors']))}
+    notes = []
+    if legacy:
+        config, _ = members.load_config(str(data), readonly=True)
+        if os.environ.get('TMDB_API') and not saved.get('tmdb_checked'):
+            steps.pop('checks')
+            notes.append('TMDB key present (not checked)')
+        for step in ('address', 'watch'):
+            if not steps[step]:
+                steps.pop(step)
+                notes.append(step + ': not recorded; run skald setup to record')
+        rated = {person: 0 for person in config['household']['members']}
+        if any((data/name).is_file() for name in ('profile.json', 'history.json', 'trakt.json')):
+            from .engine import Engine
+            with Engine(data) as engine:
+                rated.update(engine._model['nexp'])
+        steps['taste'] = not saved.get('connector_failed') and (steps['taste'] or bool(config['connectors']) or any(rated.values()))
+        notes.append('taste: ' + '; '.join(config['household']['labels'][p] + ': ' + str(n) + ' rated' for p, n in rated.items()))
     missing = [k for k, done in steps.items() if not done]
     commands = {'checks': 'skald setup', 'household': 'skald setup', 'address': 'skald setup --base YOUR_ADDRESS',
                 'watch': 'skald setup --watch stremio', 'taste': 'skald setup --connect files'}
@@ -361,12 +435,18 @@ def status(data):
         missing[missing.index('checks')] = ('TMDB_API not set; put it in .env, then docker compose up -d (engine) or docker compose -f compose.stack.example.yaml up -d (skald); without Docker: export TMDB_API=...'
                                             if not os.environ.get('TMDB_API') else 'TMDB key not checked; run skald setup')
     logins = aiostreams_logins(data)
-    if saved.get('watch') in ('aiostreams', 'jellyfin-app') and not logins and all(steps[k] for k in ('checks', 'household', 'address', 'watch')):
+    if saved.get('watch') in ('aiostreams', 'jellyfin-app') and not logins and all(steps.get(k, False) for k in ('checks', 'household', 'address', 'watch')):
         next_command = 'skald setup aiostreams'
+    if config and not legacy and next_command == 'nothing left':
+        marker = data/'.skald-startup'
+        # CONFIG is loaded once; setup.json and credential contents are not cached there.
+        if not marker.exists() or marker.read_text().strip() != startup_digest(config):
+            next_command = 'restart Skald (docker compose restart engine)'
     from .migrate import check
     return {'release': members.VERSION, 'data_format': check(data)['format'], 'done': [k for k, done in steps.items() if done], 'missing': missing,
             'next': next_command, 'ok': not missing,
-            'legacy_readonly': legacy, 'aiostreams_login': 'made for ' + ', '.join(logins) if logins else 'not made'}
+            'legacy_readonly': legacy, 'aiostreams_login': 'made for ' + ', '.join(logins) if logins else 'not made',
+            **({'notes': notes} if legacy else {})}
 
 
 def link(s, name, person, scopes, base):

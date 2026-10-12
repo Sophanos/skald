@@ -4,6 +4,23 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.0.4
+
+Rows that come back no longer land at the bottom in AIOStreams. Once you have
+reordered or hidden a row on the AIOStreams page, run `skald setup aiostreams`
+again: it puts every Skald row back in Skald's order, in the place Skald's rows
+already hold. Rows of other addons stay where they are, and rows you hid stay
+hidden. Nothing is saved when nothing changed.
+
+`skald setup --status` asks for a restart only while the running engine still
+has older settings. A household made before `skald setup` now gets a status
+that shows what it can see (TMDB key present, ratings per member) instead of
+an error. `skald doctor` suggests importing a Netflix or IMDb export next to
+the interview for new members.
+
+**Data changes:** one small file, `.skald-startup`, records which settings the
+engine loaded at start. No migration. Going back to 1.0.3 ignores it.
+
 ## 1.0.3
 
 Importing on a laptop with `--remote` now matches titles through your own Skald

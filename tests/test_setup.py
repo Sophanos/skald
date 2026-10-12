@@ -47,7 +47,7 @@ class SetupTests(unittest.TestCase):
                 '--connect', 'files', '--json'], out=out), 0)
         result = json.loads(out.getvalue())
         self.assertIn('checksRun', result['doctor'])
-        self.assertEqual(result['next'], 'nothing left')
+        self.assertEqual(result['next'], 'restart Skald (docker compose restart engine)')
 
     def test_setup_json_contains_recipe_and_private_urls(self):
         from skald import setup

@@ -56,7 +56,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -11674,6 +11674,8 @@ if __name__ == "__main__":
         if API_PORT is not None and API_PORT != REMOTE_PORT:
             api = stack.enter_context(ThreadingHTTPServer((os.environ.get("API_BIND") or "0.0.0.0", API_PORT), ApiHandler))
             threading.Thread(target=api.serve_forever, daemon=True).start()
+        from skald.setup import record_startup
+        record_startup(DATA, CONFIG)
         threading.Thread(target=feed_worker, daemon=True).start()
         threading.Thread(target=remote.serve_forever, daemon=True).start()
         main.serve_forever()

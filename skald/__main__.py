@@ -630,7 +630,7 @@ def persist(engine, state, directive):
 
 def main(argv=None, out=None):
     out = out or sys.stdout
-    pre = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    pre = argparse.ArgumentParser(add_help=False)
     snapshot = os.environ.get("SKALD_SNAPSHOT")
     pre.add_argument("--snapshot", default=snapshot if snapshot and snapshot.strip() else None)
     pre.add_argument("--live", action="store_true")
@@ -638,8 +638,17 @@ def main(argv=None, out=None):
     pre.add_argument("--person")
     pre.add_argument("--json", action="store_true")
     pre.add_argument("--state-dir")
-    pre.add_argument("command", nargs="?")
+    pre.add_argument("command", nargs=argparse.REMAINDER)
     known, _ = pre.parse_known_args(argv)
+    # Stop global abbreviations at the command; remote/person belong to subcommands.
+    tail = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    tail.add_argument("--remote", action="store_true")
+    tail.add_argument("--person")
+    tail.add_argument("--json", action="store_true")
+    sub, _ = tail.parse_known_args(known.command[1:])
+    known.remote, known.person = sub.remote, sub.person
+    known.json = known.json or sub.json
+    known.command = known.command[0] if known.command else None
     args = None
     try:
         if known.command == "backup":
@@ -705,6 +714,8 @@ def main(argv=None, out=None):
                 print("Data format: " + str(data["data_format"]), file=out)
                 print("Done: " + (", ".join(data["done"]) or "nothing yet"), file=out)
                 print("Missing: " + (", ".join(data["missing"]) or "nothing"), file=out)
+                for note in data.get("notes", []):
+                    print("Note: " + note, file=out)
                 print("AIOStreams login: " + data["aiostreams_login"], file=out)
                 print("Next: " + data["next"], file=out)
             elif args.setup_action == "link":

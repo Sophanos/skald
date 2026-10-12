@@ -20,6 +20,8 @@ Apple TV app (Odin) → AIOStreams (Jellyfin mode, HTTPS) → Skald (internal)
    It makes your AIOStreams login with Skald and title details, and prints the Odin login.
 6. Add the printed server in Odin. Log in with the printed user and password.
 
+If rows come back at the bottom in AIOStreams, run `skald setup aiostreams` again.
+
 By hand instead:
 
 - Add Skald as a custom addon with the printed internal URL.
