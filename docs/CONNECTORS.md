@@ -186,3 +186,48 @@ People who can run code as that same user can read or change the household data.
 Member addon URLs select whose rows you see; anyone with the household addon token can select another member.
 API tokens can limit access to a member and to permitted actions.
 Keep private links out of proxy access and error logs. Rotate a link or revoke a token if it leaks.
+
+## Stremio
+
+**You get:** watched movies and shows, library interests, and loved/liked titles per person.
+**You need:** that person's Stremio account and a working TMDB key on the engine.
+Stremio viewing reaches Skald directly; Trakt stays an option.
+
+```sh
+skald setup --connect stremio --person alex
+skald connectors test stremio
+skald setup --status
+```
+
+Paste the auth key at the private prompt, or leave it blank to enter email and password
+at private prompts. The password goes once to Stremio login and is never saved.
+Only the auth key is saved under DATA/credentials/ with mode 0600, separately per person.
+For scripts, `--yes --key-stdin` (or `--secret-stdin`) reads one auth key line from stdin.
+Never put keys or passwords in command arguments.
+To find your key, sign into Stremio Web and run this in the browser console:
+
+```js
+JSON.parse(localStorage.getItem("profile")).auth.key
+```
+
+Keep the result private. Repeat setup for each member; earlier connections stay intact.
+The connection test is read-only. Restart the engine after setup:
+`docker compose restart engine` (or `docker compose -f compose.stack.example.yaml restart skald`).
+The engine syncs automatically: one library request and four loved/liked catalog requests
+per person, with 10-second request timeouts. Unchanged library state, including `_mtime`,
+reuses resolved titles; repeat syncs add no duplicate events. IMDb ids resolve through TMDB.
+
+Watched means a positive watch count or watched flag, or at least 70% progress.
+The watch time comes from `lastWatched`. A retained library item without a watch becomes
+an added interest; partial progress alone does not count as a watch. Removed items and
+unwatched temporary items do not add signals. Loved maps to rating 10 and liked to 8,
+including titles outside the library. An explicit Trakt rating for the same member/title wins.
+
+Disconnect with `skald setup --disconnect stremio --person alex`, then restart the engine.
+This removes the stored key and stops using that person's Stremio history; the history file stays.
+Replace a rejected key with `--key-stdin`. Authentication failures report “key rejected”; a
+rate limit stops the sync, preserves the last good history, and retries later.
+
+**Limits:** Stremio fields are best effort and have only been checked with synthetic data.
+Only IMDb movie and series ids are supported. Series state supplies the latest episode,
+not a complete episode history; absent watch timestamps stay unknown.

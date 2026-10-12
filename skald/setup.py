@@ -75,7 +75,7 @@ def publish(data, cfg, *, replace=False, on_publish=None):
 def member_data(data, person, cfg):
     if cfg.get('taste', {}).get('people', {}).get(person):
         return True
-    if any(person in cfg['connectors'].get(cid, {}).get('accounts', {}) for cid in ('trakt_api', 'mdblist')):
+    if any(person in cfg['connectors'].get(cid, {}).get('accounts', {}) for cid in ('trakt_api', 'mdblist', 'stremio')):
         return True
     for c in cfg['connectors'].values():
         opts = c.get('options', {})
@@ -90,7 +90,7 @@ def member_data(data, person, cfg):
     for path in data.iterdir():
         if path.name in ('skald.json', 'setup.json', 'legacy.json', 'addon.json') or path.is_symlink() or not path.is_file():
             continue
-        if path.name.startswith(('trakt-' + person + '.', 'mdblist-' + person + '.')):
+        if path.name.startswith(('trakt-' + person + '.', 'mdblist-' + person + '.', 'stremio-' + person + '.')):
             return True
         if path.suffix not in ('.json', '.jsonl'):
             continue
@@ -392,6 +392,9 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
 
 
 def startup_digest(config):
+    config = copy.deepcopy(config)
+    for traits in config.get('taste', {}).get('people', {}).values():
+        traits.pop('prefs', None)  # Preferences reload when rows are served.
     return hashlib.sha256(json.dumps(config, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
 
 
@@ -427,9 +430,10 @@ def status(data):
                 rated.update(engine._model['nexp'])
         steps['taste'] = not saved.get('connector_failed') and (steps['taste'] or bool(config['connectors']) or any(rated.values()))
         notes.append('taste: ' + '; '.join(config['household']['labels'][p] + ': ' + str(n) + ' rated' for p, n in rated.items()))
-    connections = {'mdblist': {p: bool(config['connectors'].get('mdblist', {}).get('enabled') and
-                                      p in config['connectors'].get('mdblist', {}).get('accounts', {}))
-                               for p in (config['household']['members'] if config else [])}}
+    connections = {cid: {p: bool(config['connectors'].get(cid, {}).get('enabled') and
+                                     p in config['connectors'].get(cid, {}).get('accounts', {}))
+                         for p in (config['household']['members'] if config else [])}
+                   for cid in ('mdblist', 'stremio')}
     missing = [k for k, done in steps.items() if not done]
     commands = {'checks': 'skald setup', 'household': 'skald setup', 'address': 'skald setup --base YOUR_ADDRESS',
                 'watch': 'skald setup --watch stremio', 'taste': 'skald setup --connect files'}
@@ -449,7 +453,8 @@ def status(data):
     return {'release': members.VERSION, 'data_format': check(data)['format'], 'done': [k for k, done in steps.items() if done], 'missing': missing,
             'next': next_command, 'ok': not missing,
             'legacy_readonly': legacy, 'aiostreams_login': 'made for ' + ', '.join(logins) if logins else 'not made',
-            'notes': notes, 'connections': connections}
+            'notes': notes, 'connections': connections,
+            'prefs': [prefs_line(config, p) for p in config['household']['members']] if config else []}
 
 
 def link(s, name, person, scopes, base):
@@ -511,21 +516,22 @@ def _configure_connector(s, args, ask, lines, show, stage, published):
         opts['profiles'] = {p: 'household' if who == 'together' else who for p, who in mapping.items()}
         c = {'kind': 'player', 'enabled': True, 'auth': None, 'options': opts}
     else:
-        instructions = {'mdblist': 'Get a free API key at https://mdblist.com/preferences. Paste it privately.',
+        instructions = {'stremio': 'Paste your Stremio auth key privately, or leave it blank to sign in with email and password.',
+            'mdblist': 'Get a free API key at https://mdblist.com/preferences. Paste it privately.',
             'trakt_api': 'Create a Trakt API app at https://trakt.tv/oauth/applications (may require VIP). Use its client id and an access token from your authorized account.',
             'jellyfin': 'Create an API key in Jellyfin: Dashboard → Advanced → API Keys → Add.',
             'plex': 'Get a Plex token: open a media item in Plex Web → Get Info → View XML; copy X-Plex-Token privately.'}
         lines.append(instructions[cid])
         show()
-        if cid in ('trakt_api', 'mdblist'):
+        if cid in ('trakt_api', 'mdblist', 'stremio'):
             person = ask(args.person, 'Source member', cfg['household']['trakt_member'], '--person')
             if person not in cfg['household']['members']:
                 raise ValueError('choose a household member with --person')
-        previous_auth = previous.get('accounts', {}).get(person) if cid in ('trakt_api', 'mdblist') and 'accounts' in previous else previous.get('auth')
+        previous_auth = previous.get('accounts', {}).get(person) if cid in ('trakt_api', 'mdblist', 'stremio') and 'accounts' in previous else previous.get('auth')
         if cid == 'trakt_api' and person != cfg['household']['trakt_member'] and 'accounts' not in previous:
             previous_auth = None
-        if cid == 'mdblist' and args.auth_env:
-            raise ValueError('MDBList keys use private files; use --secret-stdin')
+        if cid in ('mdblist', 'stremio') and args.auth_env:
+            raise ValueError('Keys use private files; use --key-stdin')
         auth = args.auth_env
         if auth:
             auth = 'env:' + auth
@@ -534,8 +540,11 @@ def _configure_connector(s, args, ask, lines, show, stage, published):
         else:
             if args.yes and not args.secret_stdin:
                 raise ValueError('secret needed; use --secret-stdin or --auth-env VARIABLE')
-            auth = stage(secret(args.secret_stdin, cid + ' secret'), cid.removesuffix('_api') + '-' + person if cid in ('trakt_api', 'mdblist') else cid)
-        if cid == 'mdblist':
+            key = secret(args.secret_stdin, cid + ' secret') if cid != 'stremio' or args.secret_stdin else getpass.getpass('Stremio auth key (blank for email login): ').strip()
+            if cid == 'stremio' and not key:
+                key = s._stremio_login(secret(False, 'Stremio email'), secret(False, 'Stremio password'))
+            auth = stage(key, cid.removesuffix('_api') + '-' + person if cid in ('trakt_api', 'mdblist', 'stremio') else cid)
+        if cid in ('mdblist', 'stremio'):
             accounts = dict(previous.get('accounts', {}))
             accounts[person] = auth
             c = {'kind': 'api', 'enabled': True, 'auth': None, 'accounts': accounts, 'options': {}}
@@ -606,27 +615,36 @@ def parse_mapping(values, cfg):
     return result
 
 
+def prefs_line(cfg, person):
+    prefs = cfg['taste'].get('people', {}).get(person, {}).get('prefs', {})
+    years = '-'.join(str(y) if y is not None else '' for y in prefs.get('years', [None, None]))
+    excluded = prefs.get('excluded_genres', {})
+    return ('Prefs ' + person + ': ' + prefs.get('discovery', 'balanced') + '; years ' + years +
+            '; exclude movies ' + (', '.join(excluded.get('movie', [])) or 'none') +
+            '; exclude series ' + (', '.join(excluded.get('series', [])) or 'none'))
+
+
 def run(args):
     data = Path(os.environ.get('DATA_DIR', '/data'))
     if args.status:
         return status(data)
     if args.disconnect:
-        if args.disconnect != 'mdblist':
-            raise ValueError('--disconnect supports mdblist')
+        if args.disconnect not in ('mdblist', 'stremio'):
+            raise ValueError('--disconnect supports mdblist or stremio')
         path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
         cfg = members.validate_config(json.loads(path.read_text()), data=str(data))
         person = args.person
         if person not in cfg['household']['members']:
             raise ValueError('choose a household member with --person')
-        connector = cfg['connectors'].get('mdblist', {})
+        connector = cfg['connectors'].get(args.disconnect, {})
         reference = connector.get('accounts', {}).pop(person, None)
         if not connector.get('accounts'):
-            cfg['connectors'].pop('mdblist', None)
+            cfg['connectors'].pop(args.disconnect, None)
         publish(data, cfg, replace=True)
         if reference:
             _, name = members._auth_reference(reference, str(data))
             (data/'credentials'/name).unlink(missing_ok=True)
-        return {'ok': True, 'lines': ['MDBList ' + person + ': disconnected']}
+        return {'ok': True, 'lines': [{'mdblist': 'MDBList', 'stremio': 'Stremio'}[args.disconnect] + ' ' + person + ': disconnected']}
     config_path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
     if args.setup_action == 'adopt':
         if config_path.exists():
@@ -656,6 +674,34 @@ def run(args):
                           'Rollback: remove ' + str(config_path) + ' and DATA/.skald-household; legacy.json still holds the old config.']}
     if (data/'legacy.json').exists() and not config_path.exists():
         raise ValueError('this existing household is read-only in setup; run skald setup adopt to make it editable')
+    if args.setup_action == 'prefs':
+        if not config_path.exists():
+            raise ValueError('set up a household before changing preferences')
+        cfg = members.validate_config(json.loads(config_path.read_text()), data=str(data))
+        if args.person not in cfg['household']['members']:
+            raise ValueError('choose a household member with --person')
+        values = (args.discovery, args.years, args.exclude_movie_genres, args.exclude_series_genres)
+        if args.clear and any(v is not None for v in values):
+            raise ValueError('use --clear without preference flags')
+        if not args.clear and all(v is None for v in values):
+            raise ValueError('supply a preference flag or --clear')
+        traits = cfg['taste'].setdefault('people', {}).setdefault(args.person, {})
+        if args.clear:
+            traits.pop('prefs', None)
+        else:
+            prefs = traits.setdefault('prefs', {})
+            if args.discovery is not None:
+                prefs['discovery'] = args.discovery
+            if args.years is not None:
+                if not re.fullmatch(r'(?:[0-9]{4})?-(?:[0-9]{4})?', args.years):
+                    raise ValueError('--years needs FROM-TO, FROM- or -TO (four-digit years)')
+                prefs['years'] = [int(y) if y else None for y in args.years.split('-')]
+            for kind, raw in (('movie', args.exclude_movie_genres), ('series', args.exclude_series_genres)):
+                if raw is not None:
+                    prefs.setdefault('excluded_genres', {})[kind] = [g.strip() for g in raw.split(',')] if raw.strip() else []
+        check_data(data)
+        cfg = publish(data, cfg, replace=True)
+        return {'ok': True, 'lines': [prefs_line(cfg, args.person)]}
     check_data(data)
     from .migrate import ensure
     ensure(data)
@@ -741,10 +787,10 @@ def run(args):
         write_private(data/'setup.json', json.dumps(saved) + '\n')
         lines.extend(recipes.recipe(watch, urls[0], cfg['region']['lang'], s.addon_urls(internal_base)[0].replace(token, '<addon-token>') if internal_base and args.json else s.addon_urls(internal_base)[0] if internal_base else None).splitlines())
         if args.connect or not saved.get('taste') and not cfg['connectors']:
-            args.connect = ask(args.connect, 'Taste source: trakt, mdblist, jellyfin, plex, aiostreams-db, files', 'files', '--connect')
+            args.connect = ask(args.connect, 'Taste source: trakt, mdblist, stremio, jellyfin, plex, aiostreams-db, files', 'files', '--connect')
             if args.connect == 'aiostreams-db':
                 args.connect = 'aiostreams_db'
-            if args.connect not in ('trakt', 'mdblist', 'jellyfin', 'plex', 'aiostreams_db', 'files'):
+            if args.connect not in ('trakt', 'mdblist', 'stremio', 'jellyfin', 'plex', 'aiostreams_db', 'files'):
                 raise ValueError('choose a supported --connect source')
             result = configure_connector(s, args, ask, lines, show)
             saved['taste'] = args.connect
@@ -771,7 +817,7 @@ def run(args):
 
 def add_parser(commands):
     p = commands.add_parser('setup', help='set up a household on the machine holding DATA')
-    p.add_argument('setup_action', nargs='?', choices=['link', 'aiostreams', 'adopt'], help='link a laptop, make an AIOStreams login or adopt a legacy household')
+    p.add_argument('setup_action', nargs='?', choices=['link', 'aiostreams', 'adopt', 'prefs'], help='link a laptop, make an AIOStreams login, adopt a legacy household or set member preferences')
     helps = {
         'aio-url': 'address where Skald reaches AIOStreams',
         'uuid': 'existing AIOStreams login UUID',
@@ -789,8 +835,8 @@ def add_parser(commands):
         'base': 'the address your watching apps use, e.g. https://skald.example.org',
         'internal-base': 'Skald address inside Docker for AIOStreams, e.g. http://skald:8080',
         'watch': 'watching app: stremio, aiostreams or jellyfin-app',
-        'disconnect': 'remove a member MDBList connection and its private key',
-        'connect': 'taste source: files, trakt, mdblist, jellyfin, plex or aiostreams-db',
+        'disconnect': 'remove a member MDBList or Stremio connection and its private key',
+        'connect': 'taste source: files, trakt, mdblist, stremio, jellyfin, plex or aiostreams-db',
         'name': 'name for the laptop token created by link',
         'person': 'household member whose source or laptop token to use',
         'source-url': 'address of the Jellyfin or Plex server',
@@ -806,6 +852,12 @@ def add_parser(commands):
     for name in ('members', 'lang', 'timezone', 'country', 'base', 'internal-base', 'watch', 'connect', 'disconnect', 'name', 'person',
                  'source-url', 'source-path', 'user-id', 'auth-env', 'client-id-env', 'aio-url', 'uuid', 'member'):
         p.add_argument('--' + name, help=helps[name])
+    p.add_argument('--key-stdin', dest='secret_stdin', action='store_true', help='read the source key from stdin (same as --secret-stdin)')
+    p.add_argument('--discovery', choices=['balanced', 'mainstream', 'gems'], help='member discovery style (default: balanced)')
+    p.add_argument('--years', help='release years: FROM-TO, FROM- or -TO; use --years=-2000 for an upper bound')
+    p.add_argument('--exclude-movie-genres', help='comma-separated TMDB movie genre names; empty clears exclusions')
+    p.add_argument('--exclude-series-genres', help='comma-separated TMDB series genre names; empty clears exclusions')
+    p.add_argument('--clear', action='store_true', help='remove all preferences for --person')
     p.add_argument('--scopes', default='read,decide,events', help=helps['scopes'])
     p.add_argument('--map', action='append', default=[], help=helps['map'])
     return p

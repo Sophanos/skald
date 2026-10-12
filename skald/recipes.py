@@ -5,10 +5,10 @@ RECIPES = {
     'stremio': '''Stremio direct — should work, not yet tested by us.
 Open the printed member URL (or Together) in Stremio → Install.
 Skald only adds rows and search; keep your stream addons for playback.
-Skald does not see what you watch in Stremio; turn on Trakt in Stremio and run `skald setup --connect trakt`, or connect MDBList with `skald setup --connect mdblist --person NAME`, or import history.
+Stremio viewing reaches Skald directly: run `skald setup --connect stremio --person NAME` for each account. Trakt stays an option: turn it on in Stremio and run `skald setup --connect trakt`. You can also connect MDBList or import history.
 Get a free key at mdblist.com/preferences; record plays with its Plex webhook or Emby/Jellyfin plugins.''',
     'aiostreams': '''AIOStreams in Stremio, self-hosted on the same machine — tested by us.
-Skald does not see what you watch in Stremio; turn on Trakt in Stremio and run `skald setup --connect trakt`, or connect MDBList with `skald setup --connect mdblist --person NAME`, or import history.
+Stremio viewing reaches Skald directly: run `skald setup --connect stremio --person NAME` for each account. Trakt stays an option: turn it on in Stremio and run `skald setup --connect trakt`. You can also connect MDBList or import history.
 Get a free key at mdblist.com/preferences; record plays with its Plex webhook or Emby/Jellyfin plugins.
 Run `skald setup aiostreams` first. It makes a login with Skald and title details.
 Existing users: `skald setup aiostreams --uuid <your uuid>` adds Skald to your current login
@@ -65,7 +65,7 @@ def recipe(watch, manifest, lang, internal=None):
 
 
 def watch_doc():
-    return '# Where you watch\n\n' + RECOMMENDED + '\n' + '\n\n'.join(recipe(k, 'YOUR_PRINTED_MANIFEST_URL', '<lang>') for k in RECIPES) + '\n\n' + FILES.format(person='NAME') + '\n\nPlex playback should work, not yet tested by us. Skald does not supply streams.\n'
+    return '# Where you watch\n\n' + RECOMMENDED + '\n' + '\n\n'.join(recipe(k, 'YOUR_PRINTED_MANIFEST_URL', '<lang>') for k in RECIPES) + '\n\n`More from <Name>` rows offer other films by directors and series by creators behind at least two titles you liked or finished; together rows need that evidence from every member.\n\n' + FILES.format(person='NAME') + '\n\nPlex playback should work, not yet tested by us. Skald does not supply streams.\n'
 
 RECOMMENDED = '''## Recommended: the setup we run
 

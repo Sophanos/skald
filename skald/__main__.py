@@ -716,11 +716,14 @@ def main(argv=None, out=None):
                 print("Missing: " + (", ".join(data["missing"]) or "nothing"), file=out)
                 for note in data.get("notes", []):
                     print("Note: " + note, file=out)
-                for person, connected in data.get("connections", {}).get("mdblist", {}).items():
-                    print("MDBList " + person + ": " + ("connected" if connected else "not connected"), file=out)
+                for line in data.get("prefs", []):
+                    print(line, file=out)
+                for cid, label in (("mdblist", "MDBList"), ("stremio", "Stremio")):
+                    for person, connected in data.get("connections", {}).get(cid, {}).items():
+                        print(label + " " + person + ": " + ("connected" if connected else "not connected"), file=out)
                 print("AIOStreams login: " + data["aiostreams_login"], file=out)
                 print("Next: " + data["next"], file=out)
-            elif args.setup_action in ("link", "adopt") or args.disconnect:
+            elif args.setup_action in ("link", "adopt", "prefs") or args.disconnect:
                 print("\n".join(data["lines"]), file=out)
             return 0 if data.get("ok", True) else 1
         if args.command == "onboard" and args.sources and not args.snapshot and not args.live:

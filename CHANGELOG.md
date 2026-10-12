@@ -4,6 +4,20 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.1.0
+
+AI search can exclude watched titles or find matches in your own history, including member and Together links.
+Connect Stremio per person to learn from watched titles, library interests and loved/liked titles.
+Set each member's discovery style, release years and excluded movie or series genres with `skald setup prefs`.
+Together rows respect everyone's genre exclusions; settings do not filter search.
+Taste lanes can show More from a director or series creator behind at least two titles a member liked or finished.
+Together views show these rows only when every member qualifies.
+A director or creator row needs 8 unseen titles, so a typical filmography is enough.
+The README now opens with what Skald does at home and in search, with pictures from a test household.
+
+**Data changes:** no format bump or migration; adds private Stremio keys and per-person history files, like MDBList, and optional member preferences in `skald.json`.
+Version 1.0.9 can read configs with preferences set, but ignores them.
+
 ## 1.0.9
 
 `skald setup adopt --yes` makes an older household editable while preserving its config and catalog ids.

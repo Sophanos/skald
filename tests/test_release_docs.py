@@ -14,12 +14,20 @@ class ReleaseDocs(unittest.TestCase):
 
     def test_readme_links_and_plain_quickstart(self):
         text = (ROOT/'README.md').read_text()
-        self.assertLessEqual(len(text.splitlines()), 120)
+        self.assertLessEqual(len(text.splitlines()), 220)
         for name in ('SETUP', 'WATCH', 'CONNECTORS', 'UPGRADE', 'CLI'):
             self.assertIn('docs/' + name + '.md', text)
         self.assertIn('docker compose exec engine skald setup', text)
         self.assertNotIn('Setup A', text)
         self.assertNotIn('seed id', text)
+
+    def test_readme_shows_home_search_and_member_controls(self):
+        text = (ROOT/'README.md').read_text()
+        self.assertIn('skald setup --connect stremio --person NAME', text)
+        self.assertIn('skald setup prefs --person NAME', text)
+        for image in ('skald-odin.jpg', 'skald-home.jpg', 'skald-search.jpg', 'skald-import-preview.svg'):
+            self.assertIn('docs/images/' + image, text)
+        self.assertNotIn('addons cannot read', text)
 
     def test_upgrade_build_matches_compose(self):
         text = (ROOT/'docs/UPGRADE.md').read_text()
@@ -37,8 +45,9 @@ class ReleaseDocs(unittest.TestCase):
         for name in ('stremio', 'aiostreams'):
             with self.subTest(name=name):
                 text = recipes.RECIPES[name]
-                self.assertIn('Skald does not see what you watch in Stremio', text)
+                self.assertIn('Stremio viewing reaches Skald directly', text)
                 self.assertIn('skald setup --connect trakt', text)
+                self.assertIn('skald setup --connect stremio --person NAME', text)
         self.assertIn('tested by us', recipes.RECIPES['aiostreams'].splitlines()[0])
         self.assertNotIn('not yet tested', recipes.RECIPES['aiostreams'].splitlines()[0])
 

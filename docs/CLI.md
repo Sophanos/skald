@@ -56,6 +56,7 @@ The older `--live` route uses SSH and has no default host; set `SKALD_SSH_HOST` 
 | `setup --status` | Show done, missing and one next command: `skald setup --status --json` |
 | `setup aiostreams` | Make a login with Skald and title details, or update one: `skald setup aiostreams --uuid <your uuid>` |
 | `setup link` | Issue a private laptop token: `skald setup link --name laptop --person alex` |
+| `setup prefs` | Set member rows: `skald setup prefs --person alex --discovery gems --years 1990- --exclude-movie-genres horror --exclude-series-genres reality,talk`; reset with `skald setup prefs --person alex --clear`. Omitted flags keep other settings; `setup --status` shows each member. |
 | `setup adopt` | Make a legacy household editable without changing its config: `skald setup adopt --yes` |
 | `connectors test` | Probe a source without saving history: `skald connectors test jellyfin --json` |
 | `connectors` | Inspect saved source health: `skald --snapshot /path/copy connectors` |
@@ -72,6 +73,7 @@ See [connector credentials and limits](CONNECTORS.md).
 | `--json` | Print a JSON result with addon tokens, AIOStreams passwords and Stremio login URLs hidden |
 | `--status` | Show completed steps, missing settings and one next command |
 | `--check` | Fetch `<base>/<lang>/manifest.json` and say if your apps can reach it |
+| `--key-stdin` | Read the source key from stdin; same as `--secret-stdin` |
 | `--secret-stdin` | Read the secret (AIOStreams instance access key first, if protected) from stdin instead of a prompt |
 | `--aio-url` | AIOStreams address reachable from Skald; saved value or `http://aiostreams:3000` inside the stack |
 | `--uuid` | Existing AIOStreams login to update; password uses a private prompt |
@@ -84,8 +86,8 @@ See [connector credentials and limits](CONNECTORS.md).
 | `--base` | The address your watching apps use, e.g. https://skald.example.org |
 | `--internal-base` | Skald address inside Docker for AIOStreams, e.g. http://skald:8080 |
 | `--watch` | Watching app: stremio, aiostreams or jellyfin-app |
-| `--disconnect` | Remove a member MDBList connection and private key: `skald setup --disconnect mdblist --person alex` |
-| `--connect` | Taste source: files, trakt, mdblist, jellyfin, plex or aiostreams-db |
+| `--disconnect` | Remove a member MDBList or Stremio connection and private key: `skald setup --disconnect mdblist --person alex` |
+| `--connect` | Taste source: files, trakt, mdblist, stremio, jellyfin, plex or aiostreams-db |
 | `--name` | Name for the laptop token created by `setup link` |
 | `--person` | Household member whose source or laptop token to use |
 | `--source-url` | Address of the Jellyfin or Plex server |
@@ -119,6 +121,12 @@ See [network setup](SETUP.md) and [upgrades](UPGRADE.md).
 
 For members with few ratings, doctor suggests an interview or importing a Netflix
 or IMDb export. Run `skald import --help` for the import path.
+
+Stremio: run `skald setup --connect stremio --person alex`. Paste the auth key privately,
+or leave it blank for private email and password prompts. Scripts use `--yes --key-stdin`.
+Run `skald connectors test stremio` to check it and `skald setup --status` for connections.
+Disconnect with `skald setup --disconnect stremio --person alex`.
+See [Stremio](CONNECTORS.md#stremio) for finding the key and sync limits.
 
 MDBList: get a free key at mdblist.com/preferences, then run `skald setup --connect mdblist --person alex`.
 Use the private prompt or `--secret-stdin`. Run `skald connectors test mdblist` to check it.

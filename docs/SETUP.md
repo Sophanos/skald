@@ -58,6 +58,7 @@ After changing `.env`, run `docker compose up -d --force-recreate`.
 
 OpenRouter is optional. Add `OPENROUTER_API_KEY=YOUR_KEY` for AI picks,
 natural-language search, mood shelves and weekly picks. Rows work without it.
+AI search understands “anime I have not watched” and “anime I have watched” using the linked member’s history, or current members together on the Together link.
 
 ## 2. Add your household
 
@@ -71,6 +72,30 @@ The optional `row_prefix` in household config sets catalog ids, for example
 `skald.foryou`. It defaults to `skald` and accepts 2–16 lowercase letters and
 digits, starting with a letter. Existing households keep their prefix in
 `DATA/legacy.json`; stored row ids are not rewritten.
+
+Each member can set a discovery style, release years and unwanted genres:
+
+```sh
+skald setup prefs --person alex --discovery gems --years 1990- --exclude-movie-genres horror --exclude-series-genres reality,talk
+skald setup --status
+skald setup prefs --person alex --clear
+```
+
+Use `balanced` for the usual order, `mainstream` for popular titles, or `gems` for
+high ratings with lower popularity. Years can be `1990-2010`, `1990-`, or
+`--years=-2010`; `--years=-` removes the year limit. Unknown release years are
+left out when a year limit is set. Genre names are TMDB's English names, ignoring
+case, separately for movies and series. Use quotes for names with spaces, such as
+`--exclude-movie-genres "Science Fiction,Horror"`. An empty genre flag clears that
+kind's exclusions. Omitted flags keep the member's other preferences.
+
+Settings live in `skald.json` under `taste.people.<name>.prefs`, with optional
+`discovery`, `years: [from, to]` (null means open), and
+`excluded_genres: {"movie": [...], "series": [...]}`. Absent settings keep the usual
+rows. Changes apply on the next row request without a restart; watching apps may
+cache rows briefly. Together rows exclude any genre blocked by a member present,
+but keep their usual years and order. Search stays unchanged. `--clear` removes
+all settings for that person; status shows each member on one line.
 
 Older households in `DATA/legacy.json` are read-only in setup until you run
 `docker compose exec engine skald setup adopt --yes`. It copies the config unchanged
@@ -165,6 +190,11 @@ For a free history and watchlist source, get a key at mdblist.com/preferences an
 `skald setup --connect mdblist --person alex`. Paste it at the private prompt.
 Use the Plex webhook from MDBList Preferences or its Emby/Jellyfin plugins to record plays.
 See [MDBList](CONNECTORS.md#mdblist) for scripts, limits and disconnecting.
+For Stremio viewing, library interests and likes, run
+`skald setup --connect stremio --person alex` for each account. Paste the auth key privately,
+or leave it blank to enter email and password privately. Only the auth key is saved.
+Scripts can use `--yes --key-stdin`; `skald setup --status` shows each connection.
+See [Stremio](CONNECTORS.md#stremio) for finding the key, checks and disconnecting.
 Secrets go through a private prompt, `--secret-stdin`, or a named environment variable.
 They never belong in command arguments. After changing connectors, restart the engine.
 

@@ -22,7 +22,9 @@ DATA_FILES = (".skald-format", "skald.json", "legacy.json", "profile.json", "emb
 
 
 def data_files(config):
-    return DATA_FILES + tuple("trakt-" + person + ".history.json" for person in config["connectors"].get("trakt_api", {}).get("accounts", {}))
+    return DATA_FILES + tuple(source + "-" + person + ".history.json"
+        for source, cid in (("trakt", "trakt_api"), ("mdblist", "mdblist"), ("stremio", "stremio"))
+        for person in config["connectors"].get(cid, {}).get("accounts", {}))
 
 
 def doctor_keys(data):

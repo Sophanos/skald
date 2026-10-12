@@ -230,7 +230,7 @@ class RowsR2(unittest.TestCase):
     def lane_build(self, items, front=(), anime=False):
         s = self.s
         model = {'aff': {'k:1': 1}, 'names': {'k:1': 'anime' if anime else 'cartoon'}}
-        with patch.object(s, 'get_model', return_value=model), patch.dict(s._profiles, {'household': {'seen': set(), 'negative': set()}}), \
+        with patch.object(s, 'get_model', return_value=model), patch.dict(s._profiles, {'household': {'seen': set(), 'negative': set(), 'entries': []}}), \
                 patch.dict(s._feeds, {(rid('foryou', s.CONFIG), 'de-DE'): {'metas': {'tv': list(front)}}}, clear=True), \
                 patch.dict(s._learn, {'lanes': {}, 'rows': {}}, clear=True), \
                 patch.object(s, 'because_seed', return_value=None), patch.object(s, 'speaks', return_value=True), \

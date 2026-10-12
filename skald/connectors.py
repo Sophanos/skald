@@ -45,7 +45,7 @@ def test(s, name=None, *, transport=None, now=None, show=False):
             row = {'name': cid, 'reachable': False, 'auth_ok': False, 'unmapped': 0,
                    'mapping_complete': False, 'plays_30d': 0, 'ok': False}
             try:
-                if cid in ('trakt_api', 'mdblist'):
+                if cid in ('trakt_api', 'mdblist', 'stremio'):
                     refs = cfg.get('accounts', {s.CONFIG['household']['trakt_member']: cfg.get('auth')})
                     for person, auth in refs.items():
                         _, _, stats = s.CONNECTOR_POLL[cid]({'id': cid + ':' + person, 'person': person,
@@ -79,9 +79,10 @@ def test(s, name=None, *, transport=None, now=None, show=False):
                 row['reachable'] |= code in (401, 403) or isinstance(error, s.TraktLoginRequired)
                 row['fix'] = 'Check the address, credential and database mount; run skald setup --connect ' + cid.removesuffix('_api')
                 row['error'] = 'authentication failed' if code in (401, 403) else 'connector probe failed'
-                if cid == 'mdblist':
-                    row['error'] = {401: 'MDBList key rejected', 403: 'MDBList key rejected',
-                                    429: 'MDBList rate limit; sync stopped, try later'}.get(code, 'connector probe failed')
+                if cid in ('mdblist', 'stremio'):
+                    label = 'Stremio' if cid == 'stremio' else 'MDBList'
+                    row['error'] = {401: label + ' key rejected', 403: label + ' key rejected',
+                                    429: label + ' rate limit; sync stopped, try later'}.get(code, 'connector probe failed')
             results.append(row)
     return {'ok': bool(results) and all(r['ok'] for r in results), 'connectors': results}
 

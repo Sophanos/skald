@@ -88,6 +88,35 @@ class LanesPin(unittest.TestCase):
             s.clear_seed_cache()
             miss()
 
+    def test_preferences_reload_before_manifest_and_invalidate_lane_pins(self):
+        s = self.s
+        cid = s.LANES[0]
+        self.put(cid, [{**x, 'genres': ['Horror']} for x in cards(16)], 'k:1')
+        self.put(s.LANE_BENCH[0], [{**x, 'genres': ['Drama']} for x in cards(16, 100)], 'k:2')
+        path = Path(s.DATA, 'skald.json')
+        cfg = copy.deepcopy(s.CONFIG)
+        path.write_text(json.dumps(cfg))
+        with patch.dict(os.environ, {'SKALD_CONFIG': str(path)}), patch.object(s, 'CONFIG_SOURCE', 'file'), \
+                patch.object(s, 'CONFIG', copy.deepcopy(cfg)), patch.object(s, '_prefs_stamp', None), \
+                patch.object(s, '_pin_epoch', s._pin_epoch), patch.dict(s._shown_scoped, {}, clear=True):
+            s.manifest(LANG, 'ana')
+            self.assertEqual(s._shown_scoped['ana'][cid, LANG]['names']['lane'], 'k:1')
+            for catalog_first in (False, True):
+                with self.subTest(catalog_first=catalog_first):
+                    cfg['taste']['people']['ana']['prefs'] = {'excluded_genres': {'movie': ['Horror']}}
+                    path.write_text(json.dumps(cfg))
+                    if catalog_first:
+                        s.row_metas(cid, 'tv', LANG, who='ana')
+                    catalogs = s.manifest(LANG, 'ana')['catalogs']
+                    self.assertIn(cid, {row['id'] for row in catalogs})
+                    self.assertEqual(s._shown_scoped['ana'][cid, LANG]['names']['lane'], 'k:2')
+                    with s.addon_scope('ana'):
+                        self.assertGreaterEqual(len(s.row_metas(cid, 'tv', LANG, who='ana')), s.ROW_MIN)
+                    cfg['taste']['people']['ana'].pop('prefs')
+                    path.write_text(json.dumps(cfg))
+                    s.manifest(LANG, 'ana')
+                    self.assertEqual(s._shown_scoped['ana'][cid, LANG]['names']['lane'], 'k:1')
+
     def test_prewarm_computes_bench_but_only_manifest_applies_it(self):
         s = self.s
         self.put(s.LANES[0], cards(4), 'k:1')

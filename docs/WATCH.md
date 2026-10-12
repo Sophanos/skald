@@ -35,11 +35,11 @@ We reference its published image. Configure its stream addons for playback.
 Stremio direct — should work, not yet tested by us.
 Open the printed member URL (or Together) in Stremio → Install.
 Skald only adds rows and search; keep your stream addons for playback.
-Skald does not see what you watch in Stremio; turn on Trakt in Stremio and run `skald setup --connect trakt`, or connect MDBList with `skald setup --connect mdblist --person NAME`, or import history.
+Stremio viewing reaches Skald directly: run `skald setup --connect stremio --person NAME` for each account. Trakt stays an option: turn it on in Stremio and run `skald setup --connect trakt`. You can also connect MDBList or import history.
 Get a free key at mdblist.com/preferences; record plays with its Plex webhook or Emby/Jellyfin plugins.
 
 AIOStreams in Stremio, self-hosted on the same machine — tested by us.
-Skald does not see what you watch in Stremio; turn on Trakt in Stremio and run `skald setup --connect trakt`, or connect MDBList with `skald setup --connect mdblist --person NAME`, or import history.
+Stremio viewing reaches Skald directly: run `skald setup --connect stremio --person NAME` for each account. Trakt stays an option: turn it on in Stremio and run `skald setup --connect trakt`. You can also connect MDBList or import history.
 Get a free key at mdblist.com/preferences; record plays with its Plex webhook or Emby/Jellyfin plugins.
 Run `skald setup aiostreams` first. It makes a login with Skald and title details.
 Existing users: `skald setup aiostreams --uuid <your uuid>` adds Skald to your current login
@@ -77,6 +77,8 @@ A shared login can count as "together".
 Set `MANIFEST_CACHE_TTL=*:21600,skald:600` in .env.aiostreams to re-read Skald's rows
 every 10 minutes; "skald" is its Docker hostname. Restart AIOStreams after changing the setting.
 Rows appear once they have enough titles; a new household starts with a few and gains more as Skald learns your taste.
+
+`More from <Name>` rows offer other films by directors and series by creators behind at least two titles you liked or finished; together rows need that evidence from every member.
 
 Import a file on your laptop, then preview before sending:
 Your linked server resolves titles with --remote. The laptop needs no TMDB key.

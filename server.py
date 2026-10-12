@@ -56,13 +56,22 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.0.9"
+VERSION = "1.1.0"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
 ENV_FIRST_RUN = True
 MEMBER_COUNTS = (1, 2, 3, 4, 5, 6)
 FIRST_RUN_MEMBER_ROWS = False
+TMDB_GENRES = {
+    "movie": {28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy", 80: "Crime", 99: "Documentary",
+              18: "Drama", 10751: "Family", 14: "Fantasy", 36: "History", 27: "Horror", 10402: "Music",
+              9648: "Mystery", 10749: "Romance", 878: "Science Fiction", 10770: "TV Movie", 53: "Thriller",
+              10752: "War", 37: "Western"},
+    "series": {10759: "Action & Adventure", 16: "Animation", 35: "Comedy", 80: "Crime", 99: "Documentary",
+               18: "Drama", 10751: "Family", 10762: "Kids", 9648: "Mystery", 10763: "News", 10764: "Reality",
+               10765: "Sci-Fi & Fantasy", 10766: "Soap", 10767: "Talk", 10768: "War & Politics", 37: "Western"},
+}
 DEFAULT_REGION = {"lang": "en-US", "tz": "UTC", "country": "United States"}
 DEFAULT_ADDON = {"id": "community.skald", "name": "Skald", "version": VERSION, "legacy_open": False}
 # Generic fallback; existing households are loaded from DATA/legacy.json.
@@ -200,7 +209,7 @@ def validate_history_connectors(cfg, need, data=None, environ=None):
         need(isinstance(cid, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,47}", cid), "connectors.id")
         key = "connectors." + cid
         need(isinstance(c, dict) and set(c) <= {"kind", "enabled", "auth", "options", "accounts"}, key)
-        need("accounts" not in c or cid in ("trakt_api", "mdblist"), key + ".accounts")
+        need("accounts" not in c or cid in ("trakt_api", "mdblist", "stremio"), key + ".accounts")
         need(c.get("kind") in ("file_drop", "manual_export", "api", "player", "availability"), key + ".kind")
         need(type(c.get("enabled")) is bool, key + ".enabled")
         need(c.get("auth") is None or cid == "nzbhydra" and c.get("auth") == "file:hydra.json" or
@@ -247,7 +256,7 @@ def validate_history_connectors(cfg, need, data=None, environ=None):
                 need(isinstance(opts.get(field), str) and opts[field].strip() and
                      not any(ord(ch) < 32 for ch in opts[field]), key + ".options." + field)
             need(opts.get("profile", "household") in (*cfg["household"]["members"], "household"), key + ".options.profile")
-        elif cid in ("trakt_api", "mdblist"):
+        elif cid in ("trakt_api", "mdblist", "stremio"):
             need(c["kind"] == "api", key)
             if "accounts" in c:
                 accounts = c["accounts"]
@@ -256,7 +265,7 @@ def validate_history_connectors(cfg, need, data=None, environ=None):
                 need(all(reference(value) and value.startswith("file:") for value in accounts.values()), key + ".accounts")
                 need(c.get("auth") is None and len(set(accounts.values())) == len(accounts), key + ".accounts")
             else:
-                need(cid != "mdblist" and reference(c.get("auth")), key)
+                need(cid == "trakt_api" and reference(c.get("auth")), key)
             need(all(reference(value) for value in opts.values()), key + ".options")
         elif cid == "nzbhydra":
             need(c["kind"] == "availability" and c.get("auth") == "file:hydra.json", key)
@@ -317,6 +326,22 @@ def validate_config(doc, *, data=None, environ=None):
         need(isinstance(traits.get("type", ""), str), "taste.people." + p + ".type")
         loves = traits.get("loves", [])
         need(isinstance(loves, list) and all(isinstance(t, str) for t in loves), "taste.people." + p + ".loves")
+        prefs = traits.get("prefs", {})
+        key = "taste.people." + p + ".prefs"
+        need(isinstance(prefs, dict) and set(prefs) <= {"discovery", "years", "excluded_genres"}, key)
+        need(isinstance(prefs.get("discovery", "balanced"), str) and
+             prefs.get("discovery", "balanced") in ("balanced", "mainstream", "gems"), key + ".discovery")
+        years = prefs.get("years", [None, None])
+        need(isinstance(years, list) and len(years) == 2 and
+             all(y is None or type(y) is int and 1 <= y <= 9999 for y in years), key + ".years")
+        need(years[0] is None or years[1] is None or years[0] <= years[1], key + ".years")
+        excluded = prefs.get("excluded_genres", {})
+        need(isinstance(excluded, dict) and set(excluded) <= set(TMDB_GENRES), key + ".excluded_genres")
+        for kind, values in excluded.items():
+            names = {name.casefold(): name for name in TMDB_GENRES[kind].values()}
+            need(isinstance(values, list) and all(isinstance(g, str) and g.casefold() in names for g in values),
+                 key + ".excluded_genres." + kind)
+            excluded[kind] = list(dict.fromkeys(names[g.casefold()] for g in values))
     for p in archived:
         need(isinstance(taste[p].get("likes", ""), str), "taste." + p + ".likes")
         need(type(taste[p].get("archived", True)) is bool, "taste." + p + ".archived")
@@ -466,7 +491,7 @@ def public_config(cfg):
     out["household"] = {**out["household"], "labels": {p: cfg["household"]["labels"][p] for p in (*cfg["household"]["members"], "pair")}}
     out["taste"] = {p: {k: v for k, v in traits.items() if k in ("likes", "archived", "rewatch_collections")}
                     for p, traits in cfg["taste"].items() if p in ("household", *cfg["household"]["archived"])}
-    out["taste"]["people"] = {p: {k: v for k, v in traits.items() if k in ("type", "loves")}
+    out["taste"]["people"] = {p: {k: v for k, v in traits.items() if k in ("type", "loves", "prefs")}
                                for p, traits in cfg["taste"].get("people", {}).items()}
     out.update(history=cfg["history"], connectors=copy.deepcopy(cfg["connectors"]))
     return out
@@ -1300,12 +1325,66 @@ def search_intent(query):
                                 r"najbolj\w*|svih\s+vremena|klasici|klasik\w*)\b", q) else "taste"
 
 
-def ai_plan(query):
+def seen_intent(query):
+    """Explicit viewing wishes, with negation taking precedence over watched phrases."""
+    prefix = (r"(?:(?:which|that)\s+)?(?:i|we|me|us|my|our|ich|wir|mir|uns)(?:\s+|(?=['’]))"
+              r"(?:have\s+|habe\s+|haben\s+|['’]ve\s+)?")
+    verb = r"gled(?:ao|ala|ali|ale)"
+    for intent, words in (
+        ("unseen", prefix + r"(?:(?:not\s+(?:already\s+)?|haven['’]t\s+|never\s+)(?:watched|seen)|"
+                   r"(?:noch\s+)?(?:nicht|nie)\s+gesehen)|(?:nisam|nismo)\s+(?:nikada?\s+)?" + verb +
+                   r"|new\s+to\s+(?:me|us)|unwatched|(?<!have )(?<!has )not\s+seen\s+yet(?=\s*$)"),
+        ("seen", prefix + r"(?:(?:already\s+)?(?:watched|seen)|(?:schon\s+)?gesehen)|"
+                 r"(?:watched|seen)\s+by\s+(?:me|us)|" + verb + r"\s+(?:sam|smo)|rewatch")):
+        pattern = r"(?<!\w)(?:" + words + r")(?!\w)"
+        clean, count = re.subn(pattern, "", query, flags=re.I)
+        clean = " ".join(clean.split()).strip(" ,;:-")
+        if count:
+            return intent, clean
+    return None, query
+
+
+def search_profile():
+    """The scoped member's history, or the union of current members for Together."""
+    p = _profiles.get("household") or {}
+    scope = getattr(_scoping, "scope", None)
+    if scope is None:
+        return p
+    people = PEOPLE if SCOPES[scope] == "both" else (SCOPES[scope],)
+    entries = [e for person in people for e in person_entries(p, person)] if p else []
+    return {"entries": entries, "seen": {e["key"] for e in entries},
+            "negative": {e["key"] for e in entries if e["weight"] < 0}}
+
+
+def seen_history(p):
+    entries = sorted(p.get("entries", []), key=lambda e: e["age"])
+    history = {}
+    for e in entries:
+        it = e["item"]
+        watched = (e["signal"] in ("loved", "liked", "watched") or it.get("played") or it.get("completed")
+                   or it.get("rating") is not None or (it.get("episodes_played") or 0) > 0
+                   or (it.get("progress") or 0) >= .7)
+        if watched and e["key"] in p.get("seen", ()) and e["key"] not in p.get("negative", ()):
+            history.setdefault((e["key"], e["stype"]), e)
+    return list(history.values())[:300]
+
+
+def ai_plan(query, history=None):
     """None for title searches, else the LLM's picks as [(title, year, 'movie'|'series', why)]."""
+    intent, clean = seen_intent(query)
     m = _model["m"]
     hint = taste_hint(m) if m and search_intent(query) == "taste" else ""
     taste = f"\n(Household taste, only to break ties between equally good matches: {hint})" if hint else ""
-    picks = _pool.submit(llm_picks, PICK_SYS, query + taste, 700, 6, "search", "picks")  # in parallel with the router
+    system, prompt = PICK_SYS, clean + taste
+    if intent == "unseen":
+        system += " The viewer wants titles new to them."
+    if intent == "seen":
+        system = ("Select only titles from the supplied viewing history that match the request, best first. "
+                  "Reply with up to 20 lines, nothing else, format: Title|Year|m or s|why (m=movie, s=series). "
+                  "Copy title, year and type exactly; return no lines if none match.")
+        prompt = clean + "\nViewing history:\n" + "\n".join(
+            f"{e['title']}|{e.get('year') or ''}|{'m' if e['stype'] == 'movie' else 's'}" for e in history or [])
+    picks = _pool.submit(llm_picks, system, prompt, 700, 6, "search", "picks")  # in parallel with the router
     try:
         a = decide("route_query", route_norm({"query": query}))["answer"]
     except ValueError:
@@ -1367,16 +1446,19 @@ def llm_sections(system, prompt, max_tokens, timeout, label, names, effort="none
     return out
 
 
-def ai_future(query):
+def ai_future(query, history=None):
     """One shared AI call per query: the movie and series catalogs are requested together."""
     key = query.casefold()
+    if history is not None:
+        key = (key, getattr(_scoping, "scope", None),
+               tuple((e["key"], e["title"], e.get("year"), e["stype"]) for e in history))
     with _ai_lock:
         hit = _ai.get(key)
         if hit and hit[0] > time.time():
             return hit[1]
         if len(_ai) >= CACHE_MAX:
             _ai.clear()
-        fut = _outer.submit(ai_plan, query)  # ai_plan waits on _pool leaf calls
+        fut = _outer.submit(ai_plan, query) if history is None else _outer.submit(ai_plan, query, history)  # ai_plan waits on _pool leaf calls
         _ai[key] = (time.time() + CACHE_TTL, fut)
         return fut
 
@@ -1538,9 +1620,12 @@ def superseded(query, wait):
 def search(stype, query, lang, title_only=False):
     kind = "movie" if stype == "movie" else "tv"
     plan = None
+    intent, _ = seen_intent(query)
+    p = search_profile() if intent else _profiles.get("household")
+    history = seen_history(p) if intent == "seen" else None
     if not title_only and OR_KEY and len(query) >= AI_MIN_LEN and not looks_like_title(query, lang) \
             and not superseded(query, SEARCH_SETTLE):
-        plan = ai_future(query)
+        plan = ai_future(query, history) if history is not None else ai_future(query)
     data, art = search_both(kind, query, lang)
     names = genres(kind, lang)
     q = query.casefold()
@@ -1553,9 +1638,19 @@ def search(stype, query, lang, title_only=False):
             picks = plan.result(timeout=7)
         except Exception:
             picks = None  # router/LLM failed, slow or over budget: plain TMDB results below
-        if picks:
+        if intent == "seen" and picks is not None:
+            allowed = {(e["title"].casefold(), str(e.get("year") or ""), e["stype"]): e for e in history}
+            metas, used = [], set()
+            for title, year, typ, why in picks:
+                e = allowed.get((title.casefold(), year or "", typ))
+                if e and typ == stype and e["key"] not in used:
+                    used.add(e["key"])
+                    it = {"id": e["id"], "title": e["title"], "name": e["title"],
+                          "release_date": str(e.get("year") or ""), "first_air_date": str(e.get("year") or "")}
+                    metas.append(to_meta(it, stype, kind, names, {}, AI_MARK, why))
+            return {"metas": metas}
+        if picks or (intent == "unseen" and picks is not None):
             metas = ai_search(stype, kind, picks, lang, names)
-            p = _profiles.get("household")
             seen = []
             if p:
                 metas = [x for x in metas if x["id"] not in p["negative"]]
@@ -1563,7 +1658,7 @@ def search(stype, query, lang, title_only=False):
                 metas = [x for x in metas if x["id"] not in p["seen"]]
             if search_intent(query) == "taste":
                 metas = taste_rerank(metas)
-            return {"metas": metas + seen}
+            return {"metas": metas if intent == "unseen" else metas + seen}
 
     ranked = sorted(data, key=lambda it: (exact(it), it.get("popularity") or 0), reverse=True)
     return {"metas": [to_meta(it, stype, kind, names, art.get(it["id"], {})) for it in ranked]}
@@ -1789,7 +1884,7 @@ def real_play(e):
 
 
 def _taste_accounts():
-    return {p: auth for cid in ("trakt_api", "mdblist")
+    return {p: auth for cid in ("trakt_api", "mdblist", "stremio")
             for p, auth in CONFIG["connectors"].get(cid, {}).get("accounts", {}).items()}
 
 
@@ -1798,23 +1893,28 @@ def read_trakt():
     accounts = CONFIG["connectors"].get("trakt_api", {}).get("accounts")
     items = ([{**it, "person": person} for person in accounts for it in _drop_read("trakt-" + person)]
              if accounts is not None else _drop_read("trakt"))
-    if "mdblist" not in CONFIG["connectors"]:
+    if not any(cid in CONFIG["connectors"] for cid in ("mdblist", "stremio")):
         return items
     if accounts is None:
         items = [{**it, "person": TRAKT_PERSON} for it in items]
     positions = {(it["person"], it["type"], it["id"]): n for n, it in enumerate(items)}
-    for person in CONFIG["connectors"].get("mdblist", {}).get("accounts", {}):
-        for it in _drop_read("mdblist-" + person):
-            it = {**it, "person": person}
-            n = positions.get((person, it["type"], it["id"]))
-            if n is None:
-                items.append(it)
-                continue
-            old = items[n]
-            if old.get("rating") is not None:
-                continue
-            if (bool(it.get("played")), it.get("weight", 0)) > (bool(old.get("played")), old.get("weight", 0)):
-                items[n] = it
+    for source in ("mdblist", "stremio"):
+        for person in CONFIG["connectors"].get(source, {}).get("accounts", {}):
+            for it in _drop_read(source + "-" + person):
+                it = {**it, "person": person}
+                n = positions.get((person, it["type"], it["id"]))
+                if n is None:
+                    positions[(person, it["type"], it["id"])] = len(items)
+                    items.append(it)
+                    continue
+                old = items[n]
+                if old.get("rating") is not None:
+                    continue
+                if source == "stremio" and it.get("rating") is not None and old.get("played"):
+                    items[n] = {**old, **{f: it[f] for f in ("rating", "signal", "weight")}}
+                    continue
+                if (bool(it.get("played")), it.get("weight", 0)) > (bool(old.get("played")), old.get("weight", 0)):
+                    items[n] = it
     return items
 
 
@@ -1851,6 +1951,8 @@ def _drop_path(cid):
     if cid.startswith("trakt-") and cid[6:] in CONFIG["connectors"].get("trakt_api", {}).get("accounts", {}):
         return os.path.join(DATA, cid + ".history.json")
     if cid.startswith("mdblist-") and cid[8:] in CONFIG["connectors"].get("mdblist", {}).get("accounts", {}):
+        return os.path.join(DATA, cid + ".history.json")
+    if cid.startswith("stremio-") and cid[8:] in CONFIG["connectors"].get("stremio", {}).get("accounts", {}):
         return os.path.join(DATA, cid + ".history.json")
     return {"history": os.path.join(DATA, "history.json"), "trakt": os.path.join(DATA, "trakt.json")}[cid]
 
@@ -1932,7 +2034,7 @@ def connector_seeds(now):
             enabled &= not per_person
         out[cid] = _connector(cid, cfg["kind"], TRAKT_PERSON if cid in ("trakt", "trakt_api") else "both", now,
                               auth=cfg.get("auth"), disabled=not enabled)
-        if cid in ("trakt_api", "mdblist") and "accounts" in cfg:
+        if cid in ("trakt_api", "mdblist", "stremio") and "accounts" in cfg:
             out[cid]["person"] = "both"
             out[cid]["accounts"] = {p: _connector(cid + ":" + p, "api", p, now, auth=auth, disabled=not enabled)
                                     for p, auth in cfg["accounts"].items()}
@@ -2962,6 +3064,140 @@ def _connector_mdblist(c, now, budget=None, *, readonly=False):
     return events, cursor, {"events": len(doc["items"]), "error": None}
 
 
+class StremioKeyRejected(ValueError):
+    code = 401
+
+    def __init__(self):
+        super().__init__("Stremio key rejected; reconnect with skald setup --connect stremio")
+
+
+class StremioRateLimited(ValueError):
+    code = 429
+    headers = {}
+
+    def __init__(self):
+        super().__init__("Stremio rate limit; sync stopped, try later")
+
+
+def _stremio_http(url, *, body=None, budget=None):
+    try:
+        value = _http_get(url, {"Content-Type": "application/json"} if body is not None else None,
+                          body=body, budget=budget)
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403):
+            raise StremioKeyRejected() from None
+        if error.code == 429:
+            raise StremioRateLimited() from None
+        raise ValueError("Stremio request failed") from None
+    except Exception:
+        # Likes URLs contain the key; never propagate transport exception text.
+        raise ValueError("Stremio request failed") from None
+    if not isinstance(value, dict):
+        raise SchemaMismatch()
+    if value.get("error"):
+        if any(word in json.dumps(value["error"]).lower() for word in ("session", "auth")):
+            raise StremioKeyRejected()
+        raise ValueError("Stremio request failed")
+    return value
+
+
+def _stremio_login(email, password):
+    value = _stremio_http("https://api.strem.io/api/login", body={"email": email, "password": password})
+    result = value.get("result")
+    key = result.get("authKey") if isinstance(result, dict) else None
+    if not isinstance(key, str) or not key.strip():
+        raise StremioKeyRejected()
+    return key
+
+
+def _stremio_item(row, now):
+    raw, kind = row.get("_id"), row.get("type")
+    if not isinstance(raw, str) or not re.fullmatch(r"tt[0-9]+", raw) or kind not in ("movie", "series") or row.get("removed"):
+        return None
+    state = row.get("state") or {}
+    duration, progress = state.get("duration") or 0, state.get("timeWatched") or 0
+    watched = (state.get("timesWatched") or 0) > 0 or (state.get("flaggedWatched") or 0) > 0 or duration > 0 and progress / duration >= 0.7
+    if row.get("temp") and not watched:
+        return None
+    title = _mdblist_title({"ids": {"imdb": raw}, "title": row.get("name")}, "movies" if kind == "movie" else "shows")
+    if title is None:
+        return None
+    title["plays"] = []
+    at = _connector_time(state.get("lastWatched")) if watched else None
+    if at is not None:
+        title["plays"] = [math.floor(at / 60 + 0.5)]
+    exported = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    it = _trakt_import_history({"exported_at": exported, "movies": [title], "shows": []}, now)["items"][0]
+    it.update(type=kind, played=watched, plays=max(1, state.get("timesWatched") or 0) if watched else 0,
+              signal="watched" if watched else "interest", weight=it["weight"] if at is not None else 2 if watched else 1)
+    if kind == "series" and watched:
+        episode = re.fullmatch(r"tt[0-9]+:([0-9]+):([0-9]+)", state.get("video_id") or "")
+        if episode:
+            it.update(episodes_played=1, last_episode=[int(n) for n in episode.groups()])
+    return it
+
+
+def _connector_stremio(c, now, budget=None, *, readonly=False):
+    budget = budget if budget is not None else {"bytes": 0, "pages": 0}
+    if "accounts" in c:
+        return _connector_accounts(c, now, budget, _connector_stremio)
+    key = _resolve_auth(c["auth"])
+    library = _stremio_http("https://api.strem.io/api/datastoreGet",
+        body={"authKey": key, "collection": "libraryItem", "all": True}, budget=budget).get("result")
+    if not isinstance(library, list) or any(not isinstance(row, dict) for row in library):
+        raise SchemaMismatch()
+    path = os.path.join(DATA, "stremio-" + c["person"] + ".history.json")
+    try:
+        with open(path) as fh:
+            old = json.load(fh)
+    except FileNotFoundError:
+        old = {}
+    records, items = {}, {}
+    for row in library:
+        raw = row.get("_id")
+        if not isinstance(raw, str):
+            continue
+        previous = old.get("library", {}).get(raw, {})
+        it = previous.get("item") if row == previous.get("state") else _stremio_item(row, now)
+        records[raw] = {"state": row, "item": it}
+        if it:
+            items[(it["type"], it["imdb"])] = dict(it)
+    likes, cached = {}, old.get("likes", {})
+    from skald.ingest import rating_signal
+    for level, rating in (("liked", 8), ("loved", 10)):
+        for kind in ("movie", "series"):
+            url = "https://likes.stremio.com/addons/" + level + "/movies-shows/" + urllib.parse.quote(key, safe="") + "/catalog/" + kind + "/stremio-" + level + "-" + kind + ".json"
+            metas = _stremio_http(url, budget=budget).get("metas")
+            if not isinstance(metas, list) or any(not isinstance(row, dict) for row in metas):
+                raise SchemaMismatch()
+            for meta in metas:
+                raw = meta.get("id")
+                if not isinstance(raw, str) or not re.fullmatch(r"tt[0-9]+", raw) or meta.get("type", kind) != kind:
+                    continue
+                cache_key = kind + ":" + raw
+                it = items.get((kind, raw)) or cached.get(cache_key) or _stremio_item({"_id": raw, "type": kind, "name": meta.get("name")}, now)
+                if it is None:
+                    continue
+                it = dict(it)
+                signal, weight = IMPORT_SIGNALS[rating_signal(rating)]
+                it.update(signal=signal, weight=weight, rating=rating)
+                items[(kind, raw)] = likes[cache_key] = it
+    doc = {"version": 1, "source": "stremio", "library": records, "likes": likes, "items": list(items.values())}
+    if readonly:
+        return doc, None, {"plays_30d": sum(it.get("plays", 0) for it in doc["items"]
+            if it.get("played") and now - 30 * DAY <= (it.get("at") or 0) / 1000 <= now)}
+    previous = {(it["type"], it["id"]): it for it in old.get("items", [])}
+    changed = [it for it in doc["items"] if any(it.get(f) != previous.get((it["type"], it["id"]), {}).get(f)
+        for f in ("signal", "plays", "at", "episodes_played", "last_episode", "rating"))]
+    doc["changed_at"] = now if doc["items"] != old.get("items") else old.get("changed_at", 0)
+    if any(doc[field] != old.get(field) for field in ("library", "likes", "items")):
+        doc["exported_at"] = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        _connector_write("stremio-" + c["person"] + ".history", doc, indent=2, newline=True)
+    events = list(trakt_events(now, [{**it, "person": c["person"]} for it in changed]))
+    cursor = [max(doc["changed_at"], max((_connector_time(row.get("_mtime")) or 0 for row in library), default=0)), len(doc["items"])]
+    return events, cursor, {"events": len(doc["items"]), "error": None}
+
+
 def _connector_accounts(c, now, budget, adapter):
     accounts, events = copy.deepcopy(c["accounts"]), []
     for account in accounts.values():
@@ -2972,12 +3208,14 @@ def _connector_accounts(c, now, budget, adapter):
             new_events, cursor, stats = adapter(account, now, budget)
         except Exception as error:
             account["last_error"] = type(error).__name__
-            if adapter == _connector_mdblist:
+            if adapter in (_connector_mdblist, _connector_stremio):
                 account["health"] = {"state": "error", "error": type(error).__name__, "at": now}
             if isinstance(error, MDBListKeyRejected):
                 account["health"]["fixHint"] = "MDBList key rejected; run skald setup --connect mdblist --person " + account["person"]
             elif isinstance(error, MDBListRateLimited):
                 account["health"]["fixHint"] = "MDBList rate limit; sync stopped, try later"
+            if isinstance(error, (StremioKeyRejected, StremioRateLimited)):
+                account["health"]["fixHint"] = str(error)
             if isinstance(error, TraktLoginRequired):
                 account["health"]["fixHint"] = "re-run skald trakt login --member " + account["person"]
             if getattr(error, "code", None) == 429:
@@ -3075,7 +3313,7 @@ def _connector_async(c, now):
 
 CONNECTOR_POLL = {"history": _connector_history, "trakt": _connector_trakt,
                   "aiostreams_db": _connector_player, "jellyfin": _connector_player, "plex": _connector_player,
-                  "trakt_api": _connector_trakt_api, "mdblist": _connector_mdblist}
+                  "trakt_api": _connector_trakt_api, "mdblist": _connector_mdblist, "stremio": _connector_stremio}
 
 
 def poll(c, now):
@@ -3921,6 +4159,9 @@ def taste_hash(name, items):
             signal.append(sorted((it["person"], it["id"], it.get("signal"), it.get("weight")) for it in read_trakt()))
         else:
             signal.append(sorted((it["id"], it.get("signal")) for it in read_trakt()))
+        if CONFIG["connectors"].get("stremio", {}).get("accounts"):
+            signal.append(sorted((person, it["id"], it.get("at"), it.get("episodes_played"), it.get("last_episode"))
+                for person in CONFIG["connectors"]["stremio"]["accounts"] for it in _drop_read("stremio-" + person)))
     signal.append(read_taste().get(name))
     if name == "household":
         signal.append(read_taste().get("people"))
@@ -3934,8 +4175,11 @@ def taste_hash(name, items):
 
 
 def episodes_hash(items):
-    return hashlib.sha1(json.dumps(sorted((it["id"], it.get("last_episode")) for it in items
-                                          if it["type"] == "series")).encode()).hexdigest()[:8]
+    signal = sorted((it["id"], it.get("last_episode")) for it in items if it["type"] == "series")
+    if CONFIG["connectors"].get("stremio", {}).get("accounts"):
+        signal.append(sorted((person, it["id"], it.get("at"), it.get("episodes_played"), it.get("last_episode"))
+            for person in CONFIG["connectors"]["stremio"]["accounts"] for it in _drop_read("stremio-" + person) if it["type"] == "series"))
+    return hashlib.sha1(json.dumps(signal).encode()).hexdigest()[:8]
 
 
 def refresh_profiles():
@@ -6888,6 +7132,7 @@ def catchup_feed(lang):
 
 LANE_KINDS = {"x": "feeling", "k": "theme", "d": "person", "a": "person", "n": "brand", "c": "brand"}
 LANE_CAP = {"feeling": 2, "theme": 2, "person": 1, "brand": 1}
+MAKER_NEED = 8
 LANE_TEMPLATE = {"d": "From {}", "a": "Starring {}", "n": "{} Picks for You", "c": "From {}"}
 LANE_SYS = ("You name rows on a streaming home screen. The row holds movies and series sharing one TMDB keyword. "
             "Reply with only the row title: 2 to 5 English words that name that theme plainly, Title Case, no quotes, "
@@ -6918,7 +7163,7 @@ class LaneRow(list):
         self.names = names
 
 
-def lane_titles(fid, lang):
+def lane_titles(fid, lang, makers_only=False):
     """[(key, kind, meta)] of a theme from TMDB discover or the person's credits, or of a feeling (experience)."""
     t, xid = fid.split(":", 1)
     if t == "x":
@@ -6956,6 +7201,8 @@ def lane_titles(fid, lang):
                   and (x.get("media_type") == "movie" or (x.get("episode_count") or 0) >= 4)]
         else:
             xs = [x for x in data.get("crew") or [] if x.get("job") in ("Director", "Creator", "Screenplay", "Writer")]
+            if makers_only:
+                xs = [x for x in xs if (x.get("media_type"), x.get("job")) in (("movie", "Director"), ("tv", "Creator"))]
         xs.sort(key=lambda x: -(x.get("vote_count") or 0))
         for x in xs:
             kind = "movie" if x.get("media_type") == "movie" else "tv"
@@ -6980,6 +7227,29 @@ def lane_title(fid, name, examples):
     except Exception as e:
         print(f"lane title: {type(e).__name__}: {e}", flush=True)
     return " ".join(w if w in ("on", "of", "a", "the", "and", "in") else w[:1].upper() + w[1:] for w in name.split())
+
+
+def maker_seeds(p, person):
+    """Makers with two distinct positive titles, strongest count then newest evidence."""
+    makers = {}
+    for e in person_entries(p, person):
+        if e["weight"] <= 0 or e["signal"] not in ("loved", "liked", "watched"):
+            continue
+        for mid, name in frec(e["key"], e["kind"]).get("d") or []:
+            fid = f"d:{mid}"
+            titles, _ = makers.setdefault(fid, ({}, name))
+            titles[e["key"], e["kind"]] = e["age"]
+    return [(fid, name) for fid, (titles, name) in sorted(makers.items(),
+            key=lambda pair: (-len(pair[1][0]), min(pair[1][0].values()), pair[0])) if len(titles) >= 2]
+
+
+def maker_view(names, p, who):
+    if not names.get("title", "").startswith("More from ") or not names.get("lane", "").startswith("d:"):
+        return True
+    owners = {person for person in PEOPLE if names["lane"] in dict(maker_seeds(p, person))}
+    if who in (None, "none"):
+        return bool(owners)
+    return set(PEOPLE) <= owners if who == "both" else who in owners
 
 
 def lanes_feed(lang):
@@ -7025,32 +7295,47 @@ def lanes_feed(lang):
     top_o = max((a for fid, a in cands if fid[0] != "x"), default=0)
     xscale = top_o / top_x if top_x and top_o else 1.0
     themes = sorted(((priority(fid, a * xscale if fid[0] == "x" else a), fid) for fid, a in cands), reverse=True)
+    makers, maker_themes = {}, []
+    for person in PEOPLE:
+        for fid, name in maker_seeds(p, person)[:3]:
+            makers[fid] = name
+            maker_themes.append((0, fid, person))
+    themes = [(pr, fid, None) for pr, fid in themes]
+    if makers:
+        themes = maker_themes + [(pr, fid, person) for pr, fid, person in themes if not fid.startswith("d:")]
     exclude = p["seen"] | p["negative"]
     front = set()
     for cid in DEDUPE_ORDER[:DEDUPE_ORDER.index(LANES[0])]:
         for typ in (("movie", "series") if cid == rid('top10') else ("tv",) if cid in MIXED else ("series",)):
             front = mark_above(front, cid, row_list(cid, typ, lang, built=True))
     chosen, used, tries, taken, hero_lane = [], {}, 0, set(), False
+    maker_members, hidden = set(), remote_masks()[0] if makers else set()
     local = list(row_pool(lang))
-    for pr, fid in themes:
+    for pr, fid, person in themes:
         if len(chosen) == len(LANE_ROWS) or tries >= 40:
             break
         kind = LANE_KINDS[fid[0]]
-        if len(chosen) < len(LANES) and used.get(kind, 0) >= LANE_CAP[kind]:
+        if person in maker_members:
+            continue
+        if person is not None and any(chosen_fid == fid for chosen_fid, *_ in chosen):
+            maker_members.add(person)
+            continue
+        if fid not in makers and len(chosen) < len(LANES) and used.get(kind, 0) >= LANE_CAP[kind]:
             continue
         tries += 1
         try:
-            items = [x for x in lane_titles(fid, lang) if x[0] not in exclude]
+            items = [x for x in (lane_titles(fid, lang, makers_only=True) if fid in makers else lane_titles(fid, lang))
+                     if x[0] not in exclude and (fid not in makers or x[0] not in hidden)]
         except Exception as e:
             print(f"lane {fid}: {type(e).__name__}: {e}", flush=True)
             items = []
         cached = [(x["id"], "movie" if x["type"] == "movie" else "tv", x) for x in local
-                  if x["id"] not in exclude and lane_member(x, fid)]
+                  if fid not in makers and x["id"] not in exclude and lane_member(x, fid)]
         ids = {x[0] for x in items}
         items += [x for x in cached if x[0] not in ids]
         tired = tired_keys({f"lane:{fid}"})
         items = [x for x in items if x[0] not in tired]
-        need = 16  # Snapshot lanes lost 4-6 cards after build; keep ten beyond that loss.
+        need = MAKER_NEED if fid in makers else 16  # Snapshot lanes lost 4-6 cards after build; keep ten beyond that loss.
         if len(items) < need:
             print(f"lane {fid}: only {len(items)} unseen", flush=True)
             continue
@@ -7062,12 +7347,15 @@ def lanes_feed(lang):
         if len(chosen) < len(LANES) and superhero and hero_lane:
             continue
         fresh = list({x["id"]: x for x in metas if x["id"] not in taken | front}.values())[:ROW_MAX]
-        title = (lanes.get(fid) or {}).get("title") or lane_title(fid, m["names"][fid], [x["name"] for x in fresh])
+        title = f"More from {makers[fid]}" if fid in makers else \
+                (lanes.get(fid) or {}).get("title") or lane_title(fid, m["names"][fid], [x["name"] for x in fresh])
         if len(fresh) < need or not lane_allowed(fresh, title):
             print(f"lane {fid}: {len(fresh)} fresh of {len(metas)}", flush=True)
             continue
         hero_lane |= superhero
         used[kind] = used.get(kind, 0) + 1
+        if person is not None:
+            maker_members.add(person)
         taken |= {x["id"] for x in fresh}
         chosen.append((fid, fresh, reserve, title))
     slots, free = {}, [c for c in LANES]
@@ -7093,7 +7381,7 @@ def lanes_feed(lang):
         lanes[fid] = st
         _learn_dirty.set()
         out[cid] = {"tv": metas, "pool": reserve}
-        names[cid] = {"title": st["title"], "lane": fid}
+        names[cid] = {"title": title, "lane": fid}
     print("lanes: " + ", ".join(f"{n['title']} ({n['lane']})" for n in names.values()), flush=True)
     return {**out, "_names": names}
 
@@ -8054,7 +8342,7 @@ def backup_state(now, *, archive_name=None):
     opened, skipped, files = {}, {}, {}
     tmp = None
     try:
-        for name in (*BACKUP_FILES, *(source + "-" + p + ".history.json" for source, cid in (("trakt", "trakt_api"), ("mdblist", "mdblist"))
+        for name in (*BACKUP_FILES, *(source + "-" + p + ".history.json" for source, cid in (("trakt", "trakt_api"), ("mdblist", "mdblist"), ("stremio", "stremio"))
                                         for p in CONFIG["connectors"].get(cid, {}).get("accounts", {}))):
             if name in ("skald.json", ".skald-household"):
                 continue
@@ -8298,6 +8586,7 @@ _pin_lock = threading.RLock()
 def pin_decision(lang):
     # Lock order: _pin_lock -> _home_lock -> _feeds_lock; _connectors_lock is a leaf, taken alone; row evaluation holds neither home nor feeds lock.
     with _pin_lock:
+        refresh_preferences()
         masks, p, m = remote_masks(), _profiles.get("household"), get_model(False)
         # Each session's served rows apply its own memory veto (W10b); none and both differ there.
         masks_by = {who: (*masks, veto_keys(who)) for who in ("none", *PEOPLE, "both")}
@@ -8330,7 +8619,8 @@ def pin_decision(lang):
                     rows = {who: served_row(cid, "tv", lang, p or {}, ids, masks_by[who], who=who) for who, ids in above.items()}
                     if not bench:
                         primary_rows = rows
-                    if all(len(row) >= ROW_MIN for row in rows.values()):
+                    if all(len(row) >= ROW_MIN or not maker_view(candidate.get("names") or {}, p or {"entries": []}, who)
+                           for who, row in rows.items()):
                         break
                 else:
                     records[cid, lang] = primary
@@ -8599,6 +8889,8 @@ def row_meta(it, stype, kind, names, en, mark="", note="", collection=None):
     meta = to_meta(it, stype, kind, names, en, mark, note)
     col = it.get("belongs_to_collection") or en.get("belongs_to_collection") or {}
     meta["_row"] = {"votes": it.get("vote_count"), "rating": it.get("vote_average"),
+                    "popularity": it.get("popularity"),
+                    "genre_ids": it.get("genre_ids") or [g["id"] for g in it.get("genres") or [] if "id" in g],
                     "date": it.get("release_date") or it.get("first_air_date"), "collection": collection or col.get("id"),
                     "collection_name": col.get("name"),
                     "c": en.get("production_companies") or it.get("production_companies") or [],
@@ -9074,8 +9366,57 @@ def row_animation(cid):
         "Animation" in frec(k, profile_kind(k)).get("g", ()) for k in explicit_seeds(ROW_OWNER[cid]))
 
 
+def row_preferences(cid, who):
+    person = ROW_OWNER.get(cid, who)
+    people = [person] if person in PEOPLE else PEOPLE if person in ("both", "together") else []
+    settings = CONFIG["taste"].get("people", {})
+    return person, [settings.get(p, {}).get("prefs", {}) for p in people]
+
+
+def preference_ok(meta, cid, who):
+    person, prefs = row_preferences(cid, who)
+    if not any(prefs):
+        return True
+    facts = row_facts(meta)
+    kind = meta["type"]
+    genre_ids = facts.get("genre_ids")
+    names = {TMDB_GENRES[kind][g].casefold() for g in genre_ids if g in TMDB_GENRES[kind]} if genre_ids else {
+        GENRE_ALIASES.get(g, g).casefold() for g in facts["g"]}
+    if any(names & {(g if genre_ids else GENRE_ALIASES.get(g, g)).casefold()
+                    for g in pref.get("excluded_genres", {}).get(kind, [])} for pref in prefs):
+        return False
+    if person in PEOPLE:
+        low, high = prefs[0].get("years", [None, None])
+        if low is not None or high is not None:
+            year = (facts.get("date") or meta.get("releaseInfo") or "")[:4]
+            if not year.isdigit() or low is not None and int(year) < low or high is not None and int(year) > high:
+                return False
+    return True
+
+
+def preference_order(metas, cid, who):
+    person, prefs = row_preferences(cid, who)
+    style = prefs[0].get("discovery", "balanced") if person in PEOPLE else "balanced"
+    if style == "balanced" or len(metas) < 2:
+        return metas
+    m = get_model(False)
+    facts = [row_facts(x) for x in metas]
+    # shortcut: old feed cards lack popularity; use vote counts until their builder refreshes.
+    popularity = [f.get("popularity") if f.get("popularity") is not None else math.log1p(f.get("votes") or 0) for f in facts]
+    pmax = max(popularity) or 1
+    w_quality, w_pop, w_taste = (.2, .5, .3) if style == "mainstream" else (.6, -.1, .3)
+    scores = []
+    for x, f, pop in zip(metas, facts, popularity):
+        score = score_key(m, x["id"], person, "movie" if x["type"] == "movie" else "tv")[0]
+        taste = match_pct(m, score, person) if score is not None else None
+        scores.append(w_quality * (f.get("rating") or 0) / 10 + w_pop * pop / pmax + w_taste * (taste if taste is not None else 50) / 100)
+    return [metas[i] for i in sorted(range(len(metas)), key=lambda i: -scores[i])]
+
+
 def row_eligible(meta, cid, lang, p, animation=None):
     viewer, kind = _viewer.get(), "movie" if meta["type"] == "movie" else "tv"
+    if not preference_ok(meta, cid, viewer):
+        return False
     if viewer in PEOPLE and _taste_accounts():
         known = any(e["key"] == meta["id"] and e["kind"] == kind for e in p.get("entries", []))
         if known and not any(e["key"] == meta["id"] and e["kind"] == kind for e in person_entries(p, viewer)):
@@ -9379,6 +9720,8 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
                        or (value["item"].get("episodes_played") or 0) > 0 or (value["item"].get("progress") or 0) >= .7}
             metas = [x for x in metas if (x["id"], "movie" if x["type"] == "movie" else "tv") in watched]
         names = feed(cid, lang).get("names") or {}
+        if cid in LANE_ROWS and not maker_view(names, p, who):
+            return LaneRow([], names)
         animation = row_animation(cid)
         if cid == rid('episodes') and len(metas) < 12:
             catchup = [x for x in row_list(rid('catchup'), "tv", lang) if x["type"] == "series"]
@@ -9425,6 +9768,7 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
             scores = week_scores(metas)
             metas.sort(key=lambda x: (x["id"] in curated, week_score(x, scores)[1]), reverse=True)
         if who in PEOPLE and cid in PERSON_ROWS | set(LANE_BENCH): metas = person_order(metas, who)
+        metas = preference_order([x for x in metas if preference_ok(x, cid, _viewer.get())], cid, _viewer.get())
         if cid in PERSON_ROWS:
             annotated, n = [], 0
             for x in metas:
@@ -9472,7 +9816,7 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
         if cid in MOODS_ROWS:
             metas = mood_heroes(metas)
         if cid == rid('week'):
-            tail = week_tail(metas, lang, p, above, masks, tail_candidates)
+            tail = [x for x in week_tail(metas, lang, p, above, masks, tail_candidates) if preference_ok(x, cid, _viewer.get())]
             head_ids = {x["id"] for x in metas}
             rotated = rotate_row(metas + tail, cid)
             # Franchise ordering during rotation must not pull a tail original into the head.
@@ -9522,7 +9866,41 @@ def build_home(lang, p, masks, who):
     return rows
 
 
+_prefs_stamp = None
+
+
+def refresh_preferences():
+    global _prefs_stamp, _pin_epoch
+    if CONFIG_SOURCE not in ("file", "env"):
+        return
+    path = os.environ.get("SKALD_CONFIG") or os.path.join(DATA, CONFIG_NAME)
+    with _home_lock:
+        try:
+            st = os.stat(path)
+        except FileNotFoundError:
+            if CONFIG_SOURCE == "env":
+                return  # Read-only tools can use an unpublished first-run config.
+            raise
+        stamp = (path, st.st_ino, st.st_mtime_ns, st.st_size)
+        if stamp == _prefs_stamp:
+            return
+        with open(path, encoding="utf-8") as fh:
+            cfg = validate_config(json.load(fh, parse_constant=invalid_json), data=DATA)
+        # Other household changes still require a restart.
+        for person in PEOPLE:
+            traits = CONFIG["taste"].setdefault("people", {}).setdefault(person, {})
+            prefs = cfg["taste"].get("people", {}).get(person, {}).get("prefs")
+            if prefs is None:
+                traits.pop("prefs", None)
+            else:
+                traits["prefs"] = prefs
+        _home_cache.clear()
+        _pin_epoch += 1
+        _prefs_stamp = stamp
+
+
 def row_metas(cid, typ, lang, who=None):
+    refresh_preferences()
     if not _HOME_CACHE_ENABLED or cid not in DEDUPE_ORDER or typ not in (MIX if cid in MIXED else ("movie", "series") if cid == rid('top10') else ("series",)):
         if who is None:
             return _row_metas_uncached(cid, typ, lang)
