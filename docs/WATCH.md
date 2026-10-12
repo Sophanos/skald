@@ -26,15 +26,17 @@ By hand instead:
 - Add The Movie Database addon with only Meta/details on, so title pages show.
 - The TMDB key under Services → Metadata does not fill title pages.
 
-Stremio can use the same AIOStreams URL; that path should work, not yet tested by us.
+Stremio can use the AIOStreams Stremio link printed by setup; self-hosted on the same machine is tested by us.
 AIOStreams is a separate project with its own [docs and licence](https://github.com/Viren070/AIOStreams).
 We reference its published image. Configure its stream addons for playback.
 
 Stremio direct — should work, not yet tested by us.
 Open the printed member URL (or Together) in Stremio → Install.
 Skald only adds rows and search; keep your stream addons for playback.
+Skald does not see what you watch in Stremio; turn on Trakt in Stremio and run `skald setup --connect trakt`, or import history.
 
-AIOStreams in Stremio, self-hosted or ElfHosted — should work, not yet tested by us.
+AIOStreams in Stremio, self-hosted on the same machine — tested by us.
+Skald does not see what you watch in Stremio; turn on Trakt in Stremio and run `skald setup --connect trakt`, or import history.
 Run `skald setup aiostreams` first. It makes a login with Skald and title details.
 Existing users: `skald setup aiostreams --uuid <your uuid>` adds Skald to your current login
 and changes nothing else. It asks before saving the additions.

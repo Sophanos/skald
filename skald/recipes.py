@@ -4,8 +4,10 @@ from urllib.parse import urlsplit
 RECIPES = {
     'stremio': '''Stremio direct — should work, not yet tested by us.
 Open the printed member URL (or Together) in Stremio → Install.
-Skald only adds rows and search; keep your stream addons for playback.''',
-    'aiostreams': '''AIOStreams in Stremio, self-hosted or ElfHosted — should work, not yet tested by us.
+Skald only adds rows and search; keep your stream addons for playback.
+Skald does not see what you watch in Stremio; turn on Trakt in Stremio and run `skald setup --connect trakt`, or import history.''',
+    'aiostreams': '''AIOStreams in Stremio, self-hosted on the same machine — tested by us.
+Skald does not see what you watch in Stremio; turn on Trakt in Stremio and run `skald setup --connect trakt`, or import history.
 Run `skald setup aiostreams` first. It makes a login with Skald and title details.
 Existing users: `skald setup aiostreams --uuid <your uuid>` adds Skald to your current login
 and changes nothing else. It asks before saving the additions.
@@ -43,11 +45,12 @@ every 10 minutes; "skald" is its Docker hostname. Restart AIOStreams after chang
 Rows appear once they have enough titles; a new household starts with a few and gains more as Skald learns your taste.''',
 }
 FILES = '''Import a file on your laptop, then preview before sending:
-python3 -m skald import netflix ViewingActivity.csv --person {person} --remote --dry-run
+The laptop needs TMDB_API for title lookups.
+python3 -m skald import netflix ViewingActivity.csv --person {person} --remote --resolve-online --dry-run
 Other sources: imdb ratings.csv; letterboxd ratings.csv; trakt export-folder;
 youtube watch-history.json; chrome History (copy the browser database first).
 Use python3 -m skald onboard --sources for export instructions.
-Save a reviewed import with the same command without --dry-run and with --yes --resolve-online (allows TMDB lookups).
+Save a reviewed import with the same command without --dry-run and with --yes.
 python3 -m skald push imports --remote
 After reviewing the preview: python3 -m skald push imports --remote --apply'''
 
@@ -87,7 +90,7 @@ By hand instead:
 - Add The Movie Database addon with only Meta/details on, so title pages show.
 - The TMDB key under Services → Metadata does not fill title pages.
 
-Stremio can use the same AIOStreams URL; that path should work, not yet tested by us.
+Stremio can use the AIOStreams Stremio link printed by setup; self-hosted on the same machine is tested by us.
 AIOStreams is a separate project with its own [docs and licence](https://github.com/Viren070/AIOStreams).
 We reference its published image. Configure its stream addons for playback.
 '''

@@ -1,120 +1,120 @@
 # Skald
 
-Skald makes personal rows and search for your household, with a shared Together view.
-It learns from watch history and ratings. Your existing streaming addons still play things.
+Skald runs one container per household and serves personal rows and search as a Stremio addon. It learns from plays, ratings and imports. It does not play anything; your stream addons do.
 
-## What you need
+## How it fits
 
-- A free [TMDB API key](https://www.themoviedb.org/settings/api).
-- A machine with Docker and Docker Compose.
-- An HTTPS address if watching apps outside your network must reach the stack.
-- Optional: an OpenRouter key for AI picks, natural-language search, mood shelves and weekly picks.
-  Rows and title search work without it.
+```mermaid
+flowchart LR
+    H[AIOStreams history from Odin and Jellyfin apps] --> S[Skald]
+    T[Trakt: Stremio can send plays here] --> S
+    J[Jellyfin or Plex history] --> S
+    I[Imports] --> S
+    S --> A[AIOStreams adds your stream addons]
+    A --> O[Odin and Jellyfin apps]
+    A --> V[Stremio]
+    V -.->|Trakt on| T
+    O --> H
+    S -.-> D[Stremio with Skald's own link: rows only]
+```
+
+## Pick your setup
+
+| You watch in | Connect with | Skald learns from | Tested |
+|---|---|---|---|
+| Odin / Jellyfin apps | AIOStreams Jellyfin mode | AIOStreams database connector | Yes, Odin on Apple TV |
+| Stremio via AIOStreams | Stremio link from `skald setup aiostreams` | Trakt or imports | Yes, self-hosted 2.35.9 on the same machine |
+| Stremio with Skald's link | Printed member or Together link, rows only | Trakt or imports | No |
+| Plex | Keep playback; import history | Plex history connector or imports | No |
+| ElfHosted AIOStreams | Add Skald's HTTPS manifest URL | Trakt or imports | No |
+
+Stremio viewing reaches Skald only through Trakt.
+Stremio keeps viewing in your account, which addons cannot read. AIOStreams records no Stremio playback.
+The tested Stremio path shows all rows, title pages and AI search. Mixed rows show as “TV channel”.
 
 ## Quickstart
 
-Run on the data machine:
+Use Docker and Docker Compose on your data machine. Get a free [TMDB API key](https://www.themoviedb.org/settings/api).
+
 ```sh
 git clone https://github.com/Sophanos/skald skald && cd skald
 mkdir -p data && sudo chown 65534 data && sudo chmod 700 data
 cp .env.example .env && cp .env.aiostreams.example .env.aiostreams && chmod 600 .env .env.aiostreams
 ${EDITOR:-vi} .env .env.aiostreams
+```
+
+Put `TMDB_API=YOUR_KEY` and optional `OPENROUTER_API_KEY=YOUR_KEY` in `.env`.
+Delete the `SKALD_MEMBERS`, `SKALD_LANG` and `SKALD_TZ` lines from `.env`.
+Setup asks for names, language and timezone. Skald runs as user 65534 and keeps DATA private.
+Make the AIOStreams secret with `openssl rand -hex 32`; set it and the public HTTPS address in `.env.aiostreams`.
+
+```sh
 docker compose -f compose.stack.example.yaml up -d --build
 docker compose -f compose.stack.example.yaml exec skald skald setup
+docker compose -f compose.stack.example.yaml exec skald skald setup aiostreams
 ```
 
-Put `TMDB_API=YOUR_KEY` and `OPENROUTER_API_KEY=YOUR_KEY` in `.env`.
-Delete the `SKALD_MEMBERS`, `SKALD_LANG` and `SKALD_TZ` lines from `.env`;
-setup asks for household names, language and timezone instead.
-Set the AIOStreams secret and public HTTPS address in `.env.aiostreams`.
-The empty Skald container waits for setup. Follow its printed next steps.
-Use [the setup guide](docs/SETUP.md) for HTTPS and laptop imports. An agent can use `skald setup --status`, then run the printed next command.
+The empty Skald container waits for setup. Follow the printed next steps. Setup makes your AIOStreams login with Skald and TMDB title details.
+Add the printed server in Odin and use the printed user and password, or install the printed Stremio link.
+Configure your stream addons in AIOStreams. Connect `aiostreams-db` below to learn from Odin viewing.
+[AIOStreams](https://github.com/Viren070/AIOStreams) is a separate project with its own docs and licence. We use its published image.
 
-## Recommended: the setup we run
-
-Tested by us. OpenRouter adds natural-language AI search to this setup.
-Only AIOStreams needs an HTTPS address. Skald stays inside the Docker network.
-
-```text
-Apple TV app (Odin) → AIOStreams (Jellyfin mode, HTTPS) → Skald (internal)
-```
-
-1. Run `mkdir -p data && sudo chown 65534 data && sudo chmod 700 data`.
-   Skald runs as user 65534 and keeps DATA private.
-2. Copy `.env.example` to `.env` and `.env.aiostreams.example` to `.env.aiostreams`.
-   Set TMDB and OpenRouter keys in `.env`. Make the AIOStreams secret with
-   `openssl rand -hex 32`; set its public HTTPS address in `.env.aiostreams`.
-3. Run `docker compose -f compose.stack.example.yaml up -d --build`.
-4. Run `docker compose -f compose.stack.example.yaml exec skald skald setup`.
-5. Run `docker compose -f compose.stack.example.yaml exec skald skald setup aiostreams`.
-   It makes your AIOStreams login with Skald and title details, and prints the Odin login.
-6. Add the printed server in Odin. Log in with the printed user and password.
-
-By hand instead:
+AIOStreams by hand instead:
 
 - Add Skald as a custom addon with the printed internal URL.
 - Add The Movie Database addon with only Meta/details on, so title pages show.
 - The TMDB key under Services → Metadata does not fill title pages.
 
-Stremio can use the same AIOStreams URL; that path should work, not yet tested by us.
-AIOStreams is a separate project with its own [docs and licence](https://github.com/Viren070/AIOStreams).
-We reference its published image. Configure its stream addons for playback.
+Stremio only, without AIOStreams: copy only `.env`, edit it as above, then run `docker compose up -d --build`.
+Run `docker compose exec engine skald setup --watch stremio` and install the printed link.
 
-## Where you watch
+## Reach it from outside
 
-| App | How to connect | What we have tried |
-|---|---|---|
-| Stremio | Install the printed member or Together URL | Should work, not yet tested by us |
-| AIOStreams in Stremio | Add Skald as a custom addon | Should work, not yet tested by us |
-| ElfHosted AIOStreams | Add the HTTPS manifest URL | Should work, not yet tested by us |
-| Jellyfin apps / Odin on Apple TV | Use AIOStreams' Jellyfin server mode | Tested by us |
-| Plex | Keep your Plex playback; optionally import its history | Should work, not yet tested by us |
-
-Follow [the watching recipes](docs/WATCH.md). Keep your stream addons for playback.
-For Stremio direct, copy only `.env`, then run
-`docker compose up -d --build` and `docker compose exec engine skald setup --watch stremio`.
+Only AIOStreams needs an HTTPS address for apps outside your home network. Set up your own reverse proxy or tunnel. Skald stays inside the Docker network.
 
 ## Teach it your taste
 
-| Source | What to use |
-|---|---|
-| Netflix | Viewing-history CSV; map each profile to a member |
-| IMDb | Ratings or watchlist CSV |
-| Letterboxd | Export folder with ratings, diary, watched and likes |
-| Trakt export | JSON export folder |
-| YouTube | Takeout watch-history JSON |
-| Chrome | A copy of the browser history database |
-| Plain text | A file with one title per line |
-| Trakt API | `skald setup --connect trakt` |
-| Jellyfin | `skald setup --connect jellyfin` |
-| Plex history | `skald setup --connect plex` |
-| AIOStreams database | `skald setup --connect aiostreams-db` |
+Imports run on a laptop with Python 3.12 and a clone of this repo. First [make the laptop API reachable](docs/SETUP.md#6-link-a-laptop-optional).
 
-Start with `skald setup --connect files` for imports, or choose a connected source.
-See [connectors and their limits](docs/CONNECTORS.md) and [commands by task](docs/CLI.md).
+1. On the server: `docker compose -f compose.stack.example.yaml exec skald skald setup link --name laptop`. This token covers every member. Adding `--person alex` limits it to Alex; pushing another member's imports fails with 403.
+2. On the laptop: `python3 -m skald connect http://127.0.0.1:8081 --token-stdin`. Use your own API address and paste the token.
+3. Preview: `TMDB_API=YOUR_KEY python3 -m skald import imdb ratings.csv --person NAME --remote --resolve-online --dry-run`. To save, repeat without `--dry-run` and with `--yes`. Keep `TMDB_API` and `--resolve-online`. With `--remote` alone, even IMDb ids stay in review.
+4. `python3 -m skald push imports --remote` previews the send. Add `--apply` to send.
+
+For the connector commands below, use the server prefix `docker compose -f compose.stack.example.yaml exec skald`.
+
+| Source | Import kind and file |
+|---|---|
+| Netflix viewing CSV, with profile mapping | `netflix ViewingActivity.csv` |
+| IMDb ratings or watchlist CSV | `imdb ratings.csv` |
+| Letterboxd export with ratings, diary, watched and likes | `letterboxd export-folder` |
+| Trakt JSON export | `trakt export-folder` |
+| YouTube Takeout history | `youtube watch-history.json` |
+| Chrome history database copy | `chrome History` |
+| Plain text, one title per line | `plain titles.txt` |
+| Trakt API | `skald setup --connect trakt` |
+| Jellyfin server history | `skald setup --connect jellyfin` |
+| Plex history | `skald setup --connect plex` |
+| AIOStreams database: watched state, progress, favourites and ratings from Jellyfin apps | `skald setup --connect aiostreams-db` |
+
+For Stremio, turn on Trakt in Stremio settings and connect Trakt here. A Trakt API app may need VIP; JSON imports need no API app.
+Clicks and opened title pages are not recorded. Skald learns from plays, ratings and imports.
+After imports or new connector data, rows update on the next eligible build: a background loop pauses 60 seconds between passes, most taste based rows have a 30 to 60 minute rebuild limit, and some follow longer schedules.
 
 ## Search
 
-Title search always works. With OpenRouter, ask for “cozy mystery for a rainy evening”.
+Title search works without OpenRouter. With it, ask for “cozy mystery for a rainy evening” and get AI picks, mood shelves and weekly picks.
 
 ## Privacy
 
-Household history and taste stay on your machine.
-TMDB receives title lookups; optional OpenRouter receives taste and history context.
-AniList receives anime titles, which can come from your history. Optional NZBHydra receives
-titles for availability checks. Configured connectors receive requests for your history.
-Keep private addon links, tokens, data and backups private.
-Anyone with the household addon link can choose any member's rows.
+Household history and taste stay on your machine. TMDB receives title lookups. Optional OpenRouter receives taste and history context. AniList receives anime titles, possibly from your history. Optional NZBHydra receives titles for availability checks. Configured connectors receive history requests.
+Keep addon links, tokens, data and backups private. Anyone with the household addon link can choose any member's rows.
 
 ## Status
 
-Self-hosted, one household per container, one to six members.
-Check progress with `docker compose -f compose.stack.example.yaml exec skald skald setup --status`.
-Live services and Docker are separate from the offline test suite.
-See [backups and upgrades](docs/UPGRADE.md) before updating.
+One household per container, one to six members. Live services and Docker are separate from offline tests. Check progress with `docker compose -f compose.stack.example.yaml exec skald skald setup --status`.
+See [setup](docs/SETUP.md), [watching](docs/WATCH.md), [connectors](docs/CONNECTORS.md), [backups and upgrades](docs/UPGRADE.md), and [commands](docs/CLI.md).
 
 ## License
 
-[GNU AGPL-3.0](LICENSE).
-This product uses TMDB and the TMDB APIs but is not endorsed, certified,
-or otherwise approved by TMDB.
+[GNU AGPL-3.0](LICENSE). This product uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB.

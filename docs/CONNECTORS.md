@@ -85,6 +85,7 @@ Plex should work, not yet tested by us.
 ## AIOStreams database
 
 **You get:** watched episodes, films, progress, favourites and ratings from AIOStreams viewing.
+Only viewing in Jellyfin apps such as Odin is recorded here; Stremio viewing is not.
 **You need:** the actual SQLite database mounted read-only inside the engine.
 Mount its directory so SQLite can see the matching `-wal` and `-shm` files too.
 The engine user must be able to read them. ElfHosted may not expose this database.
@@ -127,7 +128,8 @@ python3 -m skald onboard --sources
 | One title per line | `python3 -m skald import plain titles.txt --dry-run` |
 
 Review first. Remove `--dry-run` and add `--yes` to save an import.
-`--resolve-online` allows TMDB lookups and needs `TMDB_API` in the laptop environment; `--remote` uses the linked server to resolve titles.
+With `--remote` alone, titles stay in review, even when they have IMDb ids.
+Add `--resolve-online` for TMDB lookups and set `TMDB_API` in the laptop environment.
 Keep originals local. Run `push imports --remote` to preview the send;
 after a yes, add `--apply`. There is no SSH in this route.
 The older route without `--remote` uses SSH and requires your explicit `SKALD_SSH_HOST`.
