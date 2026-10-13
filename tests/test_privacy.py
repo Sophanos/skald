@@ -83,7 +83,7 @@ class PrivacyTests(unittest.TestCase):
         with mock.patch.object(self.s, "manifest", return_value={}), \
                 mock.patch.object(self.s, "feed_rows", return_value=[(rid('foryou', self.s.CONFIG), ["tv"], "For you")]), \
                 mock.patch.object(self.s, "row_metas", return_value=[]), \
-                mock.patch.object(self.s, "note_served"), mock.patch.object(self.s, "log_search"), \
+                mock.patch.object(self.s, "note_served"), mock.patch.object(self.s, "log_search", return_value=(None, True)), \
                 mock.patch.object(self.s, "search", return_value={"metas": []}) as search:
             for path in ("/de-DE/manifest.json", f"/de-DE/catalog/tv/{rid('foryou', self.s.CONFIG)}.json",
                          f"/de-DE/catalog/movie/{rid('search', self.s.CONFIG)}/search=.json",

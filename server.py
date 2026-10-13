@@ -58,7 +58,7 @@ from types import SimpleNamespace
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.4.4"
+VERSION = "1.4.6"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -714,6 +714,7 @@ AI_MARK = "✨ "
 AI_MIN_LEN = 4
 SEARCH_SETTLE = 0.35  # seconds a non-title query waits for the next keystroke before spending an AI call
 AI_SEARCH_TTL = 24 * 60 * 60
+SEARCH_HISTORY_LIMIT = 1200  # Prompt only; watched filtering uses the complete scoped history.
 SEARCH_ORDER = "parallel"
 SEARCH_CHANNELS = {"title": "tmdb", "command": "command", "request": "picker", "discover": "picker"}
 ROUTE_MODEL = os.environ.get("SKALD_ROUTE_MODEL") or "perplexity/pplx-decider-v1.1-27b"
@@ -1506,7 +1507,7 @@ decision("route_query", ver=6, lane="search", cap=None, ttl=30 * DAY,
     inp={"query": str, "last": (str, None), "shown": (str, [str, 30], None), "context_key": (str, None)}, out={"choice": ("title", "discover", "request", "command", None), "confidence": (float, None),
                            "watched": ("unseen", "seen", "any", None), "list": ("best", "taste", None), "previous": ("new", "refine", "act", None)},
     norm=route_norm, rule=None, params={},
-    llm={"path": "/api/alpha/decisions", "model": ROUTE_MODEL, "batch": 1, "timeout": 4,
+    llm={"path": "/api/alpha/decisions", "model": ROUTE_MODEL, "batch": 1, "timeout": 2.5,
          "prompt": lambda b: {"model": ROUTE_MODEL, "state": route_state(b[0]), "questions": ROUTE_FOLLOWUP_Q if "last" in b[0] else ROUTE_Q}, "parse": route_parse},
     fallback=lambda inp, err: ({"choice": None, "confidence": None, "watched": "any", "list": "taste"}, 0),
     requires=(), serving=False, min_acc=.95)
@@ -1598,7 +1599,8 @@ def search_profile():
 
 
 def seen_history(p):
-    entries = sorted(p.get("entries", []), key=lambda e: e["age"])
+    entries = sorted(p.get("entries", []),
+                     key=lambda e: (e["age"] == 999, -e["weight"] if e["age"] == 999 else e["age"]))
     history = {}
     for e in entries:
         it = e["item"]
@@ -1607,48 +1609,84 @@ def seen_history(p):
                    or (it.get("progress") or 0) >= .7)
         if watched and e["key"] in p.get("seen", ()) and e["key"] not in p.get("negative", ()):
             history.setdefault((e["key"], e["stype"]), e)
-    return list(history.values())[:300]
+    return list(history.values())
 
 
-def search_picks(query, history, listing="taste"):
+def search_person():
+    person = SCOPES.get(getattr(_scoping, "scope", None))
+    return person if person in PEOPLE and (_model["m"] or {}).get("paff", {}).get(person) else None
+
+
+def search_picks(query, history, listing="taste", stype="movie", person=...):
+    if person is ...:
+        person = search_person()
     m = _model["m"]
-    hint = taste_hint(m) if m and listing != "best" else "none available"
+    hint = taste_hint(m, person) if m and listing != "best" else "none available"
     taste = f"\nHousehold taste (use only for personal taste requests; ignored for best-of/consensus lists): {hint}" if listing != "best" else ""
     prompt = (query + taste +
               "\nViewing history (if the request wants titles new to the viewer, skip these; "
               "if it asks for titles they watched, choose only from these):\n" + "\n".join(
-                  f"{e['title']}|{e.get('year') or ''}|{'m' if e['stype'] == 'movie' else 's'}" for e in history[:200]))
-    return _pool.submit(llm_picks, PICK_SYS, prompt, 1400, 6, "search", "picks")
+                  f"{e['title']}|{e.get('year') or ''}|{'m' if e['stype'] == 'movie' else 's'}" for e in history[:SEARCH_HISTORY_LIMIT]))
+    titles, code = ("movies", "m") if stype == "movie" else ("series", "s")
+    type_instruction = (
+        "This catalog shows movies only: every line is a movie, never series. 'shows' or 'series' (in any language) means series only: if the request asks only for series, reply with the single word NONE. Otherwise give 18 movies."
+        if stype == "movie" else
+        "This catalog shows series only: every line is a series, never movies. 'movies' or 'films' (in any language) means movies only: if the request asks only for movies, reply with the single word NONE. Otherwise give 18 series.")
+    system = PICK_SYS.replace("You pick movies and series for", f"You pick {titles} for").replace(
+        "Title|Year|m or s (m=movie, s=series)", f"Title|Year|{code}").replace("30 lines", "18 lines").replace(
+        "'movies' or 'films' means movies only; 'shows' or 'series' means series only; otherwise give at least 12 movies and 12 series.",
+        type_instruction)
+    timing = {}
+    def pick():
+        start = time.monotonic()
+        try:
+            return llm_picks(system, prompt, 850, 6, "search", "picks")
+        finally:
+            timing["ms"] = round((time.monotonic() - start) * 1000)
+    future = _pool.submit(pick)
+    future.search_timing = timing
+    return future
 
 
-def ai_plan(query, history=None, context=None):
+def ai_plan(query, history=None, context=None, stype="movie", person=...):
     """Route once; retain a shared picker future for requests and empty title results."""
+    if person is ...:
+        person = search_person()
     if history is None:
         history = seen_history(search_profile())
-    picks = search_picks(query, history) if SEARCH_ORDER == "parallel" and context is None else None
+    picks = search_picks(query, history, stype=stype, person=person)
     inp = {"query": query}
     if context:
         inp.update(last=context["query"], shown=[x["title"] for x in shown_titles(context)])
         inp["context_key"] = hashlib.sha256(json.dumps({k: context.get(k) for k in ("query", "answers", "rows", "wish")}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    start = time.monotonic()
+    source = "fallback"
     try:
-        a = decide("route_query", route_norm(inp))["answer"]
+        routed = decide("route_query", route_norm(inp))
+        a, source = routed["answer"], routed.get("source", "llm")
     except Exception:
         a = {"choice": None}
+    router_ms = round((time.monotonic() - start) * 1000)
     wish = query
     if context and a.get("previous") == "refine":
+        if picks is not None:
+            picks.cancel()
+        picks = None
         wish = (f"Answer the combined wish. Last search: {context.get('wish') or context['query']}\n"
                 f"Shown titles (in display order): {json.dumps(shown_titles(context), ensure_ascii=False)}\nTyped now: {query}")
     channel = "command" if a.get("previous") == "act" else "picker" if a.get("previous") == "refine" else SEARCH_CHANNELS.get(a["choice"], "picker")
     if channel == "command" and picks is not None:
         picks.cancel()
     if channel == "picker" and picks is None:
-        picks = search_picks(wish, history, a.get("list"))
-    return {**a, "picks": picks, "wish": wish, "watched": a.get("watched") or "any", "list": a.get("list") or "taste"}
+        picks = search_picks(wish, history, a.get("list"), stype, person)
+    return {**a, "picks": picks, "wish": wish, "router_ms": router_ms, "router_source": source,
+            "watched": a.get("watched") or "any", "list": a.get("list") or "taste"}
 
 
 def taste_rerank(metas):
-    """Search picks: the LLM's order blended with the household's match, plus a match note; never blocks on fetches."""
+    """Search picks: the LLM's order blended with the viewer's match, plus a match note; never blocks on fetches."""
     m = _model["m"]
+    person = search_person()
     if not m or not m.get("cal") or len(metas) < 2:
         return metas
     missing = [(x["id"], "movie" if x["type"] == "movie" else "tv") for x in metas if not frec(x["id"], "movie" if x["type"] == "movie" else "tv")]
@@ -1656,9 +1694,9 @@ def taste_rerank(metas):
         _outer.submit(ensure_facets, missing)  # known next time
     scored = []
     for i, x in enumerate(metas):
-        pct = match_pct(m, score_key(m, x["id"], kind="movie" if x["type"] == "movie" else "tv")[0])
+        pct = match_pct(m, score_key(m, x["id"], person, kind="movie" if x["type"] == "movie" else "tv")[0], person)
         taste = (pct - 70) / 30 if pct is not None else 0.0
-        scored.append((-(1 - i / len(metas)) * 0.8 - 0.2 * taste, i, with_match(x, why=False) if pct else x))
+        scored.append((-(1 - i / len(metas)) * 0.8 - 0.2 * taste, i, with_match(x, why=False, person=person) if pct else x))
     return [x for *_, x in sorted(scored)]
 
 
@@ -1681,7 +1719,13 @@ def llm_text(system, prompt, max_tokens, timeout, lane, label, effort="none"):
 
 
 def llm_picks(system, prompt, max_tokens, timeout, lane, label):
-    return parse_picks(llm_text(system, prompt, max_tokens, timeout, lane, label))
+    text = llm_text(system, prompt, max_tokens, timeout, lane, label)
+    if text.strip() == "NONE":
+        return []
+    picks = parse_picks(text)
+    if text.strip() and not picks:
+        raise ValueError("Invalid picker reply")
+    return picks
 
 
 def llm_sections(system, prompt, max_tokens, timeout, label, names, effort="none"):
@@ -1696,21 +1740,25 @@ def llm_sections(system, prompt, max_tokens, timeout, label, names, effort="none
     return out
 
 
-def ai_future(query, history=None):
+def ai_future(query, history=None, stype="movie", timing=None):
     """Share one day's AI answer for equivalent queries within a viewer scope."""
     context = search_turn(query)
-    key = (search_key(query), search_scope(), json.dumps(context, sort_keys=True, ensure_ascii=False) if context else None)
+    key = (search_key(query), search_scope(), stype, json.dumps(context, sort_keys=True, ensure_ascii=False) if context else None)
     with _ai_lock:
         hit = _ai.get(key)
         if hit and hit[0] > time.time():
             fut = hit[1]
             if not fut.done():
+                if timing is not None:
+                    timing["picker_ms"] = "cached"
                 return fut
             try:
                 answer = fut.result()
                 picks = answer["picks"]
-                if (picks is None or SEARCH_CHANNELS.get(answer["choice"]) == "command" or not picks.done()
+                if (picks is None or answer.get("previous") == "act" or SEARCH_CHANNELS.get(answer["choice"]) == "command" or not picks.done()
                         or not picks.cancelled() and picks.exception() is None):
+                    if timing is not None:
+                        timing["picker_ms"] = "cached"
                     return fut
             except Exception:
                 pass
@@ -1718,7 +1766,8 @@ def ai_future(query, history=None):
             _ai.clear()
         if history is None:
             history = seen_history(search_profile())  # Capture the caller's scope before entering the pool.
-        fut = _outer.submit(ai_plan, query, history, context)
+        person = search_person()
+        fut = _outer.submit(ai_plan, query, history, context, stype, person)
         ttl = min(AI_SEARCH_TTL, context["at"] + LAST_SEARCH_TTL - time.time()) if context else AI_SEARCH_TTL
         _ai[key] = (time.time() + ttl, fut)
         return fut
@@ -1869,14 +1918,36 @@ def ai_search(stype, kind, picks, lang, names, mark=AI_MARK):
 
 
 def looks_like_title(query, lang):
-    """A TMDB title or person starting with the query means a title search: no AI call needed."""
+    """An exact TMDB title identity needs no router call."""
     q = query.casefold()
     try:
         res = tmdb("search/multi", query=query, language=lang, include_adult="false").get("results", [])
     except Exception:
         return False
-    return any((it.get(k) or "").casefold().startswith(q)
+    if any(it.get("media_type") == "person" and any(person_identity(query) == person_identity(it.get(k) or "")
+           for k in ("name", "original_name")) for it in res[:10]):
+        return False
+    return any(it.get("media_type") != "person" and (it.get(k) or "").casefold() == q
                for it in res[:10] for k in ("title", "name", "original_title", "original_name"))
+
+
+def person_identity(name):
+    return " ".join("".join(c for c in unicodedata.normalize("NFKD", name.casefold())
+                            if not unicodedata.combining(c)).split())
+
+
+def person_titles(query, kind, lang):
+    persons = tmdb("search/person", query=query, language=lang, include_adult="false").get("results", [])
+    person = persons[0] if persons else {}
+    if not any(person_identity(query) == person_identity(person.get(k) or "") for k in ("name", "original_name")):
+        return None
+    credits = tmdb(f"person/{person['id']}/combined_credits", language=lang)
+    titles = credits.get("cast", []) + [it for it in credits.get("crew", [])
+                                       if it.get("department") == "Directing" or it.get("job") == "Director"]
+    return sorted((it for it in titles if it.get("media_type") == kind and not it.get("adult")
+                   and (kind != "tv" or not {10767, 10763}.intersection(it.get("genre_ids") or []))),
+                  key=lambda it: (kind == "tv" and ((it.get("episode_count") or 0) >= 3 or it in credits.get("crew", [])),
+                                  it.get("popularity") or 0), reverse=True)
 
 
 def superseded(query, wait):
@@ -1888,6 +1959,8 @@ def superseded(query, wait):
 
 
 def search(stype, query, lang, title_only=False):
+    timing = {}
+    _scoping.search_timing = None
     request = start_search(query)
     refresh_preferences()
     kind = "movie" if stype == "movie" else "tv"
@@ -1906,27 +1979,74 @@ def search(stype, query, lang, title_only=False):
     complete = True
     p = search_profile()
     history = seen_history(p)
+    person = search_person()
     if not title_only and OR_KEY and (context is not None or len(query) >= AI_MIN_LEN and not looks_like_title(query, lang)):
         complete = not superseded(query, SEARCH_SETTLE)
+        with _ai_lock:
+            scope, turn = request
+            complete = complete and _search_turns.get(scope) == (search_key(query), turn)
         if complete:
-            plan = ai_future(query, history)
+            plan = ai_future(query, history, stype, timing)
     q = query.casefold()
 
     def exact(it):
         return q in {(it.get(k) or "").casefold() for k in ("title", "name", "original_title", "original_name")}
 
+    tmdb_start = time.monotonic()
     data, art = search_both(kind, query, lang) if plan is None or SEARCH_ORDER == "parallel" else ([], {})
-    picks, answer = None, None
+    timing["resolve_ms"] = round((time.monotonic() - tmdb_start) * 1000)
+    picks, answer, channel = None, None, "tmdb"
+    resolve_start = None
     def served(metas):
-        if not complete:
+        if plan is not None:
+            timing.update(router_ms=(answer or {}).get("router_ms", "timeout"),
+                          router_source=(answer or {}).get("router_source", "fallback"),
+                          resolve_ms=timing["resolve_ms"] + (round((time.monotonic() - resolve_start) * 1000) if resolve_start is not None else 0),
+                          channel=channel, rows={stype: len(metas)})
+            timing.setdefault("picker_ms", 0)
+            _scoping.search_timing = timing
+        if not complete or channel == "command":
             return {"metas": metas}
-        answers = {k: v for k, v in (answer or {}).items() if k not in ("picks", "wish")}
+        answers = {k: v for k, v in (answer or {}).items() if k not in ("picks", "wish", "router_ms", "router_source")}
         return remember_search(query, stype, metas, answers, context, (answer or {}).get("wish", query), request)
-    if plan is not None and (context is not None or not any(exact(it) for it in data)):
+    if plan is not None:
         deadline = time.monotonic() + 7
         try:
             answer = plan.result(timeout=7)
             channel = "command" if answer.get("previous") == "act" else "picker" if answer.get("previous") == "refine" else SEARCH_CHANNELS.get(answer["choice"], "picker")
+            resolve_start = time.monotonic()
+            if answer["choice"] == "title" and answer.get("previous") != "act":
+                if SEARCH_ORDER == "router_first":
+                    data, art = search_both(kind, query, lang)
+                other_job = _outer.submit(search_both, "tv" if kind == "movie" else "movie", query, lang)
+                person_job = _outer.submit(person_titles, query, kind, lang)
+                try:
+                    other, _ = other_job.result(timeout=max(0, deadline - time.monotonic()))
+                except TimeoutError:
+                    other = []
+                    channel = "tmdb"
+                try:
+                    credits = person_job.result(timeout=max(0, deadline - time.monotonic()))
+                except Exception:
+                    credits = None
+                if credits is not None:
+                    titles = [it for it in data if exact(it)]
+                    seen_ids = {it["id"] for it in titles}
+                    for it in credits:
+                        if it["id"] not in seen_ids:
+                            titles.append(it)
+                            seen_ids.add(it["id"])
+                    channel = "tmdb"
+                    if answer["picks"] is not None:
+                        answer["picks"].cancel()
+                    names = genres(kind, lang)
+                    return served(filtered([to_meta(it, stype, kind, names, art.get(it["id"], {}), lang=lang)
+                                            for it in titles if not it.get("adult")])[:15])
+                if any(exact(it) for it in data + other):
+                    channel = "tmdb"
+                if not data and other:
+                    channel = "tmdb"
+                    return served([])
             if channel == "tmdb" and SEARCH_ORDER == "router_first":
                 data, art = search_both(kind, query, lang)
             if channel == "tmdb" and not data:
@@ -1934,14 +2054,21 @@ def search(stype, query, lang, title_only=False):
             if channel == "picker":
                 with _ai_lock:
                     if answer["picks"] is None:
-                        answer["picks"] = search_picks(answer.get("wish", query), history, answer["list"])
+                        answer["picks"] = search_picks(answer.get("wish", query), history, answer["list"], stype, person)
                 timeout = 6 if SEARCH_ORDER == "router_first" else max(0, deadline - time.monotonic())
+                timing["resolve_ms"] += round((time.monotonic() - resolve_start) * 1000)
+                resolve_start = None
                 picks = answer["picks"].result(timeout=timeout)
+                if timing.get("picker_ms") != "cached":
+                    timing["picker_ms"] = getattr(answer["picks"], "search_timing", {}).get("ms", 0)
+                resolve_start = time.monotonic()
         except Exception as error:
             waiting = answer.get("picks") if answer else plan
             failed = waiting is not None and (waiting.cancelled() or waiting.done() and waiting.exception() is not None)
             if isinstance(error, TimeoutError) and not failed:
                 complete = False
+            if channel == "picker":
+                timing["picker_ms"] = "timeout" if isinstance(error, TimeoutError) else 0
             if not isinstance(error, TimeoutError) or failed:
                 with _ai_lock:
                     for key, (_, future) in list(_ai.items()):
@@ -1956,10 +2083,13 @@ def search(stype, query, lang, title_only=False):
                 command = (search_commands.special(command_context(), query, stype, routed=True, results=context)
                            if answer.get("previous") == "act" else search_commands.special(command_context(), query, stype, routed=True))
             if command is not None:
+                served(command.get("metas", []))
                 return command
             answer = None
     names = genres(kind, lang)
     if picks is not None:
+        if not picks:
+            return served([])
         intent = answer.get("watched", "any") if answer is not None else "any"
         if intent == "seen" and picks is not None:
             allowed = {(e["title"].casefold(), str(e.get("year") or ""), e["stype"]): e for e in history}
@@ -2006,7 +2136,7 @@ def search(stype, query, lang, title_only=False):
 
     if SEARCH_ORDER == "router_first" and plan is not None and not data:
         data, art = search_both(kind, query, lang)
-    ranked = sorted(data, key=lambda it: (exact(it), it.get("popularity") or 0), reverse=True)
+    ranked = sorted((it for it in data if not it.get("adult")), key=lambda it: (exact(it), it.get("popularity") or 0), reverse=True)
     metas = filtered([to_meta(it, stype, kind, names, art.get(it["id"], {}), lang=lang) for it in ranked])
     if answer is not None and channel == "picker":
         if answer["watched"] == "unseen":
@@ -3042,8 +3172,8 @@ def _connector_url(url):
     raise UnsafeURL()
 
 
-def _http_get(url, headers=None, *, paged=False, body=None, budget=None):
-    """Bound JSON transport; a shared budget caps an entire poll, including all endpoints."""
+def _http_get(url, headers=None, *, paged=False, body=None, budget=None, text=False):
+    """Bound JSON or text transport; a shared budget caps an entire poll, including all endpoints."""
     _connector_url(url)
     budget = budget if budget is not None else {"bytes": 0, "pages": 0}
     items, page, expected_pages, expected_total = [], 1, None, None
@@ -3062,6 +3192,8 @@ def _http_get(url, headers=None, *, paged=False, body=None, budget=None):
             budget["bytes"] += len(raw)
             if budget["bytes"] > CONNECTOR_HTTP_BYTES:
                 raise ByteCapExceeded()
+            if text:
+                return raw.decode('utf-8')
             value = json.loads(raw)
             if not paged:
                 return value
@@ -3572,7 +3704,13 @@ class PMDBTimeout(TimeoutError):
     pass
 
 
+class PMDBBlocked(TimeoutError):
+    pass
+
+
 PMDB_ERRORS = {"PMDBKeyRejected": "PublicMetaDB key rejected; reconnect with skald setup --connect pmdb",
+               "PMDBBlocked": "PublicMetaDB blocked this server with a bot check; the key was not checked. "
+                              "Ask PublicMetaDB to allow API requests from your server",
                "PMDBRateLimited": "PublicMetaDB rate limit; sync stopped, try later",
                "PMDBTimeout": "PublicMetaDB timeout; try later",
                "SchemaMismatch": "PublicMetaDB malformed response; last good history kept"}
@@ -3586,6 +3724,9 @@ def _pmdb_pages(path, key, budget):
                               urllib.parse.urlencode({"page": page, "perPage": 500}),
                               {"Authorization": "Bearer " + key}, budget=budget)
         except urllib.error.HTTPError as error:
+            if error.code == 403 and (error.headers.get("cf-mitigated") or
+                    "text/html" in error.headers.get("Content-Type", "").lower()):
+                raise PMDBBlocked(PMDB_ERRORS["PMDBBlocked"]) from None
             if error.code in (401, 403):
                 raise PMDBKeyRejected() from None
             if error.code == 429:
@@ -3896,10 +4037,10 @@ class StremioRateLimited(ValueError):
         super().__init__("Stremio rate limit; sync stopped, try later")
 
 
-def _stremio_http(url, *, body=None, budget=None):
+def _stremio_http(url, *, body=None, budget=None, text=False):
     try:
         value = _http_get(url, {"Content-Type": "application/json"} if body is not None else None,
-                          body=body, budget=budget)
+                          body=body, budget=budget, **({'text': True} if text else {}))
     except urllib.error.HTTPError as error:
         if error.code in (401, 403):
             raise StremioKeyRejected() from None
@@ -3909,6 +4050,8 @@ def _stremio_http(url, *, body=None, budget=None):
     except Exception:
         # Likes URLs contain the key; never propagate transport exception text.
         raise ValueError("Stremio request failed") from None
+    if text:
+        return value
     if not isinstance(value, dict):
         raise SchemaMismatch()
     if value.get("error"):
@@ -3960,7 +4103,7 @@ def _connector_stremio(c, now, budget=None, *, readonly=False):
         return _connector_accounts(c, now, budget, _connector_stremio)
     key = _resolve_auth(c["auth"])
     library = _stremio_http("https://api.strem.io/api/datastoreGet",
-        body={"authKey": key, "collection": "libraryItem", "all": True}, budget=budget).get("result")
+        body={"authKey": key, "collection": "libraryItem", "ids": [], "all": True}, budget=budget).get("result")
     if not isinstance(library, list) or any(not isinstance(row, dict) for row in library):
         raise SchemaMismatch()
     path = os.path.join(DATA, "stremio-" + c["person"] + ".history.json")
@@ -3980,29 +4123,49 @@ def _connector_stremio(c, now, budget=None, *, readonly=False):
         if it:
             items[(it["type"], it["imdb"])] = dict(it)
     likes, cached = {}, old.get("likes", {})
+    library_items, likes_available = items.copy(), True
     from skald.ingest import rating_signal
-    for level, rating in (("liked", 8), ("loved", 10)):
-        for kind in ("movie", "series"):
-            url = "https://likes.stremio.com/addons/" + level + "/movies-shows/" + urllib.parse.quote(key, safe="") + "/catalog/" + kind + "/stremio-" + level + "-" + kind + ".json"
-            metas = _stremio_http(url, budget=budget).get("metas")
-            if not isinstance(metas, list) or any(not isinstance(row, dict) for row in metas):
-                raise SchemaMismatch()
-            for meta in metas:
-                raw = meta.get("id")
-                if not isinstance(raw, str) or not re.fullmatch(r"tt[0-9]+", raw) or meta.get("type", kind) != kind:
-                    continue
-                cache_key = kind + ":" + raw
-                it = items.get((kind, raw)) or cached.get(cache_key) or _stremio_item({"_id": raw, "type": kind, "name": meta.get("name")}, now)
-                if it is None:
-                    continue
-                it = dict(it)
-                signal, weight = IMPORT_SIGNALS[rating_signal(rating)]
-                it.update(signal=signal, weight=weight, rating=rating)
-                items[(kind, raw)] = likes[cache_key] = it
+    try:
+        addon_key = _stremio_http('https://likes.stremio.com/getAddonKey?key='+urllib.parse.quote(key, safe=''), budget=budget, text=True)
+        if isinstance(addon_key, str):
+            try:
+                addon_key = json.loads(addon_key)
+            except json.JSONDecodeError:
+                addon_key = addon_key.strip()
+        if isinstance(addon_key, dict):
+            addon_key = addon_key.get('key')
+        if not isinstance(addon_key, str) or not addon_key.strip():
+            raise SchemaMismatch()
+        for level, rating in (("liked", 8), ("loved", 10)):
+            for kind in ("movie", "series"):
+                url = "https://likes.stremio.com/addons/" + level + "/movies-shows/user=" + urllib.parse.quote(addon_key, safe="") + "/catalog/" + kind + "/stremio-" + level + "-" + kind + ".json"
+                metas = _stremio_http(url, budget=budget).get("metas")
+                if not isinstance(metas, list) or any(not isinstance(row, dict) for row in metas):
+                    raise SchemaMismatch()
+                for meta in metas:
+                    raw = meta.get("id")
+                    if not isinstance(raw, str) or not re.fullmatch(r"tt[0-9]+", raw) or meta.get("type", kind) != kind:
+                        continue
+                    cache_key = kind + ":" + raw
+                    it = items.get((kind, raw)) or cached.get(cache_key) or _stremio_item({"_id": raw, "type": kind, "name": meta.get("name")}, now)
+                    if it is None:
+                        continue
+                    it = dict(it)
+                    signal, weight = IMPORT_SIGNALS[rating_signal(rating)]
+                    it.update(signal=signal, weight=weight, rating=rating)
+                    items[(kind, raw)] = likes[cache_key] = it
+    except StremioRateLimited:
+        raise
+    except Exception:
+        likes_available, items, likes = False, library_items, {}
+        for cache_key, it in cached.items():
+            ident = it['type'], it['imdb']
+            merged = {**it, **items.get(ident, {}), **{field: it[field] for field in ('signal', 'weight', 'rating') if field in it}}
+            items[ident] = likes[cache_key] = merged
     doc = {"version": 1, "source": "stremio", "library": records, "likes": likes, "items": list(items.values())}
     if readonly:
         return doc, None, {"plays_30d": sum(it.get("plays", 0) for it in doc["items"]
-            if it.get("played") and now - 30 * DAY <= (it.get("at") or 0) / 1000 <= now)}
+            if it.get("played") and now - 30 * DAY <= (it.get("at") or 0) / 1000 <= now), "likes_available": likes_available}
     previous = {(it["type"], it["id"]): it for it in old.get("items", [])}
     changed = [it for it in doc["items"] if any(it.get(f) != previous.get((it["type"], it["id"]), {}).get(f)
         for f in ("signal", "plays", "at", "episodes_played", "last_episode", "rating"))]
@@ -4012,7 +4175,7 @@ def _connector_stremio(c, now, budget=None, *, readonly=False):
         _connector_write("stremio-" + c["person"] + ".history", doc, indent=2, newline=True)
     events = list(trakt_events(now, [{**it, "person": c["person"]} for it in changed]))
     cursor = [max(doc["changed_at"], max((_connector_time(row.get("_mtime")) or 0 for row in library), default=0)), len(doc["items"])]
-    return events, cursor, {"events": len(doc["items"]), "error": None}
+    return events, cursor, {"events": len(doc["items"]), "error": None, "likes_available": likes_available}
 
 
 def _connector_accounts(c, now, budget, adapter):
@@ -5911,7 +6074,7 @@ def entry_weight(e):
 def taste_vector(p, min_titles=5):
     """Weighted mean of their titles' fingerprints; None until enough titles are embedded."""
     try:
-        ensure_emb([(e["key"], e["kind"]) for e in p["entries"][:400]])
+        ensure_emb([(k, kind) for k, kind in enrichment_pairs(p) if femb(k, kind) is None][:400])
     except BudgetExceeded:
         pass
     hits = {h["key"] for h in _learn["hits"]} if HIT_TASTE and p.get("learned", True) else set()
@@ -6256,12 +6419,13 @@ def ensure_facets(pairs):
 _tagging = set()
 
 
-def tag_experiences(pairs, max_batches=4):
+def tag_experiences(pairs, max_batches=4, fetch_facets=True):
     """Experience tags for known titles without tags, TAG_BATCH per LLM call. Worker only (seconds per call),
-    never on a search. pairs: [(key, kind)], strongest first; returns how many titles got tags."""
+    never on a search. pairs: [(key, kind)] in priority order; returns how many titles got tags."""
     if not OR_KEY or _defer_enrichment:
         return 0
-    ensure_facets([(k, kind) for k, kind in pairs if fkey(k, kind) != k and not frec(k, kind)])
+    if fetch_facets:
+        ensure_facets([(k, kind) for k, kind in pairs if fkey(k, kind) != k and not frec(k, kind)])
     with _facets_lock:
         todo = [(fkey(k, kind), kind) for k, kind in dict.fromkeys(pairs) if frec(k, kind) and "x" not in frec(k, kind)
                 and fkey(k, kind) not in _tagging][:TAG_BATCH * max_batches]
@@ -6445,6 +6609,26 @@ def person_entries(p, person):
     return out
 
 
+def enrichment_pairs(p, people=None):
+    """Round-robin member histories, positives first within each, one turn per distinct title."""
+    queues = []
+    people = PEOPLE if people is None else people
+    for person in (*people, "together"):
+        entries = person_entries(p, person)
+        queues.append(deque((e["key"], e["kind"]) for e in
+                            [e for e in entries if e["weight"] > 0] + [e for e in entries if e["weight"] <= 0]))
+    out, seen = [], set()
+    while any(queues):
+        for queue in queues:
+            while queue and queue[0] in seen:
+                queue.popleft()
+            if queue:
+                pair = queue.popleft()
+                seen.add(pair)
+                out.append(pair)
+    return out
+
+
 def facet_value(fid, p_, n_, npos, xtot, df, n_x, n_all, loose=False, person=False):
     """One facet's affinity; person evidence enters gradually against the catalog prior."""
     if npos < (1 if loose else FACET_SUPPORT[fid[0]]) and not n_:
@@ -6476,9 +6660,10 @@ def affinities(entries, store, df, n_all, hits, loose=False, person=False):
         for fid, _ in facet_pairs(rec):
             if w > 0:
                 pos[fid] = pos.get(fid, 0) + w
-                npos[fid] = npos.get(fid, 0) + 1
+                npos.setdefault(fid, set()).add((e["key"], e["kind"]))
             else:
                 neg[fid] = neg.get(fid, 0) - w
+    npos = {fid: len(titles) for fid, titles in npos.items()}
     aff = {}
     n_x = sum(1 for r in store.values() if r.get("x")) or 1
     for fid in set(pos) | set(neg):
@@ -6521,12 +6706,14 @@ def build_model(p, enrich=True):
     house = adult_profile(p)
     house = {**house, "entries": taste_entries(house["entries"])} if house else house
     pos_entries = [e for e in house["entries"] if e["weight"] > 0]
+    pairs = enrichment_pairs(p)
     try:
-        ensure_facets([(e["key"], e["kind"]) for e in p["entries"][:400]])
+        ensure_facets([(k, kind) for k, kind in pairs if not frec(k, kind)][:400])
     except Exception as e:
         print(f"facets: {type(e).__name__}: {e}", flush=True)
     if enrich:
-        tag_experiences([(e["key"], e["kind"]) for e in pos_entries[:400]], max_batches=16)
+        # Facets were fetched above within this build's cap, including kind aliases.
+        tag_experiences(enrichment_pairs({"entries": pos_entries}, adult_people()), max_batches=16, fetch_facets=False)
     vec = taste_vector(house) if enrich else None
     hits = {h["key"] for h in _learn["hits"]} if HIT_TASTE else set()
     with _facets_lock:
@@ -6543,16 +6730,20 @@ def build_model(p, enrich=True):
     holders = {}
     for e in pos_entries:
         for fid, _ in facet_pairs(store.get(fkey(e["key"], e["kind"])) or {}):
-            holders.setdefault(fid, []).append((e["weight"], e["key"]))
-    holders = {fid: sorted(hs, reverse=True)[:40] for fid, hs in holders.items() if fid in aff}
+            hs = holders.setdefault(fid, {})
+            title = (e["key"], e["kind"])
+            hs[title] = max(hs.get(title, 0), e["weight"])
+    holders = {fid: sorted(((w, fkey(key, kind)) for (key, kind), w in hs.items()), reverse=True)[:40]
+               for fid, hs in holders.items() if fid in aff}
     m = {"vec": vec, "aff": aff, "names": names, "npos": npos, "bscale": 1.0, "cal": None, "vbase": 0.0, "bg": [],
-         "kinds": {e["key"]: e["kind"] for e in p["entries"]}, "holders": holders, "ent": {e["key"]: (e["title"], tuple(e.get("by") or ())) for e in pos_entries},
+         "kinds": {fkey(e["key"], e["kind"]): e["kind"] for e in p["entries"]}, "holders": holders,
+         "ent": {fkey(e["key"], e["kind"]): (e["title"], tuple(e.get("by") or ())) for e in pos_entries},
          "paff": {}, "pvec": {}, "px": {}, "pbscale": {}, "pbg": {}, "nexp": {}, "x": experience_profile(house["entries"])}
     active = active_feedback()
     for person in PEOPLE:
         mine = person_entries(p, person)
         if _taste_accounts():
-            m.setdefault("panchors", {})[person] = {e["key"] for e in mine if e["weight"] > 0}
+            m.setdefault("panchors", {})[person] = {fkey(e["key"], e["kind"]) for e in mine if e["weight"] > 0}
         m["nexp"][person] = sum(bool(e.get("explicit")) and e["weight"] > 0 for e in mine)
         m["paff"][person] = affinities(mine, store, df, n_all, hits, loose=m["nexp"][person] < 40, person=True)[0]
         m["px"][person] = experience_profile(mine)
@@ -6818,7 +7009,7 @@ def anchor(m, key, fid, used=(), person=None, kind=None):
     best = None
     v = femb(key, kind)
     for w, hk in m["holders"].get(fid, []):
-        if hk == key or hk in used or hk not in m["ent"]:
+        if hk == fkey(key, kind) or hk in used or hk not in m["ent"]:
             continue
         by = m["ent"][hk][1]
         if person and person not in by and "together" not in by:
@@ -6917,9 +7108,10 @@ def match_note(key, why=True, floor=65, person=None, kind=None):
     return reasons(m, key, fids, person=person, kind=kind) if why else []
 
 
-def taste_hint(m):
+def taste_hint(m, person=None):
     """Search tie-breakers: experiences and themes, without favourite people or studios."""
-    return taste_line({**m, "aff": {fid: a for fid, a in m["aff"].items() if fid[0] in "xkt"}})
+    aff = m.get("paff", {}).get(person) or m["aff"]
+    return taste_line({**m, "aff": {fid: a for fid, a in aff.items() if fid[0] in "xkt"}})
 
 
 def taste_line(m):
@@ -7734,23 +7926,32 @@ def taste_ring_note(m, now):
 _last_search_person = None
 
 
-def log_search(query):
+def log_search(query, deferred=False):
     global _last_search_person
-    if len(query) < 3:
+    if len(query) < 3 and not deferred:
         return
     now = time.time()
     person = SCOPES.get(getattr(_scoping, "scope", None))
     if person not in PEOPLE:
         person = _viewer.get() or who_watching()[0]
     person = person if person in PEOPLE else None
-    if _searches and _searches[-1][1] == query and now - _searches[-1][0] < 30 and person == _last_search_person:
-        return  # movie + series catalog requests of the same keystroke
-    _searches.append((now, query))
-    _last_search_person = person
-    del _searches[:-500]
+    with _ai_lock:
+        duplicate = len(query) < 3 or bool(_searches and _searches[-1][1] == query and now - _searches[-1][0] < 30 and person == _last_search_person)
+        if not duplicate:
+            _searches.append((now, query))
+            _last_search_person = person
+            del _searches[:-500]
+    record = {"t": int(now), "q": query, **({"p": person} if person else {})}
+    if deferred:
+        return record, duplicate
+    if not duplicate:
+        write_search(record)
+
+
+def write_search(record, timing=None):
     try:
         with open(os.path.join(DATA, "searches.jsonl"), "a") as fh:
-            fh.write(json.dumps({"t": int(now), "q": query, **({"p": person} if person else {})}, ensure_ascii=False) + "\n")
+            fh.write(json.dumps({**record, **({"timing": timing} if timing else {})}, ensure_ascii=False) + "\n")
     except OSError:
         pass
 
@@ -8682,12 +8883,12 @@ def feeling_pool(m, p, xs, lang, seeds=6, extra=(), seed=None):
     of the loved titles carrying them (and of extra seed keys)."""
     if not m or not p:
         return []
-    kinds = {e["key"]: e["kind"] for e in p["entries"]}
+    kinds = {fkey(e["key"], e["kind"]): e["kind"] for e in p["entries"]}
     src = []
     for x in xs:
         src += [k for _, k in m["holders"].get(f"x:{x}", [])[:seeds]]
     src = [k for k in dict.fromkeys(list(extra) + src) if k in kinds][:seeds * 2]
-    jobs = [(kinds[k], _outer.submit(with_art, f"{kinds[k]}/{k[5:]}/recommendations", lang)) for k in src]
+    jobs = [(kinds[k], _outer.submit(with_art, f"{kinds[k]}/{k[5:].split('@')[0]}/recommendations", lang)) for k in src]
     exclude = p["seen"] | p["negative"]
     items, seen = [], set()
     for kind, job in jobs:
@@ -8730,7 +8931,7 @@ def leap_feed(lang):
     a = cands[(day_index() // 3) % len(cands)]
     ax = frec(a["key"], a["kind"])["x"]
     top = [x for x, _ in sorted(ax.items(), key=lambda kv: -kv[1])][:3]
-    pool = feeling_pool(m, p, top, lang, seeds=8, extra=[a["key"]], seed=a["key"])
+    pool = feeling_pool(m, p, top, lang, seeds=8, extra=[fkey(a["key"], a["kind"])], seed=a["key"])
     pool = [x for x in pool if tone_ok(x[2], a["key"], animation=True)]
     av = femb(a["key"], a["kind"])
     try:
@@ -12895,7 +13096,8 @@ def title_view(key, kind, person=None):
     if not rec:
         return None
     m = get_model(False)
-    by = m["ent"][key][1] if m and key in m["ent"] else None
+    slot = fkey(key, kind)
+    by = m["ent"][slot][1] if m and slot in m["ent"] else None
     if by is None:
         entries = [e for e in (_profiles.get("household") or {}).get("entries", [])
                    if e["key"] == key and e["kind"] == kind]
@@ -14234,7 +14436,8 @@ class Handler(BaseHTTPRequestHandler):
             query = (extras.get("search") or [""])[0].strip()
             if not query or addon_token().lower() in query.lower():
                 return self.send_json(200, {"metas": []}, cors=True, no_store=True)
-            log_search(query)
+            record, duplicate = log_search(query, deferred=True)
+            _scoping.search_timing = None
             try:
                 result = search(parts[2], query, lang)
                 for meta in result.get("metas", []):
@@ -14244,6 +14447,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, result, cors=True, no_store=True)
             except Exception as e:
                 return self.send_json(502, {"metas": [], "error": type(e).__name__}, cors=True, no_store=True)
+            finally:
+                timing = _scoping.search_timing
+                if not duplicate:
+                    write_search(record, timing)
         return self.send_json(404, {"error": "not found"})
 
 

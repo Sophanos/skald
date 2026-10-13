@@ -978,6 +978,29 @@ def run(args):
                 access = connectors.aiostreams_access_key(saved['source_path'])
                 return setup_aiostreams(s, args, saved, ask, lines, show, secret_input=access, private=True)
             return setup_aiostreams(s, args, saved, ask, lines, show)
+    if args.connect and config_path.exists():
+        if args.connect == 'aiostreams-db':
+            args.connect = 'aiostreams_db'
+        if args.connect not in ('trakt', 'mdblist', 'stremio', 'pmdb', 'jellyfin', 'plex', 'aiostreams_db', 'files'):
+            raise ValueError('choose a supported --connect source')
+        with server(data) as s:
+            s.require_config(s.CONFIG_SOURCE, s.CONFIG_ERROR)
+            probe = configure_connector(s, args, ask, lines, show)
+            saved['taste'] = args.connect
+            if probe and not probe['ok']:
+                saved.pop('taste', None)
+                saved['connector_failed'] = True
+            else:
+                saved.pop('connector_failed', None)
+                if restart_required(data, s.CONFIG):
+                    lines.append(RESTART + ' now so it starts reading.')
+        write_private(data/'setup.json', json.dumps(saved) + '\n')
+        result = status(data)
+        result.update(ok=probe is None or probe['ok'], addon_urls_shown=False,
+                      lines=lines + ['Next: ' + result['next']])
+        lines[:] = result['lines']
+        show()
+        return result
     check_tmdb(data)
     saved['tmdb_checked'] = True
     write_private(data/'setup.json', json.dumps(saved) + '\n')

@@ -505,6 +505,8 @@ def text_output(args, data, out):
         name = (data["person"] or "Household").title()
         w, cal = data["movers"]["window"], data["calibration"]
         line(f"{name} · {w['since']} days · {w['events']} window events · {w['undated']} undated")
+        for adult, coverage in data["coverage"].items():
+            line(f"{adult.title()}: Learned from {coverage['learned']} of {coverage['total']} titles")
         for group, facets in data["axes"].items():
             line(group + ": " + ", ".join(f"{f['name']} {f['affinity']:+.2f}" for f in facets[:3]))
         for f in data["movers"]["facets"][:3]:

@@ -91,7 +91,7 @@ class Plans(Household):
     def test_plan_previews_all_steps_applies_together_and_undoes_once(self):
         card = self.say('hide anime and rename For You to Ana Picks')
         self.assertIn('Hide anime for Ana', card['description'])
-        self.assertIn('Rename foryou to Ana Picks', card['description'])
+        self.assertIn('Rename For You to Ana Picks', card['description'])
         self.assertEqual(self.prefs(), {})
         self.confirm()
         self.assertEqual(self.prefs()['hide'], ['anime'])
@@ -365,7 +365,7 @@ class ReviewFixes(Household):
         self.say('hide Top Rated')
         self.confirm()
         card = self.say('show Top Rated and move Top Rated before For You')
-        self.assertIn('Move toprated before foryou', card['description'])
+        self.assertIn('Move Top Rated Movies before For You', card['description'])
         self.confirm()
         self.assertNotIn('toprated', self.s.CONFIG['household'].get('hidden_rows', []))
 

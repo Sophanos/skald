@@ -41,6 +41,7 @@ setup asks for these household settings instead.
 - Skald runs as user 65534 and keeps DATA private.
 - Setup saves members, language, timezone, country and connector mappings in `DATA/skald.json`. Credentials use private files and prompts.
 - The first row build takes several minutes. Check progress with `docker compose -f compose.stack.example.yaml exec skald skald setup --status`. Restart after connector changes.
+- Once `skald.json` exists, `skald setup --connect SOURCE --person NAME` configures only that connector. It needs no `--base` or `--watch`, asks no household or children questions and prints no addon URLs. With no household yet, it keeps the full setup wizard.
 - Outside your home network, give AIOStreams an HTTPS address through a proxy or tunnel. Skald stays inside Docker for watching through AIOStreams. Stremio direct and laptop imports need their own reachable Skald address.
 
 ### One command for a fresh household with AIOStreams

@@ -184,6 +184,55 @@ class PMDBTests(unittest.TestCase):
                 self.assertNotIn(KEY, str(caught.exception) + output.getvalue())
                 self.assertEqual(self.path.read_bytes(), before)
 
+    def test_bot_check_is_distinct_from_rejected_keys(self):
+        for code, headers, body, expected in (
+                (403, {'Content-Type': 'text/html; charset=UTF-8'}, b'<title>Just a moment...</title>', 'PMDBBlocked'),
+                (403, {'cf-mitigated': 'challenge'}, b'<title>Just a moment...</title>', 'PMDBBlocked'),
+                (403, {'Content-Type': 'application/json'}, b'{"error":"Forbidden"}', 'PMDBKeyRejected'),
+                (401, {'Content-Type': 'application/json'}, b'{"error":"API key required"}', 'PMDBKeyRejected'),
+                (401, {'Content-Type': 'text/html'}, b'Unauthorized', 'PMDBKeyRejected')):
+            error = urllib.error.HTTPError('https://publicmetadb.com', code, KEY, headers, io.BytesIO(body))
+            with self.subTest(code=code, headers=headers), patch.object(self.s, '_http_get', side_effect=error) as http:
+                with self.assertRaises(Exception) as caught:
+                    self.s._pmdb_pages('/watched', KEY, {'bytes': 0, 'pages': 0})
+                self.assertEqual(type(caught.exception).__name__, expected)
+                if expected == 'PMDBBlocked':
+                    self.assertEqual(str(caught.exception), 'PublicMetaDB blocked this server with a bot check; '
+                        'the key was not checked. Ask PublicMetaDB to allow API requests from your server')
+                self.assertEqual(http.call_count, 1)
+                self.assertNotIn(KEY, str(caught.exception))
+
+    def test_bot_check_keeps_history_and_uses_timeout_backoff(self):
+        self.sync()
+        before = self.path.read_bytes()
+        parent = self.s.connector_seeds(NOW)['pmdb']
+        parent.update(cursor=[123, 7], next_due=NOW)
+        parent['counts']['events'] = 7
+        parent['accounts'][self.person].update(cursor=[123, 7], last_sync=NOW-10)
+        parent['accounts'][self.person]['counts']['events'] = 7
+        schedules = []
+        for error, expected in (
+                (TimeoutError(), 'PMDBTimeout'),
+                (urllib.error.HTTPError('https://publicmetadb.com', 403, KEY,
+                    {'Content-Type': 'text/html'}, io.BytesIO(b'<title>Just a moment...</title>')), 'PMDBBlocked')):
+            self.s._connectors = {'pmdb': copy.deepcopy(parent)}
+            self.s._connectors_path = str(self.data)
+            with patch.object(self.s, '_http_get', side_effect=error), \
+                    patch.object(self.s, '_connector_async', side_effect=lambda c, now: self.s.poll(c, now)):
+                self.s.connectors_tick(NOW)
+            updated = self.s._connectors['pmdb']
+            account = updated['accounts'][self.person]
+            self.assertEqual(account['last_error'], expected)
+            self.assertEqual(account['health']['error'], expected)
+            self.assertEqual(account['cursor'], [123, 7])
+            self.assertEqual(account['last_sync'], NOW-10)
+            self.assertEqual(self.path.read_bytes(), before)
+            self.assertGreater(updated['interval'], parent['interval'])
+            self.assertGreater(updated['next_due'], NOW)
+            schedules.append((updated['interval'], updated['next_due']))
+        self.assertEqual(schedules[0], schedules[1])
+        self.assertIn('key was not checked', account['health']['fixHint'])
+
     def test_accounts_isolated_and_rate_limit_bounded(self):
         other = self.s.PEOPLE[0]
         self.s.CONFIG['connectors']['pmdb']['accounts'][other] = 'file:other.token'
@@ -261,12 +310,15 @@ class PMDBTests(unittest.TestCase):
     def test_probe_errors_are_distinct(self):
         from skald import connectors
         for error, message in ((urllib.error.HTTPError('https://publicmetadb.com', 401, KEY, {}, None), 'key rejected'),
+                               (urllib.error.HTTPError('https://publicmetadb.com', 403, KEY,
+                                   {'Content-Type': 'text/html'}, io.BytesIO(b'Just a moment...')), 'key was not checked'),
                                (urllib.error.HTTPError('https://publicmetadb.com', 429, KEY, {}, None), 'rate limit'),
                                (TimeoutError(KEY), 'timeout'), (ValueError(KEY), 'malformed')):
             with self.subTest(message=message), patch.object(self.s, '_http_get', side_effect=error):
                 result = connectors.test(self.s, 'pmdb', now=NOW)
                 self.assertFalse(result['ok'])
                 self.assertIn(message, result['connectors'][0]['error'])
+                self.assertIn(message, '\n'.join(connectors.text(result)))
                 self.assertNotIn(KEY, json.dumps(result))
 
     def test_setup_private_prompt_stdin_preserves_accounts_and_rolls_back(self):
@@ -322,6 +374,7 @@ class PMDBTests(unittest.TestCase):
         (self.data/'skald.json').write_text(json.dumps(self.s.CONFIG))
         parent = self.s.connector_seeds(NOW)['pmdb']
         for error, text in (('PMDBKeyRejected', 'key rejected'), ('PMDBRateLimited', 'rate limit'),
+                            ('PMDBBlocked', 'key was not checked'),
                             ('PMDBTimeout', 'timeout'), ('SchemaMismatch', 'malformed')):
             parent['accounts'][self.person]['health'] = {'state': 'error', 'error': error, 'at': NOW}
             parent['accounts'][self.person]['last_error'] = error

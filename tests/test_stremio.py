@@ -8,6 +8,7 @@ import tempfile
 import traceback
 import unittest
 import urllib.error
+import urllib.parse
 from unittest.mock import patch
 from decide_kit import write_legacy, load_server, close_server
 
@@ -15,6 +16,7 @@ NOW = 1791734400.
 STAMP = '2026-10-10T12:00:00Z'
 KEY = 'SENTINEL_STREMIO_KEY'
 PASSWORD = 'SENTINEL_STREMIO_PASSWORD'
+ADDON_KEY = 'SENTINEL_ADDON_KEY/+ &?'
 
 
 def item(n, **kw):
@@ -52,10 +54,12 @@ class StremioTests(unittest.TestCase):
             self.assertEqual(kw['body'], {'email': 'synthetic@example.test', 'password': PASSWORD})
             return {'result': {'authKey': KEY}}
         if url.endswith('/datastoreGet'):
-            self.assertEqual(kw['body'], {'authKey': KEY, 'collection': 'libraryItem', 'all': True})
+            self.assertEqual(kw['body'], {'authKey': KEY, 'collection': 'libraryItem', 'ids': [], 'all': True})
             return {'result': self.rows}
+        if '/getAddonKey?' in url:
+            return {'key': ADDON_KEY}
         self.assertIsNone(headers)
-        self.assertIn('/' + KEY + '/', url)
+        self.assertIn('/user=' + urllib.parse.quote(ADDON_KEY, safe='') + '/', url)
         return {'metas': [{'id': 'tt11', 'type': 'movie', 'name': 'Outside'}] if '/loved/' in url and '/movie/' in url else
                          [{'id': 'tt4', 'type': 'movie', 'name': 'Liked'}] if '/liked/' in url and '/movie/' in url else []}
 
@@ -63,10 +67,109 @@ class StremioTests(unittest.TestCase):
         self.assertEqual(it['type'], 'series' if it['id'] == 'tt3' else 'movie')
         return ('movie' if it['type'] == 'movie' else 'tv', {'id': int(it['id'][2:])})
 
+    def test_addon_key_forms_url_sequence_and_library_body(self):
+        auth = KEY + '/+ &?'
+        for raw in (json.dumps({'key': ADDON_KEY}).encode(), json.dumps(ADDON_KEY).encode(), ADDON_KEY.encode()):
+            requests = []
+            def transport(req, timeout):
+                requests.append(req)
+                body = {'result': self.rows} if req.full_url.endswith('/datastoreGet') else {'metas': []}
+                return io.BytesIO(raw if '/getAddonKey?' in req.full_url else json.dumps(body).encode())
+            with self.subTest(raw=raw), patch.object(self.s, '_resolve_auth', return_value=auth), \
+                    patch.object(self.s, '_connector_open', side_effect=transport), patch.object(self.s, 'tmdb_details', side_effect=self.resolve):
+                doc, _, stats = self.s._connector_stremio(self.c, NOW, readonly=True)
+            urls = [req.full_url for req in requests]
+            expected = ['https://api.strem.io/api/datastoreGet',
+                        'https://likes.stremio.com/getAddonKey?key='+urllib.parse.quote(auth, safe='')]
+            expected += [f'https://likes.stremio.com/addons/{level}/movies-shows/user={urllib.parse.quote(ADDON_KEY, safe="")}/catalog/{kind}/stremio-{level}-{kind}.json'
+                         for level in ('liked', 'loved') for kind in ('movie', 'series')]
+            self.assertEqual(urls, expected)
+            self.assertEqual(json.loads(requests[0].data), {'authKey': auth, 'collection': 'libraryItem', 'ids': [], 'all': True})
+            self.assertTrue(stats['likes_available'])
+            self.assertTrue(doc['items'])
+            self.assertNotIn(KEY, json.dumps(stats))
+            self.assertNotIn(ADDON_KEY, json.dumps(stats))
+
+    def test_likes_failure_keeps_library_cached_likes_and_probe_stats(self):
+        from skald import connectors
+        failures = [('getAddonKey', 500), ('getAddonKey', 401), ('getAddonKey', {'key': 7}),
+                    ('/liked/', 500), ('/loved/', {'metas': 'bad shape'}), ('/loved/', TimeoutError(KEY+ADDON_KEY))]
+        for endpoint, failure in failures:
+            with self.subTest(endpoint=endpoint, failure=failure), patch.object(self.s, 'tmdb_details', side_effect=self.resolve):
+                cached = {f'movie:tt{n}': {**self.s._stremio_item(item(n), NOW), 'rating': 10, 'signal': 'loved', 'weight': 5} for n in (1, 11)}
+                self.s._connector_write('stremio-'+self.person+'.history', {'library': {}, 'likes': cached, 'items': list(cached.values())})
+                def http(url, headers=None, **kw):
+                    if endpoint in url:
+                        if isinstance(failure, int):
+                            raise urllib.error.HTTPError(url, failure, KEY+ADDON_KEY, {}, None)
+                        if isinstance(failure, Exception):
+                            raise failure
+                        return failure
+                    if url.endswith('/datastoreGet'):
+                        return {'result': self.rows}
+                    if '/getAddonKey?' in url:
+                        return json.dumps({'key': ADDON_KEY})
+                    return {'metas': []}
+                output = io.StringIO()
+                with patch.object(self.s, '_http_get', side_effect=http), redirect_stdout(output), redirect_stderr(output):
+                    _, _, stats = self.s._connector_stremio(self.c, NOW)
+                    probe = connectors.test(self.s, 'stremio', now=NOW)
+                doc = json.loads((self.data/('stremio-'+self.person+'.history.json')).read_text())
+                items = {it['id']: it for it in doc['items']}
+                self.assertTrue(items['tmdb:1']['played'])
+                self.assertEqual(items['tmdb:1']['rating'], 10)
+                self.assertEqual(items['tmdb:11']['rating'], 10)
+                self.assertIn('tmdb:2', items)
+                self.assertFalse(stats['likes_available'])
+                self.assertTrue(probe['ok'])
+                self.assertFalse(probe['connectors'][0]['likes_available'])
+                self.assertIn('likes unavailable', ' '.join(connectors.text(probe)))
+                text = json.dumps(stats)+json.dumps(probe)+output.getvalue()
+                self.assertNotIn(KEY, text)
+                self.assertNotIn('SENTINEL_ADDON_KEY', text)
+                self.assertNotIn('https://', text)
+
+    def test_addon_key_and_catalog_rate_limits_still_stop_without_keys(self):
+        for endpoint in ('getAddonKey', '/liked/'):
+            def http(url, headers=None, **kw):
+                if endpoint in url:
+                    raise urllib.error.HTTPError(url, 429, KEY+ADDON_KEY, {}, None)
+                if url.endswith('/datastoreGet'):
+                    return {'result': self.rows}
+                if '/getAddonKey?' in url:
+                    return json.dumps(ADDON_KEY)
+                return {'metas': []}
+            with self.subTest(endpoint=endpoint), patch.object(self.s, '_http_get', side_effect=http), patch.object(self.s, 'tmdb_details', side_effect=self.resolve):
+                with self.assertRaises(self.s.StremioRateLimited) as caught:
+                    self.s._connector_stremio(self.c, NOW)
+                self.assertNotIn(KEY, ''.join(traceback.format_exception(caught.exception)))
+                self.assertNotIn('SENTINEL_ADDON_KEY', ''.join(traceback.format_exception(caught.exception)))
+
+    def test_text_transport_still_counts_and_caps_bytes(self):
+        budget = {'bytes': 0, 'pages': 0}
+        with patch.object(self.s, '_connector_open', return_value=io.BytesIO(b'bare-key')):
+            self.assertEqual(self.s._http_get('https://likes.stremio.com/getAddonKey', text=True, budget=budget), 'bare-key')
+        self.assertEqual(budget, {'bytes': 8, 'pages': 1})
+        with patch.object(self.s, 'CONNECTOR_HTTP_BYTES', 3), patch.object(self.s, '_connector_open', return_value=io.BytesIO(b'bare-key')):
+            with self.assertRaises(self.s.ByteCapExceeded):
+                self.s._http_get('https://likes.stremio.com/getAddonKey', text=True)
+
+    def test_invalid_addon_key_shapes_leave_library_available(self):
+        for raw in (b'null', b'[]', b'123', b'false', b'""', b'{"key": ""}', b'{"other": "value"}'):
+            requests = []
+            def transport(req, timeout):
+                requests.append(req.full_url)
+                return io.BytesIO(raw if '/getAddonKey?' in req.full_url else json.dumps({'result': self.rows}).encode())
+            with self.subTest(raw=raw), patch.object(self.s, '_connector_open', side_effect=transport), patch.object(self.s, 'tmdb_details', side_effect=self.resolve):
+                doc, _, stats = self.s._connector_stremio(self.c, NOW, readonly=True)
+                self.assertFalse(stats['likes_available'])
+                self.assertTrue(doc['items'])
+                self.assertEqual(len(requests), 2)
+
     def test_mapping_likes_and_unchanged_resync(self):
         with patch.object(self.s, '_http_get', side_effect=self.fake) as http, patch.object(self.s, 'tmdb_details', side_effect=self.resolve) as resolve:
             events, cursor, stats = self.s._connector_stremio(self.c, NOW)
-            self.assertEqual(http.call_count, 5)
+            self.assertEqual(http.call_count, 6)
             items = {i['id']: i for i in self.s.read_trakt()}
             self.assertEqual(set(items), {'tmdb:1', 'tmdb:2', 'tmdb:3', 'tmdb:4', 'tmdb:10', 'tmdb:11'})
             for n in (1, 2, 3):
@@ -88,7 +191,7 @@ class StremioTests(unittest.TestCase):
             http.reset_mock()
             resolve.reset_mock()
             self.assertEqual(self.s._connector_stremio(self.c, NOW + 60)[0], [])
-            self.assertEqual(http.call_count, 5)
+            self.assertEqual(http.call_count, 6)
             resolve.assert_not_called()
             self.rows[0]['_mtime'] = '2026-10-11T12:00:00Z'
             self.assertEqual(self.s._connector_stremio(self.c, NOW + 120)[0], [])
@@ -200,7 +303,7 @@ class StremioTests(unittest.TestCase):
 
     def test_likes_errors_and_account_rate_limit(self):
         from skald import connectors
-        for code, message in ((401, 'key rejected'), (429, 'rate limit')):
+        for code, message in ((429, 'rate limit'),):
             def fail(url, headers=None, **kw):
                 if 'likes.stremio.com' in url:
                     raise urllib.error.HTTPError(url, code, KEY + PASSWORD, {}, None)
@@ -277,8 +380,8 @@ class StremioTests(unittest.TestCase):
         with patch.object(self.s, '_connector_open', side_effect=transport), patch.object(self.s, 'tmdb_details', side_effect=self.resolve):
             self.assertEqual(self.s._stremio_login('synthetic@example.test', PASSWORD), KEY)
             self.s._connector_stremio(self.c, NOW)
-        self.assertEqual(len(requests), 6)
-        self.assertEqual(len([req for req in requests if req.get_method() == 'GET']), 4)
+        self.assertEqual(len(requests), 7)
+        self.assertEqual(len([req for req in requests if req.get_method() == 'GET']), 5)
 
     def test_connect_preserves_other_person(self):
         from skald import setup, members

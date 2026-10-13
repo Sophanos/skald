@@ -39,6 +39,26 @@ class TasteCase(unittest.TestCase):
 
 
 class TasteReportTests(TasteCase):
+    def test_coverage_reads_ignore_correction_from_snapshot_file(self):
+        data = Path(self.temp.name)
+        profile = json.loads((data / 'profile.json').read_text())
+        entry = next(e for e in profile['entries'] if e['by'] == ['ana'])
+        entry.update(signal='watched', weight=.21)
+        (data / 'profile.json').write_text(json.dumps(profile))
+        correction = data / 'title_fixes.json'
+        raw = json.dumps({'fixes': [{'op': 'ignore', 'key': entry['key'], 'who': 'ana'}]})
+        correction.write_text(raw)
+        with redirect_stdout(io.StringIO()), Engine(data) as engine, \
+                patch.object(engine, '_report_events', return_value=(NOW, [])), \
+                patch.object(engine._server, 'feed_rows', return_value=[]):
+            report = engine.report()
+            self.assertEqual(report['coverage']['ana'], {'learned': 0, 'total': 0})
+            self.assertEqual(report['coverage']['ben'], {'learned': 1, 'total': 1})
+            out = io.StringIO()
+            text_output(parser().parse_args(['taste', 'report']), report, out)
+            self.assertIn('Ana: Learned from 0 of 0 titles', out.getvalue())
+        self.assertEqual(correction.read_text(), raw)
+
     def stages(self):
         s = self.s
         def ev(i, t):
@@ -122,7 +142,7 @@ class TasteReportTests(TasteCase):
             args = parser().parse_args(['taste', 'report', '--person', 'ben'])
             out = io.StringIO()
             text_output(args, r, out)
-            self.assertLessEqual(len(out.getvalue().splitlines()), 13)
+            self.assertLessEqual(len(out.getvalue().splitlines()), 13 + len(self.s.adult_people()))
             alias = parser().parse_args(['explain', 'tmdb:3', '--person', 'ben'])
             why = parser().parse_args(['taste', 'why', 'tmdb:3', '--person', 'ben', '--trace'])
             self.assertEqual(execute(alias, self.e, None, None), execute(why, self.e, None, None))

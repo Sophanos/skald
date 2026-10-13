@@ -82,7 +82,7 @@ def report(snapshot, base=None, base_ref=BASE_REF):
             return {"metas": [{"id": "tmdb:1", "type": kind, "name": query}]}
         for server in (old, s):
             server.search = search
-            server.log_search = lambda query: None
+            server.log_search = lambda query, **kwargs: (None, True)
         catalogs = [(cid, typ) for cid, types, _ in s.feed_rows(s.LANG) for typ in types]
         sessions = [None, "both", *s.PEOPLE]
         checks, hashes = 0, []

@@ -470,7 +470,7 @@ class ReviewFixes(Base):
         self.assertEqual(items["ben"]["at"], int(NOW))
 
     def test_parse_command_version_bumped(self):
-        self.assertEqual(self.s.DECISIONS["parse_command"]["ver"], 10)
+        self.assertEqual(self.s.DECISIONS["parse_command"]["ver"], 11)
 
 
 if __name__ == "__main__":

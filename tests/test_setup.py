@@ -39,6 +39,79 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(main(['setup', '--status', '--json'], out=status), 0)
         self.assertIn('next', json.loads(status.getvalue()))
 
+    def test_connect_existing_household_needs_no_player_setup(self):
+        from skald import setup, connectors
+        setup.household(self.data, ['ana'], 'en-US', 'UTC', 'United States')
+        for flags in (['--yes', '--key-stdin'], ['--yes', '--key-stdin', '--json'], []):
+            with self.subTest(flags=flags):
+                out = io.StringIO()
+                with patch.object(connectors, 'test', return_value={'ok': True, 'connectors': []}) as probe, \
+                        patch.object(setup, 'check_tmdb', side_effect=AssertionError('unrelated TMDB check')), \
+                        patch('builtins.input', side_effect=AssertionError('unrelated prompt')), \
+                        patch('sys.stdin', io.StringIO('SYNTHETIC-PMDB-KEY\n')), \
+                        patch('skald.setup.getpass.getpass', return_value='SYNTHETIC-PMDB-KEY'):
+                    code = main(['setup', '--connect', 'pmdb', '--person', 'ana', *flags], out=out)
+                self.assertEqual(code, 0, out.getvalue())
+                self.assertEqual(probe.call_args.args[1], 'pmdb')
+                cfg = json.loads((self.data/'skald.json').read_text())
+                ref = cfg['connectors']['pmdb']['accounts']['ana']
+                self.assertEqual((self.data/'credentials'/ref[5:]).read_text(), 'SYNTHETIC-PMDB-KEY')
+                saved = setup.state(self.data)
+                self.assertEqual(saved['taste'], 'pmdb')
+                for field in ('base', 'watch', 'children_asked', 'connector_failed'):
+                    self.assertNotIn(field, saved)
+                self.assertNotIn('manifest.json', out.getvalue())
+                self.assertNotIn('SYNTHETIC-PMDB-KEY', out.getvalue())
+                if '--json' in flags:
+                    self.assertTrue(json.loads(out.getvalue())['ok'])
+                else:
+                    self.assertIn('Next: ', out.getvalue())
+                    self.assertIn(setup.RESTART + ' now so it starts reading.', out.getvalue())
+
+    def test_connect_failed_probe_rolls_back_and_records_failure(self):
+        from skald import setup, connectors
+        setup.household(self.data, ['ana'], 'en-US', 'UTC', 'United States')
+        setup.write_private(self.data/'setup.json', json.dumps({'taste': 'files'}))
+        before = (self.data/'skald.json').read_bytes()
+        out = io.StringIO()
+        with patch.object(connectors, 'test', return_value={'ok': False, 'connectors': []}), \
+                patch.object(setup, 'check_tmdb', side_effect=AssertionError('unrelated TMDB check')), \
+                patch('sys.stdin', io.StringIO('SYNTHETIC-PMDB-KEY\n')):
+            code = main(['setup', '--connect', 'pmdb', '--person', 'ana', '--yes', '--key-stdin'], out=out)
+        self.assertEqual(code, 1, out.getvalue())
+        self.assertEqual((self.data/'skald.json').read_bytes(), before)
+        self.assertEqual(list((self.data/'credentials').iterdir()), [])
+        self.assertTrue(setup.state(self.data)['connector_failed'])
+        self.assertNotIn('taste', setup.state(self.data))
+        self.assertIn('Next: skald connectors test', out.getvalue())
+        with patch.object(connectors, 'test', return_value={'ok': True, 'connectors': []}), \
+                patch('sys.stdin', io.StringIO('SYNTHETIC-PMDB-KEY\n')):
+            code = main(['setup', '--connect', 'pmdb', '--person', 'ana', '--yes', '--key-stdin'], out=io.StringIO())
+        self.assertEqual(code, 0)
+        self.assertNotIn('connector_failed', setup.state(self.data))
+        self.assertEqual(setup.state(self.data)['taste'], 'pmdb')
+
+    def test_connect_without_household_keeps_wizard(self):
+        from skald import setup, connectors
+        out = io.StringIO()
+        with patch.object(setup, 'check_tmdb', return_value=True) as tmdb, \
+                patch.object(connectors, 'test') as probe:
+            code = main(['setup', '--connect', 'pmdb', '--person', 'ana', '--yes', '--key-stdin'], out=out)
+        self.assertEqual(code, 2)
+        tmdb.assert_called_once()
+        probe.assert_not_called()
+        self.assertFalse((self.data/'skald.json').exists())
+        out = io.StringIO()
+        with patch.object(setup, 'check_tmdb', return_value=True), \
+                patch.object(connectors, 'test', return_value={'ok': True, 'connectors': []}), \
+                patch('sys.stdin', io.StringIO('SYNTHETIC-PMDB-KEY\n')):
+            code = main(['setup', '--connect', 'pmdb', '--person', 'ana', '--yes', '--key-stdin',
+                '--members', 'ana', '--base', 'https://tv.example', '--watch', 'stremio'], out=out)
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertIn('Household: https://tv.example/', out.getvalue())
+        self.assertIn('manifest.json', out.getvalue())
+        self.assertEqual(setup.state(self.data)['base'], 'https://tv.example')
+
     def test_finish_includes_existing_doctor_result(self):
         from skald import setup
         out = io.StringIO()

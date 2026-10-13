@@ -108,11 +108,10 @@ class DecideTests(unittest.TestCase):
             query = str(length) + "x" * (length - 3)
             picks = Mock()
             picks.result.return_value = [("A title", 2026, "movie", "a reason")]
-            with self.subTest(length=length), patch.object(self.s, "_pool") as pool, ReplayLLM(self.s) as replay:
-                pool.submit.return_value = picks
+            with self.subTest(length=length), patch.object(self.s, "search_picks", return_value=picks) as picker, ReplayLLM(self.s) as replay:
                 replay.arm(self.reply())
                 self.assertIs(self.s.ai_plan(query)["picks"], picks)
-                self.assertTrue(pool.submit.call_args.args[2].startswith(query + "\n"))
+                self.assertEqual(picker.call_args.args[0], query)
                 self.assertEqual(replay.bodies[0]["state"], query[:200])
                 picks.cancel.assert_not_called()
         self.assertEqual(self.s.route_norm({"query": " " + "X" * 225 + " "}), {"query": "X" * 200})

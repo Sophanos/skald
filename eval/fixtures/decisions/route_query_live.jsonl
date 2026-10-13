@@ -209,3 +209,17 @@
 {"q": "também séries", "last": "filmes sombrios", "shown": "Se7en, Prisoners, Zodiac", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "pt"}
 {"q": "salva isso como prateleira", "last": "filmes sombrios", "shown": "Se7en, Prisoners, Zodiac", "previous": "act", "route": ["command"], "watched": "any", "list": "taste", "tag": "followup", "lang": "pt"}
 {"q": "Cidade de Deus", "last": "filmes sombrios", "shown": "Se7en, Prisoners, Zodiac", "previous": "new", "route": ["title"], "watched": "any", "list": "taste", "tag": "followup", "lang": "pt"}
+{"q": "Dark", "route": ["title"], "lang": "en", "tag": "w101-identity", "last": "Kaulitz", "shown": ["Kaulitz & Kaulitz"], "previous": "refine"}
+{"q": "Kaulitz", "route": ["title"], "lang": "en", "tag": "w101-identity"}
+{"q": "Tom Hanks", "route": ["title"], "lang": "en", "tag": "w101-identity"}
+{"q": "Cillian Murphy", "route": ["title"], "lang": "de", "tag": "w101-identity"}
+{"q": "Jose Actor", "route": ["title"], "lang": "sr", "tag": "w101-identity"}
+{"q": "Arrivl", "route": ["title"], "lang": "en", "tag": "w101-identity", "last": "warm films", "previous": "new"}
+{"q": "filme mit Cillian Murphy", "route": ["request"], "lang": "de", "tag": "w101-identity"}
+{"q": "filmovi sa Jose Actorom", "route": ["request"], "lang": "sr", "tag": "w101-identity"}
+{"q": "Tom Hankss", "route": ["title"], "lang": "en", "tag": "w101-identity"}
+{"q": "etwas von den Filmen davor, nur lustiger", "route": ["request"], "lang": "de", "tag": "w101-identity", "last": "warm films", "previous": "refine"}
+{"q": "nešto kao prošli put, ali vedrije", "route": ["request"], "lang": "sr", "tag": "w101-identity", "last": "warm films", "previous": "refine"}
+{"q": "Together", "route": ["title"], "lang": "en", "tag": "w101-identity"}
+{"q": "Wir zwei", "route": ["title"], "lang": "de", "tag": "w101-identity"}
+{"q": "Nas dvoje", "route": ["title"], "lang": "sr", "tag": "w101-identity"}

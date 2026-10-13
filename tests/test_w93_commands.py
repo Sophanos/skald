@@ -79,7 +79,7 @@ class Registry(unittest.TestCase):
                             PICK_MODEL='fixture', DAY=86400, route_norm=lambda x: x,
                             decision=lambda name, **spec: specs.update({name: spec}))
         c.register(s)
-        self.assertEqual(specs['parse_command']['ver'], 10)
+        self.assertEqual(specs['parse_command']['ver'], 11)
         prompt = c.command_prompt(s)
         for op in NEW_OPS:
             self.assertIn(op + ' ', prompt)

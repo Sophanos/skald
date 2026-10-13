@@ -25,7 +25,8 @@ Their seed titles use the existing feed cache; clearing that cache lets the shel
 
 | You type | Skald does |
 |---|---|
-| "Dune" | Plain TMDB title search, without AI. |
+| "Dune" | Plain TMDB title search when the exact title is found. |
+| "Tom Hanks" | His acting and directing credits, most popular first. Exact titles come first. |
 | "cozy mystery for a rainy evening" | AI picks ordered by the request, blended with your household's taste match. |
 | "anime I haven't watched" | Drops titles already in your recorded history from AI results. |
 | "Animes I havent watched" | The same unseen search, even without the apostrophe. |
@@ -37,6 +38,8 @@ Their seed titles use the existing feed cache; clearing that cache lets the shel
 | "Ben watched Arrival, not me"; "why is Arrival in my picks"; "something like Arrival" | Moves a watch to the right person, explains a pick, or finds similar titles without changing settings. |
 | "help"; "ideas", "suggest" | Help shows five search examples. Ideas offers at most two shelf suggestions; `yes NN` creates one, `no NN` dismisses it. |
 | "what do you know about me", "what do you know about Ana", "my settings" | Shows an "About" card in plain sentences: likes and dislikes, shelves, top taste and recent commands. German "was weißt du über Ana" and Serbian "šta znaš o Ana" also work. |
+| "rename Ana to Anja" | Previews an adult's own display name change, including on a shared link. Confirm with its `yes NN` code. |
+| "rename the together row to Anja & Ben"; "nenne gemeinsam um in Wir zwei" | Previews the Together label for an identified adult. Confirm with `yes NN`, then restart Skald. `undo` restores the old label. |
 
 ## AI search and history
 
@@ -45,21 +48,51 @@ Commands work in English, German and Serbian (Latin or Cyrillic) at the same tim
 Title searches ask TMDB in the language of your install link.
 Perplexity's decider (`perplexity/pplx-decider-v1.1-27b`) routes free-text searches and decides
 whether you want unseen, watched or any titles, and a consensus list or personal taste.
-`SKALD_ROUTE_MODEL` overrides the router model. The Luna picker is unchanged and runs alongside it, with the full request,
-a taste hint used only for personal requests, and up to 200 recent watched or rated titles.
+`SKALD_ROUTE_MODEL` overrides the router model. The router has a 2.5-second timeout.
+The Luna picker runs alongside it, including when a previous search exists, with the full request,
+a taste hint used only for personal requests, and up to 1,200 watched or rated titles.
+Dated titles come first, most recent first; titles without dates follow by preference weight, highest first.
+This limit applies only to the prompt. Watched and unseen result filters use the full viewer history.
+Movie and series catalogs each ask for up to 18 lines of their own type, with an 850-token limit.
+If the router refines the previous wish, a new picker uses the combined wish and the raw-query answer is dropped.
+Commands and actions on previous results cancel the unused picker.
 Mood requests such as "dark movies" ask for picks; "Dark" alone asks for a title.
-If a routed title search finds nothing on TMDB, Skald uses the picker instead.
+An exact title wins even when the router calls it a refinement. If a routed title has TMDB hits only
+in the other catalog type, this row stays empty. Only when both types have no hits does the picker answer.
+An exact match on the top TMDB person's name uses their acting and directing credits for that type,
+most popular first, with exact title matches first and the same adult and child filters. Names ignore
+case, accents and extra spaces. A request such as "filme mit Cillian Murphy" goes to the picker.
 If the router fails, picks use ordinary taste ordering and put watched titles last.
 If the picker fails, search falls back to TMDB title results.
+Nonempty picker text with no valid title lines is a failed answer and can be retried;
+an intentional empty reply keeps that catalog empty. Slow person lookups stop at the search deadline
+and leave available title results in place. Newer typing cancels AI work for older prefixes after title lookup.
 If it is still running at the search deadline, repeat the search to use its finished answer without another picker call.
 
-All AI searches use the linked member's history; Together uses current members' combined history.
+All AI searches use the linked member's history and learned taste; Together uses current members' combined history.
+Together and unscoped requests use household taste. A member without learned taste uses the household taste.
 Unseen searches omit watched and disliked titles. Watched searches resolve picks from history and omit disliked titles.
 Each AI row has at most 15 titles. An unseen row with fewer than eight picks adds TMDB recommendations
 of its kept picks, after them, while keeping the same history and age filters.
-Equivalent queries share one AI answer for 24 hours within the same viewer link when there is no previous search context.
+Equivalent queries share one AI answer per catalog type for 24 hours within the same viewer link when there is no previous search context.
 Follow-up cache keys include that context and expire with its 30-minute lifetime.
 Case, punctuation and apostrophes do not change that cache key.
+Exact controls such as `history`, `verlauf`, `settings`, `help`, `undo`, `redo`, `ideas` and `suggest`
+work the same before and after a search.
+
+AI searches add a `timing` object to their `searches.jsonl` record. Paired movie and series requests
+and cached retries within 30 seconds share one line. It keeps the first request's timing and row count.
+The existing `t`, `q` and optional `p` fields stay the same.
+Timing contains no result titles:
+
+| Field | Meaning |
+|---|---|
+| `router_ms` | Router elapsed milliseconds, or `"timeout"` if the plan did not finish. |
+| `router_source` | Decision source, such as `llm`, `cache` or `fallback`. |
+| `picker_ms` | Picker elapsed milliseconds, `"cached"` for a reused answer, `"timeout"` when its wait timed out, or `0` when unused. |
+| `resolve_ms` | Milliseconds spent looking up and preparing TMDB or history results, excluding router and picker waits. |
+| `channel` | Final `picker`, `tmdb` or `command` channel. |
+| `rows` | Served count for this response, for example `{"movie":15}` or `{"series":0}`. Command cards count as served results. |
 
 `POST /api/v1/decide/route_query` takes `{"in":{"query":"Animes I havent watched"}}`.
 Its answer includes `choice`, `confidence`, `watched` (`unseen`, `seen`, `any`) and

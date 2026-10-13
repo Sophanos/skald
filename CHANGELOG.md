@@ -4,6 +4,33 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.4.6
+
+Mood searches without a movie or series type fill the series row again.
+Person searches no longer lead with talk-show appearances. Recurring series roles and directing work come before short guest spots.
+Skald now learns from each person's whole history, not mostly from whoever watched most.
+The taste report shows how much it has learned from each adult's titles.
+Watching the same title together no longer counts it twice as support for a taste theme.
+Search now sees each person's whole watched history. Imported titles are no longer suggested as new, and "watched" searches can find them.
+Searches in one person's profile use that person's taste, not the household's.
+Connecting one account no longer runs the whole setup: `skald setup --connect stremio --person NAME` asks only for that account's key.
+When PublicMetaDB blocks a server with its bot check, Skald says so instead of reporting a rejected key, and keeps the last good history.
+
+**Data changes:** none. No migration or restore is needed to roll back.
+
+## 1.4.5
+
+Search stays fast when you search several times in a row. The AI picker now starts while the router is still deciding, also after a previous search, and movies and series each get their own shorter answer. The router gives up after 2.5 seconds. Before, a second search could miss the deadline and leave the movie row empty.
+Exact titles win over follow-ups: "Dark" after another search shows the series. A title that exists only as a series no longer fills the movie row with unrelated picks. Exact person names such as "Tom Hanks" show that person's acting and directing credits, in time even when the credits lookup is slow.
+Typing no longer starts AI searches for half-typed words. A broken picker reply falls back to title results and can be retried.
+History, help, settings and the other exact controls work right after a search.
+Adults can rename themselves from a shared link and rename the Together row, with the usual preview, yes-code and undo. Rename previews show row names, not ids.
+Stremio loves and likes now sync. Skald asked Stremio's likes service the wrong way before. If likes are unavailable, the library still syncs and earlier likes stay.
+Search logs record router, picker and title lookup times, one line per search. `python eval/search_battery.py` runs a fixed, ordered search session against a live Skald, both rows at once like a player, and flags empty rows, filler, slow answers and missed deadlines.
+The test suite no longer reads a private file that the public repository leaves out; that made the 1.4.4 CI run fail.
+
+**Data changes:** none to the data format. Lines in searches.jsonl may carry a new optional `timing` field. The Together label uses the existing household labels setting (`household.labels.pair`). Rolling back needs no restore.
+
 ## 1.4.4
 
 You can now talk to your search results. After a search, type a reply in the same box and Skald treats it as a follow-up: "more like the second one", "but less violent", "also some series", "weniger albern". The decision model decides whether a reply refines the last search, acts on it, or starts a new one; no fixed phrases. Works in English, German, Serbian, Spanish and Portuguese.

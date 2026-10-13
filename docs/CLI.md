@@ -26,6 +26,10 @@ or `~/.local/share/skald`. Change that with `--state-dir PATH`.
 | `metrics` | Show counts per row, person and week for the current week and previous three: `skald metrics`. Reads local `DATA_DIR`; `skald --snapshot /path/copy metrics --days 7` includes weeks touching those days. Lists play sources, never titles. |
 | `health` | Read saved server checks, the last repair and alert availability: `skald health --json`. Reads local DATA_DIR or an explicit copy; makes no network requests. |
 
+`taste report` shows "Learned from N of M titles" for each adult: positive taste
+titles with a facet record out of their positive taste titles. Shared watches count
+for each adult. `--json` includes these counts under `coverage`, by member.
+
 ## Teach it
 
 | Command | What it does and an example |
@@ -162,6 +166,14 @@ The API previews with `POST /api/v1/decide/parse_command`, body `{"in":{"query":
 Bound tokens can change only their own person. Guest and child tokens cannot change settings.
 
 `skald command --person ana "history"` lists settings changes with their age.
+
+`skald command --person ana "rename Ana to Anja"` previews a display name change.
+On a shared watching link, a named adult can rename themselves without choosing Who's watching;
+the normal `yes NN` code still applies. Age changes, adding members and child targets need the usual adult identity.
+`skald command --person ana "rename the together row to Anja & Ben"` renames the Together label.
+German `nenne gemeinsam um in Wir zwei` and Serbian `preimenuj zajednički red u Nas dvoje` work too.
+Together changes need an identified adult. Confirm, restart Skald to apply member labels, and use `undo` to restore them.
+Display names accept 1..40 characters without control characters. Row rename previews show the current label.
 `undo no horror` reverses a matching change while keeping unrelated newer settings.
 Scalar undo refuses if that value changed since. Plain `undo` remains LIFO.
 `redo no horror` and `do again no horror` use the usual preview and confirmation.

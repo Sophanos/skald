@@ -4,6 +4,9 @@ A connector reads history from another app. It does not provide playback.
 Run setup on the machine holding DATA:
 `docker compose exec engine skald setup --connect SOURCE`.
 It tells you where to create credentials, saves them privately and tests the source.
+If `skald.json` already exists, this configures only that connector. It needs no
+player address or watch app and prints no addon URLs. With no household yet,
+it runs the full setup wizard first.
 Restart the engine after changing its configuration.
 
 Test again with `skald connectors test`, or name one source:
@@ -97,11 +100,15 @@ The shared limits are 100 requests and 20 MiB per poll, with 10-second timeouts.
 A 429 stops the poll and delays the next sync using bounded Retry-After or backoff.
 Normal adaptive scheduling stays the same. Probes save no history or cursors;
 they report plays in the last 30 days for each configured account. Doctor separates
-rejected keys, rate limits, timeouts and malformed responses without showing bodies.
+rejected keys, server bot checks, rate limits, timeouts and malformed responses without showing bodies.
 
 Disconnect with `skald setup --disconnect pmdb --person NAME`, then restart.
 The key is removed; history stays available for backups and explicit forgetting.
-**Limits:** API shapes have been checked with synthetic data only, not a live account.
+**Limits:** The API shape was confirmed against a live account in October 2026:
+a paged envelope with `items`, `page`, `perPage`, `total` and `totalPages`, using
+an Authorization Bearer key. PublicMetaDB may block datacenter servers with a
+bot check. Skald reports that the key was not checked and keeps the last good
+history. Ask PublicMetaDB to allow API requests from your server.
 
 ## MDBList
 
@@ -272,7 +279,7 @@ JSON.parse(localStorage.getItem("profile")).auth.key
 Keep the result private. Repeat setup for each member; earlier connections stay intact.
 The connection test is read-only. Restart the engine after setup:
 `docker compose restart engine` (or `docker compose -f compose.stack.example.yaml restart skald`).
-The engine syncs automatically: one library request and four loved/liked catalog requests
+The engine syncs automatically: one library request, one likes-service key lookup and four loved/liked catalog requests
 per person, with 10-second request timeouts. Unchanged library state, including `_mtime`,
 reuses resolved titles; repeat syncs add no duplicate events. IMDb ids resolve through TMDB.
 
@@ -281,6 +288,8 @@ The watch time comes from `lastWatched`. A retained library item without a watch
 an added interest; partial progress alone does not count as a watch. Removed items and
 unwatched temporary items do not add signals. Loved maps to rating 10 and liked to 8,
 including titles outside the library. An explicit Trakt rating for the same member/title wins.
+Loves and likes come from Stremio's likes service and are best effort. If they are unavailable,
+the library still syncs and Skald keeps that person's cached likes.
 
 Disconnect with `skald setup --disconnect stremio --person alex`, then restart the engine.
 This removes the stored key and stops using that person's Stremio history; the history file stays.

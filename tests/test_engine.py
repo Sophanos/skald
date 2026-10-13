@@ -266,7 +266,9 @@ class EngineTest(unittest.TestCase):
         aff = self.s.affinities(entries, self.s._facets, df, 11, set(), loose=True)[0]
         self.assertEqual(aff['x:cozy_case'], 0)
         self.assertTrue(all(v >= 0 for fid, v in aff.items() if fid.startswith('x:')))
-        strict = self.s.affinities(entries*2, self.s._facets, df, 11, set())[0]
+        strict_entries = entries + [self.entry('tmdb:2', weight=.07), self.entry('tmdb:11')]
+        self.s._facets['tmdb:11'] = {'x': {'period_society': 3}}
+        strict = self.s.affinities(strict_entries, self.s._facets, df, 12, set())[0]
         self.assertLess(strict['x:cozy_case'], 0)  # Household lift stays unchanged.
 
     def test_person_confidence_and_notes_use_person_percentiles(self):

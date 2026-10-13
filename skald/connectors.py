@@ -121,6 +121,8 @@ def test(s, name=None, *, transport=None, now=None, show=False):
                         _, _, stats = s.CONNECTOR_POLL[cid]({'id': cid + ':' + person, 'person': person,
                             'auth': auth, 'cursor': None}, now, readonly=True)
                         row['plays_30d'] += stats['plays_30d']
+                        if cid == 'stremio':
+                            row['likes_available'] = row.get('likes_available', True) and stats['likes_available']
                     unmapped = []
                 elif cid in ('jellyfin', 'plex', 'aiostreams_db'):
                     opts = cfg['options']
@@ -164,6 +166,8 @@ def text(result):
         yield (f"{r['name']}: reachable {'yes' if r['reachable'] else 'no'}; auth {'OK' if r['auth_ok'] else 'not OK'}; "
                f"{r['unmapped']} unmapped; {r['plays_30d']} plays in the last 30 days" +
                (f"; {r['skipped']} profiles skipped" if 'skipped' in r else ''))
+        if 'likes_available' in r:
+            yield 'Stremio likes '+('available' if r['likes_available'] else 'unavailable; library still syncs')
         for account in r.get('accounts', []):
             yield f"{r['name']}:{account['person']}: {account['plays_30d']} plays in the last 30 days; " + ('OK' if account['ok'] else account['error'])
         if r.get('unmapped_names'):

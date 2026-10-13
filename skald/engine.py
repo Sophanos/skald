@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_FILES = (".skald-format", "skald.json", "legacy.json", "profile.json", "emb.json", "facets.json", "learn.json", "taste.json", "trakt.json",
-              "feeds.json", "shown.json", "history.json", "history-summary.json", "history-forgotten.json", "feedback.jsonl", "imports.jsonl", "online.json", "metrics.json", "memory.json", "interview.json", "taste_ring.json", "connectors.json", "shelves.json", "undo.jsonl", "archetypes.json")
+              "feeds.json", "shown.json", "history.json", "history-summary.json", "history-forgotten.json", "feedback.jsonl", "imports.jsonl", "online.json", "metrics.json", "memory.json", "interview.json", "taste_ring.json", "connectors.json", "shelves.json", "undo.jsonl", "archetypes.json", "title_fixes.json")
 
 
 def data_files(config):
@@ -459,7 +459,12 @@ class Engine:
                 b = self._rank(m, keys, person, display=True)[:30]
                 calibration["overlap"] = {"jaccard": len(set(a) & set(b))/len(set(a) | set(b)) if a or b else 1.,
                                           "tau": kendall(a, b), "intersection": len(set(a) & set(b))}
+        coverage = {}
+        for adult in s.adult_people():
+            titles = {(e["key"], e["kind"]) for e in s.person_entries(self._profile, adult) if e["weight"] > 0}
+            coverage[adult] = {"learned": sum(bool(s.frec(k, kind)) for k, kind in titles), "total": len(titles)}
         return plain({"person": person, "maturity": s.maturity(m, person), "axes": s.taste_axes(m, person),
+            "coverage": coverage,
             "movers": {"window": {"since": since, "cutoff": cutoff, "events": len(window),
                                   "undated": sum(ev["t"] is None for ev in events),
                                   "baseline": bool(dated and cutoff >= min(dated))}, "facets": facets, "decay": decay},

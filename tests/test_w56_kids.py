@@ -196,7 +196,7 @@ class Kids(unittest.TestCase):
         from test_scoped_addon import request
         s = self.s
         with self.prefs(ana={'kids_age': 8}), patch.object(s, 'row_metas', return_value=[]), \
-                patch.object(s, 'search', return_value={'metas': []}), patch.object(s, 'log_search'), patch.object(s, 'manifest', return_value={}):
+                patch.object(s, 'search', return_value={'metas': []}), patch.object(s, 'log_search', return_value=(None, True)), patch.object(s, 'manifest', return_value={}):
             for scope in (None, 'ana'):
                 for tail in ('manifest.json', f'catalog/movie/{s.rid("top10")}.json', f'catalog/movie/{s.rid("search")}/search=Synthetic.json'):
                     self.assertIn('no-store', request(s, tail, scope)[1]['Cache-Control'])

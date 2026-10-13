@@ -131,7 +131,7 @@ class SearchRouting(unittest.TestCase):
                 if order == 'router_first':
                     self.assertEqual(picker.result.call_args.kwargs['timeout'], 6)
 
-    def test_orders_share_channels_and_router_first_skips_unused_picker(self):
+    def test_orders_share_channels_and_cancel_command_picker(self):
         for route, expected in (('title', ['tmdb:1']), ('command', ['command-card']),
                                 ('request', ['tmdb:4', 'tmdb:5', 'tmdb:1', 'tmdb:2']),
                                 ('discover', ['tmdb:4', 'tmdb:5', 'tmdb:1', 'tmdb:2'])):
@@ -148,18 +148,16 @@ class SearchRouting(unittest.TestCase):
                         patch.object(self.s.search_commands, 'special', side_effect=command):
                     self.assertEqual([m['id'] for m in self.results()], expected)
                     self.finish_pickers()
-                    if order == 'router_first' and route in ('title', 'command'):
-                        self.llm_picks.assert_not_called()
                     if order == 'router_first' and route != 'title':
                         self.search_both.assert_not_called()
 
-    def test_empty_picker_preserves_plain_fallback_in_both_orders(self):
+    def test_empty_picker_keeps_requested_type_empty_in_both_orders(self):
         self.llm_picks.return_value = []
         self.search_both.return_value = ([{'id': 1, 'title': 'Other title'}], {})
         for order in ('parallel', 'router_first'):
             self.s._ai.clear()
             with self.subTest(order=order), patch.object(self.s, 'SEARCH_ORDER', order):
-                self.assertEqual([m['id'] for m in self.results()], ['tmdb:1'])
+                self.assertEqual(self.results(), [])
 
     def test_command_errors_keep_existing_error_path(self):
         self.route['choice'] = 'command'
@@ -170,7 +168,7 @@ class SearchRouting(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, 'command failed'):
                 self.results()
 
-    def test_empty_title_results_use_shared_picker_in_both_orders(self):
+    def test_empty_title_results_use_per_type_picker_in_both_orders(self):
         self.route.update(choice='title', confidence=.91)
         self.llm_picks.return_value = self.picks[:5]
         for order in ('parallel', 'router_first'):
@@ -180,7 +178,7 @@ class SearchRouting(unittest.TestCase):
                 self.assertEqual([m['id'] for m in self.results('dark movies')],
                                  ['tmdb:4', 'tmdb:5', 'tmdb:1', 'tmdb:2'])
                 self.results('dark movies', 'series')
-                self.llm_picks.assert_called_once()
+                self.assertEqual(self.llm_picks.call_count, 2)
 
     def test_router_first_taste_hint_and_best_omission(self):
         self.s._model['m'] = {'aff': {}}
@@ -192,7 +190,7 @@ class SearchRouting(unittest.TestCase):
                 self.taste_rerank.reset_mock()
                 self.results()
                 prompt = self.llm_picks.call_args.args[1]
-                self.assertEqual('cozy mysteries' in prompt, listing == 'taste')
+                self.assertIn('cozy mysteries', prompt)
                 self.assertEqual(self.taste_rerank.called, listing == 'taste')
 
     def test_taste_reranks_only_unseen_then_moves_watched_last(self):
@@ -269,9 +267,9 @@ class SearchRouting(unittest.TestCase):
                      'ignored for best-of/consensus lists', 'cozy mysteries', 'Title 1|2000|m',
                      'new to the viewer', 'choose only from these'):
             self.assertIn(text, prompt)
-        self.assertIn('30 lines', system)
-        self.assertIn('12 movies and 12 series', system)
-        self.assertGreaterEqual(tokens, 1200)
+        self.assertIn('18 lines', system)
+        self.assertIn('movies only', system)
+        self.assertEqual(tokens, 850)
         self.assertEqual(timeout, 6)
 
     def test_router_failure_or_timeout_uses_default_picker_behaviour(self):

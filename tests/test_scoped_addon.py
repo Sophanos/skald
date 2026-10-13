@@ -104,7 +104,7 @@ class ScopedAddon(unittest.TestCase):
 
     def test_search_bytes_and_errors_equal_legacy(self):
         s = self.s
-        with patch.object(s, 'search', return_value={'metas': r3.cards(1)}), patch.object(s, 'log_search'), \
+        with patch.object(s, 'search', return_value={'metas': r3.cards(1)}), patch.object(s, 'log_search', return_value=(None, True)), \
                 patch.object(s, 'who_watching', side_effect=AssertionError('search guessed')):
             for typ in ('movie', 'series'):
                 for extra in ('search=Castle', 'search='):

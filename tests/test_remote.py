@@ -455,7 +455,7 @@ class RemoteTests(unittest.TestCase):
                  "/health", "/stats", "/de-DE/manifest.json", f"/de-DE/catalog/tv/{rid('foryou', self.s.CONFIG)}.json"]
         paths += [root + escape + "stats" for escape in ("%2F", "%2f", "%5C", "%5c", "%2E", "%2e")]
         with mock.patch.object(self.s, "search", return_value={"metas": []}) as search, \
-                mock.patch.object(self.s, "log_search") as log, \
+                mock.patch.object(self.s, "log_search", return_value=(None, True)) as log, \
                 mock.patch.object(self.s, "explain", return_value={}) as explain, \
                 mock.patch.object(self.s, "stats", return_value={}), \
                 mock.patch.object(self.s, "manifest", return_value={}), \

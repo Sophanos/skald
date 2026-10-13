@@ -1,4 +1,4 @@
-"""Person damping contracts; household arithmetic stays exact."""
+"""Person damping and distinct-title support contracts; weight arithmetic stays exact."""
 from skald.members import rid
 from collections import Counter
 import json
@@ -24,7 +24,7 @@ class ReactionW15(unittest.TestCase):
             for i, e in enumerate(self.profile['entries'])}
         self.df = Counter(fid for rec in self.store.values() for fid, _ in self.s.facet_pairs(rec))
 
-    def old_affinities(self, entries, store, df, n_all, hits, loose=False):
+    def reference_affinities(self, entries, store, df, n_all, hits, loose=False):
         s = self.s
         pos, neg, npos = {}, {}, {}
         xtot = 0.0
@@ -38,9 +38,10 @@ class ReactionW15(unittest.TestCase):
             for fid, _ in s.facet_pairs(rec):
                 if w > 0:
                     pos[fid] = pos.get(fid, 0) + w
-                    npos[fid] = npos.get(fid, 0) + 1
+                    npos.setdefault(fid, set()).add((e['key'], e['kind']))
                 else:
                     neg[fid] = neg.get(fid, 0) - w
+        npos = {fid: len(titles) for fid, titles in npos.items()}
         aff = {}
         n_x = sum(1 for r in store.values() if r.get('x')) or 1
         for fid in set(pos) | set(neg):
@@ -59,16 +60,16 @@ class ReactionW15(unittest.TestCase):
             aff[fid] = (p_ - n_) / (p_ + n_ + 1.0) * math.log1p(max(1, npos.get(fid, 0))) * max(idf, 0.05) * s.FACET_W[fid[0]]
         return aff, npos
 
-    def test_household_bytes_match_old_formula(self):
+    def test_household_bytes_match_reference_formula(self):
         entries = self.profile['entries']
         for loose in (False, True):
             for weights in (None, 0, -2, .07, 3):
                 xs = entries if weights is None else [{**e, 'weight': weights} for e in entries]
                 args = (xs, self.store, self.df, len(self.store)+1, {entries[0]['key']}, loose)
                 with self.subTest(loose=loose, weights=weights):
-                    old = json.dumps(self.old_affinities(*args), sort_keys=True).encode()
-                    self.assertEqual(json.dumps(self.s.affinities(*args), sort_keys=True).encode(), old)
-                    self.assertEqual(json.dumps(self.s.affinities(*args, person=False), sort_keys=True).encode(), old)
+                    expected = json.dumps(self.reference_affinities(*args), sort_keys=True).encode()
+                    self.assertEqual(json.dumps(self.s.affinities(*args), sort_keys=True).encode(), expected)
+                    self.assertEqual(json.dumps(self.s.affinities(*args, person=False), sort_keys=True).encode(), expected)
 
     def test_strict_support_ramp(self):
         for t, sup in self.s.FACET_SUPPORT.items():
@@ -101,7 +102,7 @@ class ReactionW15(unittest.TestCase):
         s, entries = self.s, self.profile['entries']
         self.assertTrue(entries)
         for loose in (False, True):
-            pos, neg, npos, xtot = Counter(), Counter(), Counter(), 0.
+            pos, neg, titles, xtot = Counter(), Counter(), {}, 0.
             for e in entries:
                 rec = self.store[s.fkey(e['key'], e['kind'])]
                 w = s.entry_weight(e)
@@ -110,9 +111,10 @@ class ReactionW15(unittest.TestCase):
                 for fid, _ in s.facet_pairs(rec):
                     if w > 0:
                         pos[fid] += w
-                        npos[fid] += 1
+                        titles.setdefault(fid, set()).add((e['key'], e['kind']))
                     else:
                         neg[fid] -= w
+            npos = Counter({fid: len(ks) for fid, ks in titles.items()})
             for person in (False, True):
                 aff, counts = s.affinities(entries, self.store, self.df, len(self.store)+1, set(), loose, person)
                 self.assertEqual(counts, dict(npos))

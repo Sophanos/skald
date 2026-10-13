@@ -30,7 +30,7 @@ REGISTRY = {
     'shelf_filter': _op('rule', kids=True, hint='shelf_filter values [shelf name], filters {kind,runtime,years,languages,exclude_genres,hide} with only stated keys.'),
     'shelf_schedule': _op('rule', kids=True, hint='shelf_schedule is a shelf in some months only, values [theme], months [1..12].'),
     'member_create': _op('member', hint='member_create adds a household member: "Add a household member named Kim, age 12" person kim age 12.'),
-    'member_update': _op('member', hint='member_update person existing member, age or label: "Update Ben to age 13" person ben age 13; "Ändere Anas Anzeigenamen zu Kim" person ana label Kim. Titles like New Member are op null.'),
+    'member_update': _op('member', hint='member_update person existing member, age or label: "Update Ben to age 13" person ben age 13; "rename Ana to Anja" person ana label Anja; "Ändere Anas Anzeigenamen zu Kim" person ana label Kim. Rename the shared Together row with person together label: "rename the together row to Anja & Ben" label Anja & Ben; "nenne gemeinsam um in Wir zwei" label Wir zwei; "preimenuj zajednički red u Nas dvoje" label Nas dvoje. Titles like New Member are op null.'),
     'search': _op('search', kids=True, hint='search changes nothing: kind similar for something like X, people for movies by X, mood for something cozy tonight; values [X]. '
                   'kind title for a title name that reads like a mood, setting or command: "More Like Home" values [More Like Home]; "Film Mirno" values [Mirno]. '
                   'Fix plain title typos: somthing like Arrivl is similar [Arrival]. Other searches stay op null.'),
@@ -153,6 +153,8 @@ def parse_one(raw, s, steps=False):
         return dict(NONE) if any(v is None for v in values) else dict(op=op, kind=None, values=values, person=None)
     if q in ('undo', 'rückgängig'):
         op = 'undo'
+    elif q == 'redo':
+        op = 'redo'
     elif match := re.fullmatch(r'(undo|rückgängig|bring back|redo|do again|wiederholen|nochmal) (.+)', q):
         op, values = ('redo' if match[1] in ('redo', 'do again', 'wiederholen', 'nochmal') else 'undo'), [match[2]]
     elif match := re.fullmatch(r'reset (filters|shelves)|reset (everything)(?: to default)?|(filter|regale|alles)(?: auf (?:standard|standardwerte))? zurücksetzen', q):
@@ -662,7 +664,7 @@ def register(s):
         body = request(batch[0], fallback_model, fallback_effort)
         body['max_tokens'] = 1200
         return body
-    s.decision('parse_command', ver=10, lane='search', cap=None, ttl=30*s.DAY,
+    s.decision('parse_command', ver=11, lane='search', cap=None, ttl=30*s.DAY,
         inp={'query': str, 'last': (str, None), 'shown': (str, [str, 30], None)}, out=OUT, norm=s.route_norm, rule=rule, params={},
         llm={'path': '/api/v1/chat/completions', 'model': model, 'batch': 1, 'timeout': 6,
              'prompt': lambda b: request(b[0], model, effort),
@@ -854,12 +856,19 @@ def preview(s, text, viewer=None, bound=None, answer=None, scope=None, prior=Non
     verb = REGISTRY[op]['verb'] or op.capitalize()
     name = verb+' '+display+' for '+', '.join(s.LABELS[p] for p in targets)
     if op.startswith('row_'):
+        def row_label(key):
+            label = config(s)['household'].get('row_labels', {}).get(key)
+            ids = s.row_groups().get(key, [s.rid(key)])
+            label = label or next((name for cid, _, name in s.feed_rows(s.LANG, profiles=False) if cid in ids), s.t('row.'+key))
+            if isinstance(label, dict):
+                label = label.get('movie') or label.get('series') or label.get('tv') or s.t('row.'+key)
+            return label.removeprefix(s.AI_MARK)
         if op == 'row_rename':
-            name = 'Rename '+values[0]+' to '+values[1]
+            name = 'Rename '+row_label(values[0])+' to '+values[1]
         elif op == 'row_move':
-            name = 'Move '+values[0]+' before '+values[1]
+            name = 'Move '+row_label(values[0])+' before '+row_label(values[1])
         else:
-            name = ('Hide ' if op == 'row_hide' else 'Show ')+values[0]
+            name = ('Hide ' if op == 'row_hide' else 'Show ')+row_label(values[0])
         name += ' for the household'
     plan = {'people': targets, 'change': change, 'before': before, 'item': item, 'name': name,
             'text': text[:200], 'source': 'search'}
@@ -979,6 +988,9 @@ def member_state(cfg, name):
 
 def set_member(cfg, name, state):
     hh = cfg['household']
+    if name == 'pair':
+        hh['labels']['pair'] = state['label']
+        return cfg
     if state['member'] != (name in hh['members']):
         hh['members'] = [*hh['members'], name] if state['member'] else [p for p in hh['members'] if p != name]
         hh['labels']['pair'] = 'you both' if len(hh['members']) == 2 else 'everyone'
@@ -996,12 +1008,21 @@ def set_member(cfg, name, state):
 
 def member_preview(s, text, change, viewer, bound, *_):
     from .setup import household
-    actor = people(s, viewer=viewer, bound=bound)[0]
     cfg = config(s)
     name, age, label = str(change['person'] or '').strip().casefold(), change['age'], change['label']
     if not re.fullmatch(r'[a-z][a-z0-9_-]{0,31}', name) or age is None and label is None and change['op'] == 'member_update':
         raise ValueError('Add a member name and an age or display name')
     known = {p: p for p in cfg['household']['members']} | {v.casefold(): p for p, v in cfg['household']['labels'].items() if p != 'pair'}
+    target = known.get(name)
+    if (change['op'] == 'member_update' and age is None and label is not None and target in s.PEOPLE
+            and s.kids_age(target) is None and bound not in (*s.PEOPLE, s.GUEST) and viewer not in (*s.PEOPLE, s.GUEST)):
+        viewer = target
+    actor = people(s, viewer=viewer, bound=bound)[0]
+    if change['op'] == 'member_update' and name == 'together':
+        if age is not None or label is None:
+            raise ValueError('Together needs a display name only')
+        name = 'pair'
+        known[name] = name
     if change['op'] == 'member_create':
         if name in known:
             raise ValueError(name.title()+' is already a member')
@@ -1010,7 +1031,9 @@ def member_preview(s, text, change, viewer, bound, *_):
         raise ValueError('Unknown member name')
     name = known.get(name, name)
     if label is not None:
-        cfg['household']['labels'][name] = label.strip()[:40]
+        if not 1 <= len(label.strip()) <= 40 or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in label):
+            raise ValueError('Display name needs 1..40 characters without control characters')
+        cfg['household']['labels'][name] = label.strip()
     if age is not None:
         prefs = cfg['taste']['people'].setdefault(name, {}).setdefault('prefs', {})
         if age < 18:
@@ -1019,7 +1042,7 @@ def member_preview(s, text, change, viewer, bound, *_):
             prefs.pop('kids_age', None)
     cfg = s.validate_config(cfg, data=s.DATA)
     detail = ', '.join(x for x in (label and 'display name '+label, age is not None and 'age '+str(age)) if x)
-    title = ('Add member ' if change['op'] == 'member_create' else 'Update member ')+s.LABELS.get(name, name.title())
+    title = ('Add member ' if change['op'] == 'member_create' else 'Update member ')+('Together' if name == 'pair' else s.LABELS.get(name, name.title()))
     return seal(dict(people=[actor], change=change, member=dict(name=name, before=member_state(config(s), name), after=member_state(cfg, name)),
                      actor=actor, name=title+(': '+detail if detail else ''), text=text[:200], source='search'))
 
@@ -1689,7 +1712,7 @@ def undo(s, targets, actor=None):
                 m = old['member']
                 if member_state(cfg, m['name']) != m['after']:
                     raise ValueError('Members changed; cannot undo this command')
-                if not m['before']['member']:
+                if m['name'] != 'pair' and not m['before']['member']:
                     from .setup import member_data
                     rest = copy.deepcopy(cfg)
                     rest['taste']['people'].pop(m['name'], None)
@@ -1758,10 +1781,12 @@ def error_card(s, error, stype, query=''):
     elif message.startswith('Add a member name'):
         title = 'Who is asking?'
         label = s.LABELS[s.PEOPLE[0]]
-        example = 'what do you know about '+label if parse_about(query, s) is not False else query+' for '+label
-        if re.search(r'\bsettings\b', query, re.I):
-            example = 'settings for '+label
-        detail = 'Add a member name, for example "'+example+'", or choose Who\'s watching.'
+        example = 'settings for '+label
+        if parse_about(query, s) is not False:
+            example = 'what do you know about '+label
+        elif query.strip().casefold() in ('undo', 'rückgängig', 'history', 'verlauf'):
+            example = query+' for '+label
+        detail = 'Choose Who\'s watching to identify the adult making this change, or add a member name, for example "'+example+'". A named adult can change their own display name.'
     elif 'shelf' in message.casefold():
         title = 'Check your shelves'
     elif 'preview' in message.casefold() or 'changed' in message.casefold():
@@ -1934,6 +1959,10 @@ def special(s, query, stype, routed=False, results=None):
 def _special(s, query, stype, routed=False, results=None):
     scope, bound, viewer = context(s)
     q = query.casefold().strip()
+    if q in ('history', 'verlauf', 'what did i change', 'was habe ich geändert',
+             'settings', 'my settings', 'what are my settings', 'show my shelves', 'list shelves', 'shelf list',
+             'help', '?', 'hilfe', 'ideas', 'suggest', 'undo', 'rückgängig', 'redo', 'y', 'ye', 'yes', 'ja', 'ok') or re.fullmatch(r'(yes|no) \d{2}', q):
+        results = None
     help_q = q in ('help', '?', 'hilfe')
     ideas = q in ('ideas', 'suggest')
     local = None if results else parse_local(query, s, viewer, bound)['op']

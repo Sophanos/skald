@@ -13,7 +13,7 @@ class Odin(unittest.TestCase):
     def request(self, tail, scope=None):
         path = '/synthetic-capability/'+self.s.LANG+'/' + ('p/'+scope+'/' if scope else '') + tail
         with patch.object(self.s, 'addon_token', return_value='synthetic-capability'), \
-                patch.object(self.s, 'log_search'), \
+                patch.object(self.s, 'log_search', return_value=(None, True)), \
                 patch.object(self.s, 'who_watching', return_value=('ana', None)):
             status, headers, raw, _ = raw_request(self.s, path, handler=self.s.Handler)
         return status, headers, json.loads(raw)
