@@ -18,6 +18,7 @@ import secrets
 import stat
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -114,7 +115,7 @@ def member_data(data, person, cfg):
     return False
 
 
-def household(data, names, lang, timezone, country, *, existing=None):
+def household(data, names, lang, timezone, country, *, existing=None, prepare=False):
     data = Path(data)
     path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
     existing = path.exists() if existing is None else existing
@@ -137,7 +138,7 @@ def household(data, names, lang, timezone, country, *, existing=None):
             hh['trakt_member'] = names[0] if names else ''
         cfg['taste']['people'] = {p: cfg['taste']['people'].get(p, {}) for p in names}
     cfg['region'].update({k: v for k, v in {'lang': lang, 'tz': timezone, 'country': country}.items() if v is not None})
-    return publish(data, cfg, replace=existing)
+    return members.validate_config(cfg, data=str(data)) if prepare else publish(data, cfg, replace=existing)
 
 
 def secret(stdin=False, label='Secret'):
@@ -194,61 +195,83 @@ def aiostreams_request(url, *, method='GET', body=None, login=None, transport=No
         elif code == 'ADDON_PASSWORD_INVALID':
             hint = 'AIOStreams protected; check the instance access key and try again'
         elif code == 'USER_INVALID_CONFIG' and 'fetch manifest' in str(error.get('message', '')).lower():
-            hint = 'AIOStreams cannot reach ' + (manifest or 'the Skald URL') + '; same Docker network? else use --base https address'
+            hint = 'AIOStreams cannot reach Skald; same Docker network? else use --base https address'
         else:
             hint = 'AIOStreams rejected setup; check its settings or use the manual steps'
         raise ValueError(hint)
     return reply
 
 
-def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
+def catalog_prefix(s, manifest):
+    own_catalogs = {cid for cid, _, _ in s.feed_rows(s.LANG)} | set(s.SHELF_ROWS) | {s.rid('search')}
+    for catalog in manifest.get('catalogs', []):
+        prefix, _, cid = catalog['id'].partition('.')
+        if cid in own_catalogs:
+            return prefix
+    return None
+
+
+def keep_catalog_places(s, config, manifest, person, *, first_added=False):
+    modifications = config.get('catalogModifications') or []
+    prefix = catalog_prefix(s, manifest)
+    if not prefix or not modifications and not first_added:
+        return None
+    prefix += '.'
+    with s.addon_scope(None if person == 'household' else person):
+        rows = [(prefix + cid, typ) for cid, types, _ in s.feed_rows(s.LANG)
+                for typ in (('tv',) if cid in s.MIXED and 'tv' in types else types)]
+    home_rows = set(rows)
+    rows += [(prefix + s.rid('search'), typ) for typ in ('movie', 'series')]
+    original = modifications
+    shelf_ids = {prefix + cid for cid in s.SHELF_ROWS}
+    modifications = [entry for entry in modifications
+                     if entry['id'] not in shelf_ids or (entry['id'], entry['type']) in home_rows]
+    existing = {(entry['id'], entry['type']): entry for entry in modifications
+                if entry['id'].startswith(prefix)}
+    groups, leading = [], []
+    for key in rows:
+        if key in existing:
+            groups.append([*leading, existing[key]])
+            leading = []
+        else:
+            entry = {'id': key[0], 'type': key[1], 'enabled': True}
+            (groups[-1] if groups else leading).append(entry)
+    # Keep retired non-shelf catalogs and their hidden settings.
+    groups.extend([entry] for key, entry in existing.items() if key not in rows)
+    if leading and groups:
+        groups[0][:0] = leading
+        leading = []
+    slots = iter(groups)
+    ordered = []
+    for entry in modifications:
+        if entry['id'].startswith(prefix):
+            ordered.extend(next(slots))
+        else:
+            ordered.append(entry)
+    ordered.extend(leading)
+    promote = (first_added or not home_rows.intersection(existing) or
+               any(i >= 40 and (entry['id'], entry['type']) in home_rows
+                   for i, entry in enumerate(ordered)))
+    if promote:
+        ordered = [existing.get(key, {'id': key[0], 'type': key[1], 'enabled': True})
+                   for key in rows if key in home_rows]
+        ordered += [entry for entry in modifications if (entry['id'], entry['type']) not in home_rows]
+        ordered += [{'id': key[0], 'type': key[1], 'enabled': True}
+                    for key in rows if key not in home_rows and key not in existing]
+        if ordered != original:
+            config['catalogModifications'] = ordered
+            return "move Skald's rows to the top (Odin shows the first 40)"
+        return None
+    if ordered != original:
+        config['catalogModifications'] = ordered
+        return "keep Skald's rows in place (" + str(len(rows)) + ' rows)'
+    return None
+
+
+def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None, secret_input=None, private=False):
     url = None
     def request(address, **kwargs):
         return aiostreams_request(address, transport=transport, manifest=url, **kwargs)
-    own_catalogs = {cid for cid, _, _ in s.feed_rows(s.LANG)} | {s.rid('search')}
-    def catalog_prefix(manifest):
-        for catalog in manifest.get('catalogs', []):
-            prefix, _, cid = catalog['id'].partition('.')
-            if cid in own_catalogs:
-                return prefix
-        return None
-    def keep_catalog_places(config, manifest, person):
-        modifications = config.get('catalogModifications')
-        prefix = catalog_prefix(manifest)
-        if not modifications or not prefix:
-            return None
-        prefix += '.'
-        with s.addon_scope(None if person == 'household' else person):
-            rows = [(prefix + cid, typ) for cid, types, _ in s.feed_rows(s.LANG)
-                    for typ in (('tv',) if cid in s.MIXED and 'tv' in types else types)]
-        rows += [(prefix + s.rid('search'), typ) for typ in ('movie', 'series')]
-        existing = {(entry['id'], entry['type']): entry for entry in modifications
-                    if entry['id'].startswith(prefix)}
-        groups, leading = [], []
-        for key in rows:
-            if key in existing:
-                groups.append([*leading, existing[key]])
-                leading = []
-            else:
-                entry = {'id': key[0], 'type': key[1], 'enabled': True}
-                (groups[-1] if groups else leading).append(entry)
-        # Keep retired catalog entries too, including the user's hidden settings.
-        groups.extend([entry] for key, entry in existing.items() if key not in rows)
-        if leading and groups:
-            groups[0][:0] = leading
-            leading = []
-        slots = iter(groups)
-        ordered = []
-        for entry in modifications:
-            if entry['id'].startswith(prefix):
-                ordered.extend(next(slots))
-            else:
-                ordered.append(entry)
-        ordered.extend(leading)
-        if ordered != modifications:
-            config['catalogModifications'] = ordered
-            return "keep Skald's rows in place (" + str(len(rows)) + ' rows)'
-        return None
     try:
         internal = args.internal_base or saved.get('internal_base') or os.environ.get('SKALD_INTERNAL_BASE')
         base = remote.validate_base(args.base or internal or saved.get('base') or '')
@@ -276,16 +299,17 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
         public = remote.validate_base(settings['baseUrl'])
         if not settings.get('jellyfin', {}).get('enabled'):
             lines.append('Jellyfin mode is off; set JELLYFIN_ENABLED=true in .env.aiostreams')
-        if args.yes and settings.get('protected') and not args.secret_stdin:
+        if args.yes and settings.get('protected') and not args.secret_stdin and secret_input is None:
             raise ValueError('protected AIOStreams needs --secret-stdin for the instance access key')
         if args.yes and args.uuid and not args.password_stdin:
             raise ValueError('existing AIOStreams login needs --password-stdin')
-        access = secret(args.secret_stdin, 'AIOStreams instance access key') if settings.get('protected') else None
+        access = secret_input if secret_input is not None else secret(args.secret_stdin, 'AIOStreams instance access key') if settings.get('protected') else None
         logins = aiostreams_logins(s.DATA)
         for person in people:
             url = urls[person]
             login = {'uuid': args.uuid, 'password': secret(args.password_stdin, 'AIOStreams password'), 'member': person} if args.uuid else logins.get(person)
             new = login is None
+            first_added = new
             skald = {'type': 'custom', 'instanceId': 'skd', 'enabled': True, 'options': {
                 'name': 'Skald', 'manifestUrl': url, 'timeout': 7000, 'mediaTypes': [],
                 'libraryAddon': False, 'resultPassthrough': False}}
@@ -320,6 +344,7 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
                     return next(f'{i:03x}' for i in range(4096) if f'{i:03x}' not in used)
                 kept = len(presets) - (found is not None)
                 if found is None:
+                    first_added = True
                     skald['instanceId'] = unused('skd')
                     presets.append(skald)
                     changes.append('add Skald')
@@ -335,11 +360,11 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
                     changes.append('add The Movie Database (title details)')
                 if access is not None and config.get('accessKey') != access:
                     changes.append('update instance access key')
-                catalog_change = keep_catalog_places(config, manifest, person)
+                catalog_change = keep_catalog_places(s, config, manifest, person, first_added=first_added)
                 if catalog_change:
                     changes.append(catalog_change)
                 save_config = bool(changes)
-                order_id = catalog_prefix(manifest)
+                order_id = catalog_prefix(s, manifest)
                 order_needed = not order_id or order_id not in config.get('upstreamCatalogOrder', [])
                 if order_needed:
                     changes.append("keep Skald's row order")
@@ -369,7 +394,7 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
             if new or save_config or order_needed:
                 if new or save_config:
                     manifest = request(aio + '/stremio/' + login['uuid'] + '/' + encrypted + '/manifest.json')
-                order_id = catalog_prefix(manifest)
+                order_id = catalog_prefix(s, manifest)
                 if not order_id:
                     raise ValueError('AIOStreams has no Skald catalogs yet; run skald setup aiostreams again when rows appear')
                 config = request(aio + '/api/v1/user', login=login)['data']['userData']
@@ -377,7 +402,7 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
                 order_changed = order_id not in order
                 if order_changed:
                     order.append(order_id)
-                catalog_change = keep_catalog_places(config, manifest, person)
+                catalog_change = keep_catalog_places(s, config, manifest, person, first_added=first_added)
                 if catalog_change:
                     lines.append(catalog_change)
                 if order_changed or catalog_change:
@@ -389,20 +414,26 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None):
                     lines.append(person + ':')
                 lines.extend(['Odin / Jellyfin app:  server  ' + public + '/jellyfin',
                               '                      user    ' + login['uuid']])
-                if not args.json:
+                if not args.json and not private:
                     lines.extend(['                      password ' + login['password'] + '   (shown once; also saved privately in DATA)',
                                   'Stremio (optional):   ' + public + '/stremio/' + login['uuid'] + '/' + encrypted + '/manifest.json'])
         result = {'ok': True, 'lines': lines}
-    except (ValueError, KeyError, TypeError) as error:
-        hint = str(error) if isinstance(error, ValueError) else 'AIOStreams response incomplete; check its settings'
+    except Exception as error:
+        hint = 'AIOStreams setup failed; check its address, access key and login, then retry with skald setup aiostreams' if private else str(error) if isinstance(error, ValueError) else 'AIOStreams response incomplete; check its settings'
         if args.json and 'urls' in locals():
             hint = hint.replace(s.addon_token(), '<addon-token>')
         lines.append(hint)
         manual_url = url or 'YOUR_PRINTED_MANIFEST_URL'
         if args.json:
             manual_url = manual_url.replace(s.addon_token(), '<addon-token>')
-        lines.extend(recipes.aiostreams_manual(manual_url).splitlines())
+        if not private:
+            lines.extend(recipes.aiostreams_manual(manual_url).splitlines())
         result = {'ok': False, 'lines': lines}
+    if private and saved.get('household_member') or 'aiostreams_pending' in saved:
+        saved['aiostreams_pending'] = not result['ok']
+        if result['ok']:
+            saved.pop('aiostreams_hint', None)
+        write_private(Path(s.DATA)/'setup.json', json.dumps(saved) + '\n')
     show()
     return result
 
@@ -412,6 +443,12 @@ RESTART = 'restart Skald (docker compose restart engine)'
 
 def startup_digest(config):
     config = copy.deepcopy(config)
+    config.pop('metrics', None)  # Metrics preferences reload when rows are served.
+    # Preference refresh makes this implicit default explicit in the loaded config.
+    config['household'].setdefault('shelves', 2)
+    people = config['taste'].setdefault('people', {})
+    for person in config['household']['members']:
+        people.setdefault(person, {})
     for traits in config.get('taste', {}).get('people', {}).values():
         traits.pop('prefs', None)  # Preferences reload when rows are served.
     return hashlib.sha256(json.dumps(config, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
@@ -438,7 +475,9 @@ def status(data):
     steps = {'checks': bool(saved.get('tmdb_checked') and os.environ.get('TMDB_API')),
              'household': bool(config) or legacy, 'address': bool(saved.get('base')),
              'watch': bool(saved.get('watch')), 'taste': not saved.get('connector_failed') and (bool(saved.get('taste')) or bool(config and config['connectors']))}
-    notes = []
+    if saved.get('household_member') or 'aiostreams_pending' in saved:
+        steps['aiostreams'] = not saved.get('aiostreams_pending')
+    notes = [saved['aiostreams_hint']] if saved.get('aiostreams_hint') else []
     if config and 'aiostreams_db' in config['connectors']:
         skipped = len(config['connectors']['aiostreams_db']['options'].get('archived', {}))
         notes.append('AIOStreams: ' + str(skipped) + ' profiles skipped')
@@ -464,7 +503,8 @@ def status(data):
                    for cid in ('mdblist', 'stremio')}
     missing = [k for k, done in steps.items() if not done]
     commands = {'checks': 'skald setup', 'household': 'skald setup', 'address': 'skald setup --base YOUR_ADDRESS',
-                'watch': 'skald setup --watch stremio', 'taste': 'skald setup --connect files'}
+                'watch': 'skald setup --watch stremio', 'taste': 'skald setup --connect files',
+                'aiostreams': 'skald setup aiostreams'}
     next_command = 'skald connectors test' if saved.get('connector_failed') else commands[missing[0]] if missing else 'nothing left'
     if 'checks' in missing:
         missing[missing.index('checks')] = ('TMDB_API not set; put it in .env, then docker compose up -d (engine) or docker compose -f compose.stack.example.yaml up -d (skald); without Docker: export TMDB_API=...'
@@ -495,7 +535,7 @@ def link(s, name, person, scopes, base):
         'After reviewing the preview: python3 -m skald push imports --remote --apply']}
 
 
-def configure_connector(s, args, ask, lines, show):
+def configure_connector(s, args, ask, lines, show, *, initial=False):
     staged = []
     previous = s.CONFIG
     committed = False
@@ -512,7 +552,7 @@ def configure_connector(s, args, ask, lines, show):
         write_private(path, value)
         return 'file:' + path.name
     try:
-        result = _configure_connector(s, args, ask, lines, show, stage, published)
+        result = _configure_connector(s, args, ask, lines, show, stage, published, initial=initial)
         committed = result is None or result['ok']
         return result
     finally:
@@ -522,7 +562,7 @@ def configure_connector(s, args, ask, lines, show):
                 path.unlink(missing_ok=True)
 
 
-def _configure_connector(s, args, ask, lines, show, stage, published):
+def _configure_connector(s, args, ask, lines, show, stage, published, *, initial=False):
     cid = 'trakt_api' if args.connect == 'trakt' else args.connect
     if cid == 'files':
         lines.extend(recipes.FILES.format(person=s.PEOPLE[0]).splitlines())
@@ -643,7 +683,7 @@ def _configure_connector(s, args, ask, lines, show, stage, published):
         history = None
         if cid == 'aiostreams_db' and old_options and any(old_options.get(k) != opts[k] for k in ('path', 'profiles')):
             history = s._aiostreams_db(opts)
-        s.CONFIG = publish(Path(s.DATA), cfg, replace=True, on_publish=published)
+        s.CONFIG = publish(Path(s.DATA), cfg, replace=not initial, on_publish=published)
         if history is not None:
             # Changed history inputs invalidate the hashes checked by refresh_profiles().
             s._connector_write('history', history)
@@ -680,8 +720,106 @@ def prefs_line(cfg, person):
             '; exclude series ' + (', '.join(excluded.get('series', [])) or 'none') + ''.join('; ' + x for x in extra))
 
 
+def select_rows(cfg, keys):
+    if keys == 'all':
+        cfg['household'].pop('rows', None)
+    else:
+        cfg['household']['rows'] = [k.strip() for k in (keys or '').split(',')]
+
+
+def wait_household_ready(data, cfg, base, *, timeout=30, transport=None):
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            if not restart_required(data, cfg):
+                req = remote.urllib.request.Request(base + '/health')
+                with (transport or remote.urllib.request.build_opener(remote.NoRedirect()).open)(req, timeout=2) as response:
+                    if json.loads(response.read(4096)).get('ok') is True:
+                        return
+        except (OSError, ValueError, AttributeError, http.client.HTTPException):
+            pass
+        if time.monotonic() >= deadline:
+            raise ValueError('Engine not ready with the complete config; check the engine, then run skald setup aiostreams')
+        time.sleep(0.25)
+
+
+def setup_household(data, args):
+    path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
+    if path.exists() or (data/'legacy.json').exists() or (data/'.skald-household').exists():
+        raise ValueError('household already configured; use the existing setup commands: skald setup rows, skald setup --connect, or skald setup aiostreams')
+    check_data(data)
+    from .migrate import ensure
+    ensure(data)
+    saved = state(data)
+    if not args.member or args.member in ('all', 'household', 'together'):
+        raise ValueError('supply one household member with --member')
+    cfg = household(data, [args.member], args.lang or 'en-US', args.timezone or 'UTC', args.country or 'United States', prepare=True)
+    if args.rows is not None:
+        select_rows(cfg, args.rows)
+        cfg = members.validate_config(cfg, data=str(data))
+    source = args.source_path or saved.get('source_path')
+    if not source:
+        raise ValueError('supply the mounted database with --source-path')
+    internal = args.internal_base or saved.get('internal_base') or os.environ.get('SKALD_INTERNAL_BASE')
+    base = remote.validate_base(internal or args.base or saved.get('base') or '')
+    aio = remote.validate_base(args.aio_url or saved.get('aio_url') or ('http://aiostreams:3000' if internal else ''))
+    private_uuid = secret(True, 'AIOStreams full UUID') if args.uuid_stdin else None
+    login = aiostreams_logins(data).get(args.member)
+    uid = connectors.aiostreams_login(source, args.aio_login, private_uuid or (login or {}).get('uuid'))
+    access = connectors.aiostreams_access_key(source)
+    if login is None or login['uuid'] != uid:
+        login = {'uuid': uid, 'password': secret(args.password_stdin, 'AIOStreams password'), 'member': args.member}
+    check_tmdb(data)
+    args = copy.copy(args)
+    args.yes = True
+    args.uuid = None
+    args.connect = 'aiostreams_db'
+    args.source_path = source
+    args.internal_base = internal
+    args.aio_url = aio
+    lines = ['Checks: DATA private; TMDB valid.']
+    def ask(value, label, default, flag):
+        if value is not None:
+            return value
+        if default is not None:
+            return default
+        raise ValueError('missing ' + flag)
+    with server(data) as s:
+        users = connectors.source_users(s, 'aiostreams_db', {'path': source})
+        args.map = [p + '=skip' for p in users if p != uid[:8]] + [uid[:8] + '=' + args.member]
+        s.CONFIG = cfg
+        result = configure_connector(s, args, ask, lines, lambda: None, initial=True)
+        if not result['ok']:
+            return {'ok': False, 'lines': lines}
+        cfg = s.CONFIG
+        os.close(s._credentials_dir(create=True))
+        logins = aiostreams_logins(data)
+        logins[args.member] = login
+        write_private(data/'credentials/aiostreams.json', json.dumps(logins) + '\n')
+    saved.update(tmdb_checked=True, taste='aiostreams_db', watch='jellyfin-app', aio_url=aio, source_path=source,
+                 household_member=args.member, aiostreams_pending=True)
+    saved['base'] = remote.validate_base(args.base or base)
+    if internal:
+        saved['internal_base'] = base
+    write_private(data/'setup.json', json.dumps(saved) + '\n')
+    try:
+        wait_household_ready(data, cfg, base)
+    except ValueError:
+        return {'ok': False, 'lines': lines + ['Engine not ready; check the engine, then retry with skald setup aiostreams.']}
+    with server(data) as s:
+        result = setup_aiostreams(s, args, saved, ask, lines, lambda: None, secret_input=access, private=True)
+    if result['ok']:
+        lines.append('Household ready. Use your existing player login.')
+    return result
+
+
 def run(args):
     data = Path(os.environ.get('DATA_DIR', '/data'))
+    if args.setup_action == 'alerts':
+        from .health import setup_alerts
+        return setup_alerts(data, args)
+    if args.setup_action == 'household':
+        return setup_household(data, args)
     if args.status:
         return status(data)
     if args.disconnect:
@@ -740,10 +878,7 @@ def run(args):
                 fcntl.flock(lock, fcntl.LOCK_EX)
                 cfg = commands.config(s)
                 before = cfg['household'].get('rows')
-                if args.row_keys == 'all':
-                    cfg['household'].pop('rows', None)
-                else:
-                    cfg['household']['rows'] = [k.strip() for k in (args.row_keys or '').split(',')]
+                select_rows(cfg, args.row_keys)
                 cfg = publish(data, cfg, replace=True)
             if before != cfg['household'].get('rows'):
                 s.aio_rows_changed()
@@ -833,6 +968,14 @@ def run(args):
     if args.setup_action == 'aiostreams':
         with server(data) as s:
             s.require_config(s.CONFIG_SOURCE, s.CONFIG_ERROR)
+            if saved.get('household_member'):
+                args = copy.copy(args)
+                args.member = args.member or saved['household_member']
+                args.yes = True
+                cfg = members.validate_config(json.loads(config_path.read_text()), data=str(data))
+                wait_household_ready(data, cfg, args.internal_base or saved.get('internal_base') or args.base or saved.get('base'))
+                access = connectors.aiostreams_access_key(saved['source_path'])
+                return setup_aiostreams(s, args, saved, ask, lines, show, secret_input=access, private=True)
             return setup_aiostreams(s, args, saved, ask, lines, show)
     check_tmdb(data)
     saved['tmdb_checked'] = True
@@ -930,7 +1073,25 @@ def run(args):
 
 def add_parser(commands):
     p = commands.add_parser('setup', help='set up a household on the machine holding DATA')
-    p.add_argument('setup_action', nargs='?', choices=['link', 'aiostreams', 'adopt', 'prefs', 'rows'], help='link a laptop, make an AIOStreams login, adopt a legacy household, set member preferences or choose home rows')
+    p.add_argument('setup_action', nargs='?', choices=['household', 'link', 'aiostreams', 'adopt', 'prefs', 'rows', 'alerts'], help='create a household, link a laptop, configure AIOStreams, preferences, rows or health alerts')
+    for flag, help_text in (
+            ('telegram', 'with alerts: configure Telegram privately'),
+            ('token-stdin', 'with alerts: read the Telegram token from stdin'),
+            ('webhook', 'with alerts: configure a JSON POST webhook'),
+            ('url-stdin', 'with alerts: read the webhook URL from stdin'),
+            ('test', 'with alerts: send one test message per configured channel'),
+            ('enable-health', 'with alerts: enable health checks after server restart'),
+            ('disable-health', 'with alerts: disable health checks after server restart'),
+            ('repair', 'with alerts: opt into bounded self-repair'),
+            ('digest', 'with alerts: opt into a daily health digest')):
+        p.add_argument('--' + flag, action=argparse.BooleanOptionalAction if flag in ('repair', 'digest') else 'store_true',
+                       default=None if flag in ('repair', 'digest') else False, help=help_text)
+    p.add_argument('--chat-id', help='with alerts: private Telegram chat id; never echoed')
+    p.add_argument('--webhook-style', choices=['ntfy', 'gotify', 'discord'], default='ntfy', help='with alerts: webhook JSON format')
+    p.add_argument('--quiet-hours', help='with alerts: silent local hours, e.g. 22-07; uses --timezone or UTC')
+    p.add_argument('--aio-login', help='with household: AIOStreams login prefix to map to --member')
+    p.add_argument('--uuid-stdin', action='store_true', help='with household: read a full login UUID privately before the password, for a login without history')
+    p.add_argument('--rows', help='with household: comma-separated home row keys; all uses default rows')
     p.add_argument('row_keys', nargs='?', help='with rows: comma-separated keys (' + ', '.join(members.ROW_KEYS) + '), or all for default rows')
     helps = {
         'aio-url': 'address where Skald reaches AIOStreams',

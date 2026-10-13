@@ -41,7 +41,7 @@ class PackagingTests(unittest.TestCase):
 
     def test_env_names_and_dockerignore(self):
         text = (ROOT / ".env.example").read_text()
-        self.assertEqual(text.splitlines(), ["TMDB_API", "OPENROUTER_API_KEY", "SKALD_MEMBERS", "SKALD_LANG", "SKALD_TZ"])
+        self.assertEqual(text.splitlines(), ["TMDB_API", "OPENROUTER_API_KEY", "SKALD_EMBED_MODEL", "SKALD_MEMBERS", "SKALD_LANG", "SKALD_TZ"])
         self.assertNotIn("=", text)
         ignore = (ROOT / ".dockerignore").read_text().splitlines()
         for name in (".env", "*.json", "snapshot/", "eval/out/"):

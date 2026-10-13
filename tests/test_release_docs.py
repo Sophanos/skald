@@ -45,9 +45,26 @@ class ReleaseDocs(unittest.TestCase):
         commands = ('backup', 'git pull', 'docker compose build', 'docker compose up -d', 'skald setup --status')
         self.assertEqual(sorted(commands, key=text.index), list(commands))
 
+    def test_upgrade_rollback_replaces_data_and_uses_new_verifier(self):
+        raw = (ROOT / 'docs/UPGRADE.md').read_text()
+        text = ' '.join(raw.split())
+        for instruction in ('external `SKALD_CONFIG` file separately', 'empty folder',
+                            'replace the DATA folder', 'owner and permissions',
+                            "new release's `skald backup restore`", 'before switching back',
+                            'older verifier rejects its manifest'):
+            with self.subTest(instruction=instruction):
+                self.assertIn(instruction, text)
+        self.assertNotIn('--dry-run', text.split('To roll back,', 1)[1])
+        self.assertLessEqual(len(raw.splitlines()), 55)
+
     def test_watch_includes_server_lookup_recipe(self):
         self.assertIn('--remote --dry-run', recipes.watch_doc())
         self.assertIn('The laptop needs no TMDB key', recipes.watch_doc())
+
+    def test_file_onboarding_uses_trakt_zip(self):
+        self.assertIn('trakt export.zip', recipes.FILES)
+        self.assertNotIn('trakt export-folder', recipes.FILES)
+        self.assertIn('trakt export.zip', recipes.watch_doc())
 
     def test_watch_exact_shared_text(self):
         self.assertEqual((ROOT/'docs/WATCH.md').read_text(), recipes.watch_doc())

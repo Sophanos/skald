@@ -391,19 +391,26 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(len(logs.getvalue().splitlines()), 1)
 
     def test_cli_json_text_and_privacy(self):
+        from skald import metrics as row_metrics
         s, t = self.s, at('2026-10-10T20:00')
         s.note_exposure('row', self.metas(1), t=t)
         self.observe([self.item(1, t + 60, progress=.33)], t + 60)
         with patch.object(s.time, 'time', return_value=t + 60):
             s.save_online()
         self.write('profile', {'entries': [], 'seen': [], 'negative': [], 'genres': {}})
+        config = json.loads((self.data/'legacy.json').read_text())
+        config['metrics'] = {'enabled': True}
+        (self.data/'legacy.json').write_text(json.dumps(config))
+        row_metrics.record_shown(self.data, config, rid('week', config), 'ana', self.metas(1), t)
+        row_metrics.update(self.data, config, [dict(key='tmdb:1', kind='movie', person='ana',
+                           at=t+60, source='history')], t+60)
         # The CLI's local state must be outside its read-only snapshot.
         with tempfile.TemporaryDirectory() as state, patch('time.time', return_value=t + 60):
             args = ['--snapshot', str(self.data), '--state-dir', state]
             out = io.StringIO()
             self.assertEqual(main(args + ['metrics', '--days', '1', '--json'], out=out), 0)
             report = json.loads(out.getvalue())
-            self.assertEqual(report['plays']['credited'], 1)
+            self.assertEqual(report['rows'][0]['played'], 1)
             raw = json.dumps(report)
             self.assertNotIn('tmdb:', raw)
             self.assertNotIn('"hour"', raw)
@@ -411,16 +418,16 @@ class MetricsTests(unittest.TestCase):
             out = io.StringIO()
             self.assertEqual(main(args + ['metrics'], out=out), 0)
             self.assertLessEqual(len(out.getvalue().splitlines()), 20)
-            self.assertIn('≤1.0', out.getvalue())
-            self.assertIn('1.000/1 [0.207–1.000]', out.getvalue())
+            self.assertIn('100.0%', out.getvalue())
+            self.assertIn('Shown', out.getvalue())
             out = io.StringIO()
             self.assertEqual(main(args + ['learn', '--json'], out=out), 0)
             self.assertIn('online', json.loads(out.getvalue()))
             self.assertNotIn('"at": 17', out.getvalue())
-        empty = s.metrics(now=t - s.DAY)
+        empty = row_metrics.report(self.data, config, now=t - s.DAY)
         out = io.StringIO()
         text_output(SimpleNamespace(command='metrics'), empty, out)
-        self.assertIn('hit@5: n/a', out.getvalue())
+        self.assertIn('Played', out.getvalue())
 
     def test_a8_budgets(self):
         s, now = self.s, at('2026-10-10T23:00')

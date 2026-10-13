@@ -253,7 +253,8 @@ class SelectedRows(unittest.TestCase):
         for key in ('digital', 'toprated'):
             cid = s.rid(key)
             with self.prefs(ana={'kids_age': 8}), patch.object(s, 'frec', side_effect=lambda key, kind: {'cr': {'US': 'G' if int(key[5:]) < 7 else 'R'}}):
-                self.assertEqual(self.served(cid, xs, above={x['id'] for x in xs}, who='ana', typ='movie'), xs[:7])
+                self.assertEqual(self.served(cid, xs, who='ana', typ='movie'), xs[:7])
+                self.assertEqual(self.served(cid, xs, above={x['id'] for x in xs}, who='ana', typ='movie'), [])
                 self.assertEqual(self.served(cid, xs[:5], who='ana', typ='movie'), [])
             with self.prefs(ana={'hide': ['movies']}), patch.object(s, 'frec', return_value={}):
                 self.assertEqual(self.served(cid, xs, who='ana', typ='movie'), [])

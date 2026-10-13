@@ -324,7 +324,7 @@ class LiveTests(unittest.TestCase):
         run = Mock(side_effect=[subprocess.CompletedProcess([], 0, json.dumps(event).encode(), b""), subprocess.CompletedProcess([], 0, b"", b"")])
         result = live.push([], lambda e: e, apply=True, run=run, undone=[event["id"]])
         self.assertEqual(result["uploaded"], 0)
-        self.assertEqual(run.call_args.kwargs["input"], b"")
+        self.assertEqual(json.loads(run.call_args.kwargs["input"]), {"imports": [], "undo_ids": [event["id"]]})
 
 
 if __name__ == "__main__":

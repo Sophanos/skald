@@ -28,10 +28,38 @@ for the recommended stack, use `-f compose.stack.example.yaml exec skald` instea
 Run setup where your household data lives. In Docker:
 `docker compose exec engine skald setup`.
 The folder mounted at `/data` is called DATA below.
+With empty DATA, the engine serves `/health` as HTTP 503 with status `not-configured` and checks for `skald.json` every three seconds, then starts automatically when setup saves it.
 Start with the [README quickstart](../README.md).
 Clone from `https://github.com/Sophanos/skald`.
 Delete the `SKALD_MEMBERS`, `SKALD_LANG` and `SKALD_TZ` lines copied into `.env`;
 setup asks for these household settings instead.
+
+### One command for a fresh household with AIOStreams
+
+Keep Compose, network addresses, DATA ownership, API keys and the player login
+manual. Start the engine with fresh DATA. Mount the AIOStreams database directory
+read-only, including its SQLite WAL and SHM files, so the engine can see current
+history and settings. Then run inside the engine:
+
+```sh
+skald setup household --member sam --lang de-DE --timezone Europe/Berlin --country DE --aio-login PREFIX --source-path /aio-data/db.sqlite --internal-base http://skald:8080 --aio-url http://aiostreams:3000 --password-stdin
+```
+
+Send the login password through private stdin, or omit `--password-stdin` to use
+the private prompt. Internal and AIOStreams addresses can also come from saved
+setup settings. `--rows foryou,week` chooses rows; omitting it uses default rows.
+The selected login maps to Sam; every other discovered profile is skipped.
+Ambiguous prefixes, including accounts sharing the first eight characters, are
+refused. A login without history needs `--uuid-stdin`: send its full UUID on the
+first private stdin line and its password on the next line.
+
+Setup checks TMDB, saves one complete config, waits for the engine to load it,
+and updates the existing AIOStreams login. It reads the instance access key from
+AIOStreams' `settings` table in memory. It prints no passwords, access keys or
+authenticated manifest URLs. If the engine or AIOStreams step fails after saving,
+fix the reported issue and run `skald setup aiostreams`; saved private credentials
+are reused. The household command refuses configured DATA. Use the existing
+setup commands for later changes. This flow does not reload a running household.
 
 ### Without Docker
 
@@ -51,6 +79,81 @@ Supply the real key privately so it does not enter shell history. For example,
 Python's `getpass` can read it: `export TMDB_API="$(python -c 'import getpass; print(getpass.getpass("TMDB API key: "))')"`.
 Stop and restart `python server.py` after changing settings.
 
+### Keep less history
+
+This is off by default. In `skald.json`, add `"keep_raw_days": 30` and/or
+`"max_raw_items": 1000` inside `history`, then restart Skald. Both accept
+nonnegative integers; `null` or omission keeps everything. A zero count keeps no
+raw items. The count limit covers all raw play and import files together.
+Set `"keep_raw": false` on a configured connector to fold its raw items daily
+regardless of those limits; omission or `true` uses the household limits.
+
+Daily cleanup saves compact title summaries before removing raw items. They keep
+the TMDB key, kind, people, last-played month, play count, ratings and taste signals,
+without device or client details. Unresolved titles normally stay raw; cleanup
+reports how many selected records produced no taste event. A zero count or
+`keep_raw: false` removes those records too, losing their taste contribution.
+Preview with `skald history --cleanup`; add `--yes` to apply the configured cleanup.
+Typed ratings, credentials and saved taste-memory facts stay unchanged.
+Backups keep their usual schedule and retention, including older evidence already
+archived. Source accounts and original export files are outside this cleanup.
+
+Less history means slightly coarser time decay: summaries use the first day of the
+month, which can shift decay thresholds, ordering and borderline abandonment.
+Repeated title evidence in the same month is coalesced. In the synthetic fixture,
+folding keeps the seen and negative-title sets and reduces 82 profile entries to
+81 by coalescing one duplicate shared-title row. Remaining raw TV and account
+items take precedence for the same title, media kind and source. Imports keep
+their correction order and original undo IDs across folding. Re-uploads compare
+folded dates by month; the other import fields must still match. Row metrics treat
+folded plays as undated, so a rounded month cannot earn precise-window credit.
+
+Run `skald history --forget-before 2026-09-01 --person alex` on the server to preview
+counts, then repeat with `--yes` to apply. `--dry-run` explicitly previews.
+Forgetting removes that person's raw evidence and inferred, unconfirmed memory
+facts before the date. A cutoff on the first of a month keeps that month; a later
+day removes their whole boundary month, since summaries cannot distinguish days. Other members'
+evidence and typed opinions stay. A saved cutoff also prevents old connector
+evidence from contributing again; existing backups are unchanged.
+Forget also invalidates household learning and exposure caches and health repair
+copies. Affected member and Together metric cohorts lose old play credit and
+show incomplete rates; other members' metric cohorts stay.
+
+
+## Optional health checks and alerts
+
+Health checks, self-repair and daily digests start off. Enable checks with
+`skald setup alerts --enable-health`, then restart the server. Add `--repair`
+to allow safe repairs. Checks run every five minutes: stale feeds, dead workers,
+three consecutive failed connector polls, AI use at 90% of a cap, pending
+AIOStreams sync, less than 512 MiB free, unreadable JSON and newly empty rows.
+
+Repairs have a 30-minute cooldown and at most three attempts per check per UTC
+day. Connector retries use increasing backoff and respect upstream rate limits.
+Only serving caches (`feeds.json`, `shown.json`, `shown_scopes.json`) may be restored or deleted.
+Taste, ratings, history, household config and credentials are never repaired.
+Actions go in `DATA/health.jsonl`, capped at 256 KiB. Limits survive restarts;
+an unreadable health ledger disables repair until you restore it or remove it.
+
+For Telegram, run
+`skald setup alerts --telegram --token-stdin --chat-id ID` and supply the bot
+token through private stdin. For a webhook, run
+`skald setup alerts --webhook --url-stdin --webhook-style discord` and supply
+the URL through private stdin. Styles are `ntfy` (use a topic URL), `gotify`
+(use its message endpoint) and `discord`.
+Omit the stdin flag to use a private prompt. Values are stored in mode 0600
+under `DATA/credentials/` and are never echoed. Configure both channels by
+running the commands separately. `skald setup alerts --test` sends a test.
+
+Alerts wait until repair fails or is unavailable. Repeated alerts are deduped;
+recovery sends a message. `--quiet-hours 22-07 --timezone Europe/Berlin` defers
+messages until morning. `--digest` adds a daily summary. Settings are saved in
+`DATA/health-settings.json`; thresholds and repair limits can be changed there.
+Use `skald health` or `skald health --json` to see checks and the last repair.
+`/health` includes detail for loopback clients or an authenticated household
+client with read access; public callers receive only basic liveness.
+`skald setup alerts --disable-health` turns checks off after a restart.
+Use `--no-repair`, `--no-digest` or `--quiet-hours ""` to clear optional settings.
 
 ## 1. Check the machine and keys
 
@@ -63,6 +166,16 @@ After changing `.env`, run `docker compose up -d --force-recreate`.
 
 OpenRouter is optional. Add `OPENROUTER_API_KEY=YOUR_KEY` for AI picks,
 natural-language search, mood shelves and weekly picks. Rows work without it.
+
+Embeddings use OpenRouter's `/api/v1/embeddings` with `google/gemini-embedding-2`
+and 256 dimensions. Set `SKALD_EMBED_MODEL` to any OpenRouter embedding id to
+override it, then restart the engine. Skald keeps the old model active while it
+re-embeds in the background within the daily embed budget, switching when the new
+model covers at least as many needed titles. Errors keep the old vectors for retry;
+`/stats` shows the active embedding model and coverage counts.
+
+Optional `SKALD_COMMAND_MODEL` defaults to `~google/gemini-flash-latest`; `SKALD_COMMAND_EFFORT` defaults to `low`.
+Within decision budgets, failed settings command calls retry once with `z-ai/glm-5.3-flash` at effort `low` (1200 tokens, six seconds) before returning no change. Override with `SKALD_COMMAND_FALLBACK_MODEL` and `SKALD_COMMAND_FALLBACK_EFFORT`.
 AI search understands “anime I have not watched” and “anime I have watched” using the linked member’s history, or current members together on the Together link.
 
 ## 2. Add your household
@@ -214,6 +327,90 @@ AIOStreams may need a restart after rows change.
 
 ## 5. Connect taste sources
 
+### Which players report plays?
+
+Installing Skald gives a player rows, but does not send playback events back.
+Skald saves the latest row composition in `shown.json` and `shown_scopes.json`
+for serving. Those files are pins, not a viewing log. The weekly metric records
+the titles in actual catalog responses, including cached responses served by
+Skald. A player may fetch rows in the background or display its own cached rows
+without a new request. This measures delivered titles, not proof that someone
+looked at each poster or chose the title because of Skald.
+
+| Player or source | What can feed Skald play events |
+|---|---|
+| Jellyfin clients, including Odin connected to Jellyfin | The `jellyfin` connector reads played state and last-play times. Map users to household members. |
+| Odin connected to AIOStreams in Jellyfin mode | The `aiostreams_db` connector reads AIOStreams watch state through a read-only database mount. A Jellyfin connector can also read a server that exposes and persists this history. The Odin addon installation alone supplies no events. |
+| Plex clients | The `plex` connector reads played state. Its configured profile supplies the person; it does not infer separate people from a shared Plex account. |
+| Stremio | The `stremio` connector uses that account's private Stremio connector key and watched library state. Alternatively, AIOStreams watch state or a configured Trakt scrobbling path can supply plays. A Skald addon link or stream request alone supplies none. |
+| Any player that scrobbles to Trakt | The `trakt_api` connector reads the mapped account's history. The `trakt` file connector reads a prepared local Trakt history file. Trakt must actually receive the player's plays. |
+| Players connected to MDBList | The `mdblist` connector reads watched state recorded by supported webhooks, plugins or scripts. A watchlist entry alone supplies no play. |
+| Prepared local history | The `history` file connector reads `history.json`. Dated played records can feed the metric; creating the file does not track a player automatically. |
+| Taste imports such as Netflix, Trakt and Letterboxd exports | They teach taste through `imports.jsonl`. Stored dates may be viewing dates, rating dates or a default import day, so these claims have no usable play time for this metric. They appear in coverage but receive no credit. IMDb ratings, plain lists, browser history and YouTube interests do not establish a title play. |
+| Other players and availability connectors | No events unless one of the paths above records their plays. NZBHydra availability, metadata lookups, searches, ratings and likes alone supply none. |
+
+No connector is enabled by the metric. Configure and test the appropriate source
+with `skald setup --connect SOURCE` and `skald connect test SOURCE`.
+`skald metrics` lists the dated titles and claims without a usable play time in
+the latest local inputs, including sources with zero plays. Per-row source counts
+show which sources actually credited that row. They may overlap when two sources
+report the same title; they do not add up to extra played titles.
+Connectors often keep only the latest play per title, and may miss older plays.
+Unresolved ids, missing times, bulk backfill times and disabled connectors do not
+receive credit. The metric adds no metadata requests or network calls.
+
+### Local weekly row counts and privacy
+
+Run `skald metrics` inside the engine, or with its local `DATA_DIR` set.
+It prints counts only, for the current Monday-start week and previous three
+weeks in the household timezone. Each row and viewer gets one count per distinct
+title and type in the week it was delivered. `played / shown` credits a dated
+play after delivery, at most once per title in that row-week, within 14 days
+(both endpoints included). Repeated catalog fetches and multiple sources do not
+raise that title's count. A play can credit several rows or delivery weeks.
+Recent weeks are still filling in; zero does not prove someone rejected a title.
+
+Personal deliveries match only that person's plays. Together deliveries can
+match any mapped member's play or shared household play. Shared plays do not
+credit a personal row when the person is unknown. Guests receive no attribution.
+
+Optional household settings in `skald.json`:
+
+```json
+"metrics": {
+  "enabled": true,
+  "attribution_days": 14,
+  "shown_retention_days": 30,
+  "shown_max_items": 10000
+}
+```
+
+Metrics are off by default and stay local when enabled. Days accept integers from 1 to 365;
+the cap accepts 1 to 100000. Booleans are not numbers. Omitted settings use the
+values above, except `enabled`, which defaults to `false`. Changes apply on the next row request or worker pass.
+Set `enabled` to `false` to delete `metrics.json` and `metrics_shown.json` and
+stop this extra logging. The local metrics command also deletes them when off.
+Reading a copy with `--snapshot` never changes that copy.
+
+`metrics.json` holds only weekly counts and source coverage, without title names
+or ids. The private `metrics_shown.json` holds title ids, types, rows, viewers and
+delivery times needed for attribution, plus folded counts. A daily cleanup folds
+counts before deleting old evidence. The cap limits retained delivery timestamps
+and removes the oldest title records when needed. Weeks whose evidence was capped
+or removed before attribution could finish show `n/a`, with incomplete counts;
+that row-week stops accepting new deliveries after a record is fully removed.
+Shorter retention than the attribution window can therefore lose credit.
+Late imports cannot recover credit after evidence expires. Restarting preserves
+counts; old serving pins are not treated as new deliveries.
+
+Serving still needs its latest shown pins and existing learning state, so this
+switch does not erase `shown.json`, `shown_scopes.json`, watch history or existing
+learning logs in `learn.json` and `online.json`. Backups retain counts but exclude
+the new raw attribution file.
+Older backups can still contain counts after you switch off. A restored counts-only
+backup preserves its numbers but cannot reconstruct attribution evidence. Weeks
+still within the attribution window show `n/a` after such a restore.
+
 **What it does:** saves a private credential, maps accounts to people, then runs a read-only test.
 **What you need:** a source account or an export. See [each source](CONNECTORS.md).
 **Worked when:** the connector test says reachable, auth OK and zero unmapped accounts.
@@ -277,11 +474,27 @@ Search `every sunday morning a classic for us` or `weekday evenings something li
 
 Search “hide anime”, “no more horror” or “I loved Dark” to preview one change. Type the exact “yes NN” code shown in the preview to apply it within ten minutes. Plain “yes” and partial codes change nothing. A new command replaces the preview.
 AIOStreams keeps search answers for 5 minutes by default (CATALOG_CACHE_TTL), so retyping the same text can show the earlier card; change the wording to refresh.
-Search “undo” (also “rückgängig”) to revert. Skald keeps the last 20 commands per person.
+Search “undo” (also “rückgängig”) to revert the latest active command.
+“History”, “what did I change” or “Verlauf” lists changes and their age.
+Skald keeps up to 200 changes per scope for 180 days; undated old entries stay.
+“Undo no horror”, “undo the crime shelf” or “bring back horror” previews an undo.
+It reverses that change on current settings and keeps unrelated newer changes.
+Matching uses the text, label and values, with the newest exact match preferred.
+A scalar such as runtime must still have its recorded value, or undo refuses.
+“Redo no horror” or “do again no horror” previews applying the change again.
+“Reset filters”, “reset shelves” or “reset everything to default” previews a reset.
+German: “Filter zurücksetzen”, “Regale zurücksetzen”, “alles auf Standard zurücksetzen”.
+Read the card's list, then use its exact “yes NN” code. One undo restores a reset.
+Add “for MEMBER” or “for us”. Together resets adult filters and Together shelves;
+personal shelves stay personal. Household row labels and order stay as configured.
+Ratings, feedback, learned taste, imports and viewing history stay intact.
+“Reset my taste” remains unsupported. Undated old commands support plain undo.
 Member links always apply to that member. Shared and Together links use the named person, then Who's watching; add a name if neither identifies a member. “Everyone” means every adult for settings, and Together for shelves.
 Children can manage their own shelves; other settings still need a grown-up. “Help” lists examples; “my settings” shows settings and recent commands.
 
 ## Shelves
+
+Only slots with a shelf appear in the player. Added or stopped shelves update AIOStreams for saved logins after about a minute.
 
 Each person has `prefs.shelves` slots (default 4); `household.shelves` sets Together slots (default 2). Both accept 0..10. Use `skald shelf count --person ana 6` or `skald shelf count --together 3`. Shelf contents and search answers can still take up to 5 minutes (AIOStreams `CATALOG_CACHE_TTL`).
 Add a wish with `skald shelf add --person ana --name "Sunday Classics" --when "sun 05-12" "a classic film"`. Review the preview, then repeat with `--yes` or `--plan HASH`. A parent can add wishes for a child; fills respect their age limit. Stop a wish by name or slot number with `skald shelf stop`.

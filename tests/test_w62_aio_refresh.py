@@ -92,7 +92,7 @@ class AIORefresh(unittest.TestCase):
         bg = self.background()
         waiting, release, fetching, finish = [threading.Event() for _ in range(4)]
         def sleep(seconds):
-            self.assertEqual(seconds, 2)
+            self.assertEqual(seconds, 45)
             waiting.set()
             self.assertTrue(release.wait(3))
         def transport(req, timeout):
@@ -133,6 +133,23 @@ class AIORefresh(unittest.TestCase):
                 self.assertIsNone(refresh(self.data, transport=self.fake))
         self.assertFalse(self.fake.calls)
 
+    def test_successful_refresh_preserves_setup_changes_during_request(self):
+        from skald.aio_refresh import refresh
+        def transport(req, timeout):
+            if req.get_method() == 'PUT':
+                saved = setup.state(self.data)
+                saved.update(aio_url='https://new-aio.invalid', base='https://new-skald.invalid',
+                             taste='files', aiostreams_pending=True, aiostreams_hint='old hint')
+                setup.write_private(self.data / 'setup.json', json.dumps(saved))
+            return self.fake(req, timeout)
+        self.assertIn('refreshed', refresh(self.data, transport=transport))
+        saved = setup.state(self.data)
+        self.assertEqual(saved['aio_url'], 'https://new-aio.invalid')
+        self.assertEqual(saved['base'], 'https://new-skald.invalid')
+        self.assertEqual(saved['taste'], 'files')
+        self.assertFalse(saved['aiostreams_pending'])
+        self.assertNotIn('aiostreams_hint', saved)
+
     def test_failed_put_keeps_change_and_redacts_log(self):
         self.background()
         for failure, hint in [((500, None), 'rejected setup'), ((401, 'ADDON_PASSWORD_INVALID'), 'instance access key')]:
@@ -145,8 +162,51 @@ class AIORefresh(unittest.TestCase):
                 self.assertEqual(self.s.shelf_list('ana')['wishes'][0]['name'], 'Kept')
                 self.assertEqual(len(self.fake.calls), 2)
                 self.assertIn(hint, self.lines[-1])
+                saved = setup.state(self.data)
+                self.assertTrue(saved['aiostreams_pending'])
+                self.assertEqual(saved['aiostreams_hint'], self.lines[-1])
+                status = setup.status(self.data)
+                self.assertIn('aiostreams', status['missing'])
+                self.assertIn(self.lines[-1], status['notes'])
                 for secret in ('synthetic-uuid', 'synthetic-password', 'Authorization', '/api/', 'addons', 'https://'):
                     self.assertNotIn(secret, self.lines[-1])
+
+    def test_refresh_adds_and_removes_catalogs_using_setup_order(self):
+        from skald.aio_refresh import refresh
+        from test_setup_aiostreams import FakeAIO as CatalogAIO
+        aio = CatalogAIO()
+        cid = 'skd1a2b.' + self.s.rid('shelf_ana_1')
+        other = {'id': 'other.keep', 'type': 'movie', 'enabled': False}
+        for login in setup.aiostreams_logins(self.data).values():
+            aio.configs[login['uuid']] = {'presets': [{'type': 'custom', 'instanceId': 'skd'}],
+                'accessKey': 'synthetic-access-key', 'catalogModifications': [other.copy()],
+                'upstreamCatalogOrder': ['other']}
+        with patch.object(self.s, 'aio_rows_changed'):
+            self.add()
+        self.assertIn('refreshed', refresh(self.data, transport=aio, server=self.s))
+        ana = aio.configs['synthetic-uuid-ana']
+        sam = aio.configs['synthetic-uuid-sam']
+        self.assertIn(cid, [r['id'] for r in ana['catalogModifications']])
+        self.assertNotIn(cid, [r['id'] for r in sam['catalogModifications']])
+        self.assertLess(next(i for i, r in enumerate(ana['catalogModifications']) if r['id'] == cid),
+                        ana['catalogModifications'].index(other))
+        self.assertIn('skd1a2b', ana['upstreamCatalogOrder'])
+        with patch.object(self.s, 'aio_rows_changed'):
+            self.s.shelf_change('ana', 'stop', slot=1, apply=True)
+        self.assertIn('refreshed', refresh(self.data, transport=aio, server=self.s))
+        self.assertNotIn(cid, [r['id'] for r in aio.configs['synthetic-uuid-ana']['catalogModifications']])
+        self.assertIn(other, aio.configs['synthetic-uuid-ana']['catalogModifications'])
+        self.assertEqual(ana['accessKey'], 'synthetic-access-key')
+        saved = setup.state(self.data)
+        self.assertFalse(saved['aiostreams_pending'])
+        self.assertNotIn('aiostreams_hint', saved)
+
+    def test_empty_saved_logins_do_not_start_background_thread(self):
+        bg = self.background()
+        (self.data / 'credentials/aiostreams.json').write_text('{}')
+        self.add()
+        self.assertIsNone(bg.thread)
+        self.assertFalse(self.fake.calls)
 
     def test_search_preview_dismiss_and_non_shelf_prefs_send_nothing(self):
         self.background()

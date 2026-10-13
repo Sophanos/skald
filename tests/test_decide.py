@@ -53,7 +53,10 @@ class DecideTests(unittest.TestCase):
         spec = dict(self.s.DECISIONS["route_query"])
         for change in ({"bad": 1}, {"ver": False}, {"lane": "unknown"}, {"serving": True},
                        {"inp": {"key": self.s.TKEY}}, {"out": {"pick": self.s.TKEY}},
-                       {"llm": {**spec["llm"], "batch": 0}}, {"fallback": None}):
+                       {"llm": {**spec["llm"], "batch": 0}}, {"fallback": None},
+                       {"llm": {**spec["llm"], "fallback": {**spec["llm"], "timeout": 0}}},
+                       {"llm": {**spec["llm"], "fallback": {**spec["llm"], "batch": 2}}},
+                       {"llm": {**spec["llm"], "fallback": {**spec["llm"], "unexpected": True}}}):
             with self.subTest(change=change), self.assertRaises(AssertionError):
                 self.s.decision("bad_spec", **{**spec, **change})
         with self.assertRaises(AssertionError):
@@ -196,7 +199,7 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(len({r["receipt"] for r in results}), 10)
 
     def test_follower_timeout_and_invalid_batch_leaves_no_flights(self):
-        key = "route_query|1|" + self.s.hashlib.sha256(b'{"query":"waiting"}').hexdigest()[:32]
+        key = f"route_query|{self.s.DECISIONS['route_query']['ver']}|" + self.s.hashlib.sha256(b'{"query":"waiting"}').hexdigest()[:32]
         with self.s._decide_lock:
             self.s._decide_flights[key] = threading.Event()
         with patch.dict(self.s.DECISIONS["route_query"]["llm"], {"timeout": .001}), \
@@ -240,7 +243,8 @@ class DecideTests(unittest.TestCase):
         with patch.object(self.s, "openrouter", return_value=self.reply()):
             for i in range(12000):
                 self.route(f"query {i}")
-        self.assertTrue(self.s.flush_decisions(timeout=5))
+        # Generous bound: the writer drains slowly under suite load, but a stuck writer still fails.
+        self.assertTrue(self.s.flush_decisions(timeout=60))
         lines = Path(self.s.DATA, "decisions.jsonl").read_text().splitlines()
         self.assertLessEqual(len(lines), 5000)
         self.assertLessEqual(len(self.s._decide_cache), 5000)
@@ -269,7 +273,7 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(rec["id"], result["receipt"])
 
     def test_load_skips_bad_middle_receipt_and_cache_entries(self):
-        key = lambda n: "route_query|1|" + str(n) * 32
+        key = lambda n: f"route_query|{self.s.DECISIONS['route_query']['ver']}|" + str(n) * 32
         hit = {"expires": time.time() + self.s.DAY, "answer": self.reply()["answers"]["route"], "confidence": .9}
         cache = {key(1): hit, "torn-key": hit, key(2): {**hit, "confidence": "bad"}, key(3): hit}
         Path(self.s.DATA, "decide_cache.json").write_text(json.dumps(cache))

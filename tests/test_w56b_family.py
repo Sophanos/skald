@@ -34,7 +34,7 @@ class Family(unittest.TestCase):
         s = self.s
         with patch.object(s, 'pin_shown'), patch.object(s, 'feed', return_value={}):
             value = [s.manifest('en-US'), self.served(s.rid('leap'), cards(8), who='both'), self.prompt()]
-        self.assertEqual(hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest(), '46df855824d7e5dbe290f6b31737cc421700e11725f8f82bb43e852e1f90e617')
+        self.assertEqual(hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest(), '5922dd6659f82cf5883ac0cc5120a7d155350a1a0f22bd469ce1aa7811e0dd31')
         self.assertEqual(s.adult_people(), s.PEOPLE)
         self.assertNotIn('family', [j[0] for j in s.job_specs(s.local_now(), {})])
 

@@ -105,7 +105,7 @@ def offline_server(snapshot, work):
         loaded_emb = len(server._emb)  # Validate decoding before mixed-record repair drops vectors.
         server.load_facets()
         emb = read_json(Path(temp) / 'emb.json')
-        if emb.get('dim') != server.EMB_DIM or emb.get('model') != server.EMB_MODEL:
+        if emb.get('dim') != server.EMB_DIM or (emb.get('model') or 'openai/text-embedding-3-small') != server._emb_model:
             raise ValueError('snapshot embedding model/dimension differs from server')
         if loaded_emb != len(emb['v']) or not server._facets:
             raise ValueError('snapshot embeddings/facets failed to load')

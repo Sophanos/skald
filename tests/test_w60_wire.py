@@ -155,7 +155,7 @@ class Wire(base.Commands):
         with self.assertRaises(ValueError):
             self.c.preview(self.s, '', 'ana', answer={'op': 'shelf_add', 'kind': None, 'values': ['classic', 'sun'], 'person': None})
 
-    def test_old_command_journal_undo_keeps_format_one(self):
+    def test_old_command_journal_undo_upgrades_history_format(self):
         cfg = self.c.config(self.s)
         cfg['taste']['people']['ana']['prefs'] = {'hide': ['anime']}
         from skald import setup
@@ -166,7 +166,24 @@ class Wire(base.Commands):
         marker.write_text(json.dumps({'format': 1, 'release': self.s.VERSION}))
         out = base.io.StringIO()
         self.assertEqual(base.main(['command', '--person', 'ana', '--undo', '--json'], out=out), 0, out.getvalue())
-        self.assertEqual(json.loads(marker.read_text())['format'], 1)
+        self.assertEqual(json.loads(marker.read_text())['format'], 5)
         self.s.refresh_preferences()
         self.assertNotIn('prefs', self.s.CONFIG['taste']['people']['ana'])
-        self.assertEqual(self.c.journal(self.s)['ana'], [])
+        self.assertTrue(self.c.journal(self.s)['ana'][0]['undone'])
+
+    def test_old_command_journal_undo_preserves_current_format(self):
+        cfg = self.c.config(self.s)
+        cfg['taste']['people']['ana']['prefs'] = {'hide': ['anime']}
+        from skald import setup
+        setup.publish(Path(self.temp.name), cfg, replace=True)
+        Path(self.temp.name, 'commands.json').write_text(json.dumps({
+            'ana': [{'before': None, 'event': None, 'name': 'Hide anime'}]}))
+        marker = Path(self.temp.name, '.skald-format')
+        from skald.migrate import FORMAT
+        marker.write_text(json.dumps({'format': FORMAT, 'release': self.s.VERSION}))
+        out = base.io.StringIO()
+        self.assertEqual(base.main(['command', '--person', 'ana', '--undo', '--json'], out=out), 0, out.getvalue())
+        self.assertEqual(json.loads(marker.read_text())['format'], FORMAT)
+        self.s.refresh_preferences()
+        self.assertNotIn('prefs', self.s.CONFIG['taste']['people']['ana'])
+        self.assertEqual([e for e in self.c.journal(self.s)['ana'] if not e.get('undone')], [])

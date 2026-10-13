@@ -1,5 +1,6 @@
 """Fixed addon slots for private standing wishes."""
 import copy
+from contextlib import contextmanager
 import datetime as dt
 import hashlib
 import fcntl
@@ -26,9 +27,11 @@ def counts(cfg):
     return [cfg['household'].get('shelves', 2), *[cfg['taste'].get('people', {}).get(p, {}).get('prefs', {}).get('shelves', 4)
             for p in cfg['household']['members']]]
 
-def slots(s, scope=None):
+def slots(s, scope=None, *, doc=None):
     scopes = [scope, 'together'] if scope in s.PEOPLE else ['together']
-    return [(s.rid(f'shelf_{p}_{n}'), p, n) for p in scopes for n in range(1, slot_count(s, p) + 1)]
+    occupied = {(w['scope'], w['slot']) for w in (read(s) if doc is None else doc)['wishes']}
+    return [(s.rid(f'shelf_{p}_{n}'), p, n) for p in scopes for n in range(1, slot_count(s, p) + 1)
+            if (p, n) in occupied]
 
 def schedule(value):
     if value == 'always':
@@ -79,10 +82,26 @@ def listing(s, scope=None):
             wishes.append({**w, 'status': status if active else 'outside window'})
     return {'counts': {p: slot_count(s, p) for p in scopes}, 'wishes': wishes}
 
-def change(s, scope, op, **kwargs):
+@contextmanager
+def locked(s):
+    """Serialize shelf state changes across threads and processes."""
     with LOCK, os.fdopen(os.open(Path(s.DATA) / 'shelves.lock', os.O_RDWR | os.O_CREAT, 0o600), 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+def change(s, scope, op, **kwargs):
+    with locked(s):
         return _change(s, scope, op, **kwargs)
+
+def consume_undo(s, scope, before, op):
+    """Remove the corresponding old-stack entry while the shelf lock is held."""
+    journal = Path(s.DATA) / 'undo.jsonl'
+    events = [json.loads(line) for line in journal.read_text().splitlines()] if journal.exists() else []
+    index = next((i for i in range(len(events)-1, -1, -1)
+                  if events[i] == {'scope': scope, 'op': op, 'before': before}), None)
+    if index is not None:
+        events.pop(index)
+        write_private(journal, ''.join(json.dumps(e) + '\n' for e in events))
 
 def _change(s, scope, op, *, text='', name='', when='always', slot=None, count=None, apply=False, plan=None, expected=None):
     with LOCK:
@@ -199,12 +218,12 @@ def fill(s, lang, now=None, build=True):
         doc = read(s)
         out = {'_names': {}}
         for scope in (*s.PEOPLE, 'together'):
-            for cid, owner, n in slots(s, scope):
+            for cid, owner, n in slots(s, scope, doc=doc):
                 if owner != scope:
                     continue
                 wish = next((w for w in doc['wishes'] if (w['scope'], w['slot']) == (scope, n)), None)
                 out[cid] = {'tv': []}
-                out['_names'][cid] = {'title': wish['name'] if wish and wish['name'] else f'Your Shelf {n}'}
+                out['_names'][cid] = {'title': wish['name'] or wish['text'][:100]}
                 win = window(wish, now) if wish else None
                 if not win:
                     continue

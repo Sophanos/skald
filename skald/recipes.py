@@ -50,7 +50,7 @@ FILES = '''Import a file on your laptop, then preview before sending:
 Your linked server resolves titles with --remote. The laptop needs no TMDB key.
 Without server lookups, use --resolve-online with TMDB_API on the laptop.
 python3 -m skald import netflix ViewingActivity.csv --person {person} --remote --dry-run
-Other sources: imdb ratings.csv; letterboxd ratings.csv; trakt export-folder;
+Other sources: imdb ratings.csv; letterboxd ratings.csv; trakt export.zip;
 youtube watch-history.json or watch-history.html; chrome History (copy the browser database first).
 Use python3 -m skald onboard --sources for export instructions.
 Save a reviewed import with the same command without --dry-run and with --yes.

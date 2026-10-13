@@ -96,6 +96,16 @@ class AIOStreamsTests(unittest.TestCase):
             'other': {'keep': [1, 2]}}
         self.fake.meta = []
 
+    def test_successful_setup_clears_background_refresh_hint(self):
+        saved = setup.state(self.data)
+        saved.update(aiostreams_pending=True, aiostreams_hint='AIOStreams refresh failed; check its settings')
+        setup.write_private(self.data / 'setup.json', json.dumps(saved))
+        code, output = self.run_setup('--json')
+        self.assertEqual(code, 0)
+        saved = setup.state(self.data)
+        self.assertFalse(saved['aiostreams_pending'])
+        self.assertNotIn('aiostreams_hint', saved)
+
     def test_new_exact_config_private_credentials_and_rerun(self):
         code, text = self.run_setup()
         self.assertEqual(code, 0, text)
@@ -134,7 +144,8 @@ class AIOStreamsTests(unittest.TestCase):
         self.assertEqual(code, 0, text)
         after = self.fake.configs['existing']
         self.assertEqual(after['presets'][:1], before['presets'])
-        self.assertEqual({k: v for k, v in after.items() if k not in ('presets', 'upstreamCatalogOrder')}, {k: v for k, v in before.items() if k != 'presets'})
+        self.assertEqual({k: v for k, v in after.items() if k not in ('presets', 'upstreamCatalogOrder', 'catalogModifications')}, {k: v for k, v in before.items() if k != 'presets'})
+        self.assertEqual(after['catalogModifications'], self.scope_entries())
         self.assertEqual(len({p['instanceId'] for p in after['presets']}), 3)
         self.assertEqual(after['upstreamCatalogOrder'], ['skd1a2b'])
         self.assertIn('add Skald', text)
@@ -375,6 +386,79 @@ class AIOStreamsTests(unittest.TestCase):
             rows += [(s.rid('search'), typ) for typ in ('movie', 'series')]
         return [{'id': 'skd1a2b.' + cid, 'type': typ, 'enabled': True} for cid, typ in rows]
 
+    def test_busy_catalogs_promote_home_rows_and_rerun_is_idempotent(self):
+        self.run_setup()
+        uid = self.saved()['household']['uuid']
+        rows = self.scope_entries()
+        home, search = rows[:-2], rows[-2:]
+        others = [{'id': f'other.{i}', 'type': 'movie', 'enabled': i % 2 == 0}
+                  for i in range(60)]
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                expected_home = copy.deepcopy(home)
+                if existing:
+                    expected_home[0].update(enabled=False, extra={'keep': 1})
+                before = [others[0], search[0], *others[1:]]
+                if existing:
+                    before.extend(reversed(expected_home))
+                before.append(search[1])
+                self.fake.configs[uid]['catalogModifications'] = copy.deepcopy(before)
+                self.fake.calls.clear()
+                code, text = self.run_setup()
+                self.assertEqual(code, 0, text)
+                after = self.fake.configs[uid]['catalogModifications']
+                self.assertEqual(after[:len(home)], expected_home)
+                self.assertEqual(after[len(home):], [e for e in before if e not in expected_home])
+                self.assertEqual([e for e in after if e in others], others)
+                self.assertEqual([e for e in after if e in search], search)
+                self.assertTrue(all(e not in search for e in after[:len(home)]))
+                self.assertEqual(text.count("move Skald's rows to the top (Odin shows the first 40)"), 1)
+                self.fake.calls.clear()
+                code, text = self.run_setup()
+                self.assertEqual(code, 0, text)
+                self.assertEqual(self.fake.configs[uid]['catalogModifications'], after)
+                self.assertFalse(any(c[0] == 'PUT' for c in self.fake.calls))
+                self.assertNotIn('move Skald', text)
+
+    def test_home_row_at_40_promotes_but_search_at_40_does_not(self):
+        self.run_setup('--member', 'alex')
+        uid = self.saved()['alex']['uuid']
+        rows = self.scope_entries('alex')
+        home, search = rows[:-2], rows[-2:]
+        others = [{'id': f'other.{i}', 'type': 'movie', 'enabled': False}
+                  for i in range(40)]
+        for position in (39, 40):
+            with self.subTest(position=position):
+                before = [*home[:-1], *others[:position - len(home) + 1],
+                          home[-1], *others[position - len(home) + 1:], *search]
+                self.fake.configs[uid]['catalogModifications'] = copy.deepcopy(before)
+                code, text = self.run_setup('--member', 'alex')
+                self.assertEqual(code, 0, text)
+                after = self.fake.configs[uid]['catalogModifications']
+                self.assertEqual(after, [*home, *others, *search] if position == 40 else before)
+                self.assertEqual('move Skald' in text, position == 40)
+
+    def test_new_shelf_at_40_promotes_home_rows(self):
+        self.run_setup('--member', 'alex')
+        uid = self.saved()['alex']['uuid']
+        rows = self.scope_entries('alex')
+        home, search = rows[:-2], rows[-2:]
+        others = [{'id': f'other.{i}', 'type': 'movie', 'enabled': False}
+                  for i in range(40 - len(home))]
+        before = [*home[:-1], *others, home[-1], *search]
+        self.assertEqual(before.index(home[-1]), 39)
+        self.fake.configs[uid]['catalogModifications'] = copy.deepcopy(before)
+        with setup.server(self.data) as s, patch.object(s, 'aio_rows_changed'):
+            s.shelf_change('alex', 'add', text='genre:drama', name='Drama', apply=True)
+            shelf = 'skd1a2b.' + s.rid('shelf_alex_1')
+            text = setup.keep_catalog_places(s, self.fake.configs[uid],
+                {'catalogs': self.fake.catalogs}, 'alex')
+        after = self.fake.configs[uid]['catalogModifications']
+        self.assertLess(next(i for i, entry in enumerate(after) if entry['id'] == shelf), 40)
+        self.assertEqual(after[:len(home)], home)
+        self.assertEqual([entry for entry in after if entry in others], others)
+        self.assertIn('move Skald', text)
+
     def test_catalog_modifications_refill_slots_and_insert_hidden_rows(self):
         self.run_setup()
         uid = self.saved()['household']['uuid']
@@ -418,16 +502,16 @@ class AIOStreamsTests(unittest.TestCase):
                 self.assertEqual(self.fake.configs[uid]['catalogModifications'], [other, *rows] if answer == 'y' else before)
                 self.assertEqual(any(c[0] == 'PUT' for c in self.fake.calls), answer == 'y')
 
-    def test_catalog_modifications_without_skald_append_block(self):
+    def test_catalog_modifications_without_skald_promote_home_rows(self):
         self.run_setup()
         uid = self.saved()['household']['uuid']
         other = {'id': 'other.a', 'type': 'movie', 'enabled': False}
         self.fake.configs[uid]['catalogModifications'] = [other]
         code, text = self.run_setup()
         self.assertEqual(code, 0, text)
-        self.assertEqual(self.fake.configs[uid]['catalogModifications'], [other, *self.scope_entries()])
+        self.assertEqual(self.fake.configs[uid]['catalogModifications'], [*self.scope_entries()[:-2], other, *self.scope_entries()[-2:]])
 
-    def test_catalog_modifications_retired_entry_keeps_first_skald_place(self):
+    def test_catalog_modifications_retired_entry_keeps_settings(self):
         self.run_setup()
         uid = self.saved()['household']['uuid']
         other = {'id': 'other.a', 'type': 'movie'}
@@ -435,8 +519,10 @@ class AIOStreamsTests(unittest.TestCase):
         self.fake.configs[uid]['catalogModifications'] = [other, retired, other]
         code, text = self.run_setup()
         self.assertEqual(code, 0, text)
-        self.assertEqual(self.fake.configs[uid]['catalogModifications'],
-                         [other, *self.scope_entries(), retired, other])
+        after = self.fake.configs[uid]['catalogModifications']
+        self.assertEqual(after[:len(self.scope_entries()) - 2], self.scope_entries()[:-2])
+        self.assertEqual([entry for entry in after if entry == other], [other, other])
+        self.assertIn(retired, after)
 
     def test_new_login_catalog_modifications_from_aio_defaults(self):
         transport = self.fake.__call__
@@ -449,8 +535,8 @@ class AIOStreamsTests(unittest.TestCase):
             code, text = self.run_setup('--json')
         self.assertEqual(code, 0, text)
         self.assertEqual(self.fake.configs['a1b2c3d1-fake']['catalogModifications'],
-                         [{'id': 'other.a', 'type': 'movie'}, *self.scope_entries()])
-        self.assertIn("keep Skald's rows in place", text)
+                         [*self.scope_entries()[:-2], {'id': 'other.a', 'type': 'movie'}, *self.scope_entries()[-2:]])
+        self.assertIn("move Skald's rows to the top", text)
         self.assertNotIn('fake-password', text)
 
     def test_empty_catalog_modifications_stay_empty(self):
@@ -463,6 +549,28 @@ class AIOStreamsTests(unittest.TestCase):
         self.assertIn('AIOStreams already set up', text)
         self.assertEqual(self.fake.configs[uid]['catalogModifications'], [])
         self.assertFalse(any(c[0] == 'PUT' for c in self.fake.calls))
+
+    def test_first_addition_creates_missing_or_empty_catalog_modifications(self):
+        transport = self.fake.__call__
+        for person, empty in (('household', False), ('alex', True)):
+            with self.subTest(empty=empty):
+                def defaults(req, timeout):
+                    reply = transport(req, timeout)
+                    if empty and req.get_method() == 'POST':
+                        uid = next(reversed(self.fake.configs))
+                        self.fake.configs[uid]['catalogModifications'] = []
+                    return reply
+                with patch('urllib.request.OpenerDirector.open', side_effect=defaults):
+                    code, text = self.run_setup('--member', person)
+                self.assertEqual(code, 0, text)
+                uid = self.saved()[person]['uuid']
+                self.assertEqual(self.fake.configs[uid].get('catalogModifications'), self.scope_entries(person))
+                self.assertEqual(text.count("move Skald's rows to the top (Odin shows the first 40)"), 1)
+                self.fake.calls.clear()
+                code, text = self.run_setup('--member', person)
+                self.assertEqual(code, 0, text)
+                self.assertFalse(any(c[0] == 'PUT' for c in self.fake.calls))
+                self.assertNotIn('move Skald', text)
 
     def test_status_done_and_missing_taste(self):
         self.run_setup()

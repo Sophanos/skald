@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import subprocess
 import sys
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -30,8 +31,124 @@ class Migrations(unittest.TestCase):
         self.assertEqual(migrate.check(self.data)['format'], 1)
         migrate.ensure(self.data)
         self.assertEqual(json.loads((self.data/'.skald-format').read_text()),
-                         {'format': 1, 'release': members.VERSION})
+                         {'format': migrate.FORMAT, 'release': members.VERSION})
         self.assertEqual((self.data/'.skald-format').stat().st_mode & 0o777, 0o600)
+
+    def test_external_config_migrates_without_publishing_local_config(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp) / 'household.json'
+            cfg = members.fresh_config(['ana', 'ben'])
+            cfg['metrics'] = {'enabled': True}
+            config.write_text(json.dumps(cfg))
+            before = config.read_bytes()
+            (self.data / '.skald-household').touch()
+            self.marker(2)
+            with patch.dict(os.environ, {'SKALD_CONFIG': str(config)}, clear=True), \
+                    patch('urllib.request.urlopen', side_effect=AssertionError('network forbidden')):
+                self.assertEqual(migrate.ensure(self.data)['format'], migrate.FORMAT)
+                self.assertEqual(migrate.ensure(self.data)['format'], migrate.FORMAT)
+            self.assertTrue((self.data / 'metrics.json').exists())
+            self.assertFalse((self.data / 'skald.json').exists())
+            self.assertEqual(config.read_bytes(), before)
+
+    def test_second_process_waits_and_skips_completed_migration(self):
+        self.marker(1)
+        script = textwrap.dedent('''\
+            import sys
+            from pathlib import Path
+            from unittest.mock import patch
+            from skald import backup, migrate
+            data, role = Path(sys.argv[1]), sys.argv[2]
+            create = backup.create
+            def archive(*args, **kwargs):
+                with (data/'calls').open('a') as out:
+                    out.write('backup\\n')
+                return create(*args, **kwargs)
+            def step(staged):
+                with (data/'calls').open('a') as out:
+                    out.write('step\\n')
+                if role == 'first':
+                    print('staged', flush=True)
+                    sys.stdin.readline()
+                (staged/'taste.json').write_text('{}\\n')
+            with patch.object(migrate, 'FORMAT', 2), patch.object(migrate, 'MIGRATIONS', {2: step}), \\
+                    patch.object(backup, 'create', archive), \\
+                    patch('urllib.request.urlopen', side_effect=AssertionError('network forbidden')):
+                print('starting', flush=True)
+                print(migrate.ensure(data)['format'], flush=True)
+            ''')
+        env = {k: v for k, v in os.environ.items() if not k.startswith('SKALD_')}
+        def launch(role):
+            proc = subprocess.Popen([sys.executable, '-c', script, str(self.data), role],
+                                    env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True)
+            def cleanup():
+                if proc.poll() is None:
+                    proc.kill()
+                proc.communicate()
+            self.addCleanup(cleanup)
+            return proc
+        first = launch('first')
+        self.assertEqual(first.stdout.readline().strip(), 'starting')
+        self.assertEqual(first.stdout.readline().strip(), 'staged')
+        second = launch('second')
+        self.assertEqual(second.stdout.readline().strip(), 'starting')
+        with self.assertRaises(subprocess.TimeoutExpired):
+            second.wait(timeout=.3)
+        self.assertEqual((self.data/'calls').read_text(), 'backup\nstep\n')
+        out, err = first.communicate('\n', timeout=10)
+        self.assertEqual(first.returncode, 0, err)
+        self.assertEqual(out.strip(), '2')
+        out, err = second.communicate(timeout=10)
+        self.assertEqual(second.returncode, 0, err)
+        self.assertEqual(out.strip(), '2')
+        self.assertEqual((self.data/'calls').read_text(), 'backup\nstep\n')
+        self.assertEqual(len(list((self.data/'backups').glob('pre-migrate-*'))), 1)
+
+    def test_migration_lock_timeout_leaves_state_untouched(self):
+        import fcntl
+        self.marker(1)
+        lock = self.data / '.skald-migrate.lock'
+        with lock.open('w') as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            before = {p.name: p.read_bytes() for p in self.data.iterdir()}
+            with patch.object(migrate, 'LOCK_TIMEOUT', .05, create=True), \
+                    self.assertRaisesRegex(migrate.FormatError, 'timed out.*migration'):
+                migrate.ensure(self.data)
+            self.assertEqual({p.name: p.read_bytes() for p in self.data.iterdir()}, before)
+
+    def test_additive_migrations_leave_read_only_status_unchanged(self):
+        self.assertEqual(migrate.MIGRATIONS[2], migrate.settings_v2)
+        self.assertEqual(migrate.MIGRATIONS[3], migrate.local_row_metrics)
+        self.assertEqual(migrate.MIGRATIONS[4], migrate.settings_history_v4)
+        self.assertEqual(migrate.MIGRATIONS[5], migrate.monthly_history)
+        for enabled in (None, False, True):
+            for version in (1, 2, 3, 4, 5):
+                with self.subTest(enabled=enabled, version=version):
+                    config = members.fresh_config(['ana', 'ben'])
+                    if enabled is not None:
+                        config['metrics'] = {'enabled': enabled}
+                    (self.data/'skald.json').write_text(json.dumps(config))
+                    self.marker(version)
+                    before = {p.name: p.read_bytes() for p in self.data.iterdir()}
+                    self.assertFalse(migrate.rewrite_needed(self.data))
+                    with patch.dict(os.environ, {'DATA_DIR': str(self.data)}, clear=True):
+                        out = io.StringIO()
+                        self.assertIn(main(['setup', '--status', '--json'], out=out), (0, 1))
+                        self.assertEqual(json.loads(out.getvalue())['data_format'], version)
+                    self.assertEqual({p.name: p.read_bytes() for p in self.data.iterdir()}, before)
+
+    def test_default_off_metrics_migration_creates_no_metric_files(self):
+        config = members.fresh_config(['ana', 'ben'])
+        (self.data/'skald.json').write_text(json.dumps(config))
+        before = (self.data/'skald.json').read_bytes()
+        migrate.MIGRATIONS[3](self.data)
+        self.assertFalse((self.data/'metrics.json').exists())
+        self.assertFalse((self.data/'metrics_shown.json').exists())
+        migrate.ensure(self.data)
+        self.assertEqual(migrate.check(self.data)['format'], migrate.FORMAT)
+        self.assertFalse((self.data/'metrics.json').exists())
+        self.assertEqual((self.data/'skald.json').read_bytes(), before)
 
     def test_backup_first_order_idempotence_and_verified_archive(self):
         self.marker(1)
@@ -125,9 +242,9 @@ class Migrations(unittest.TestCase):
         self.assertTrue((self.data/'taste.json').exists())
 
     def test_newer_refuses_before_reading_household(self):
-        raw = self.marker(2, '9.0.0')
+        raw = self.marker(migrate.FORMAT + 1, '9.0.0')
         (self.data/'legacy.json').write_text('not JSON')
-        with self.assertRaisesRegex(ValueError, '9.0.0.*format 2.*upgrade Skald or restore a backup'):
+        with self.assertRaisesRegex(ValueError, rf'9.0.0.*format {migrate.FORMAT + 1}.*upgrade Skald or restore a backup'):
             migrate.ensure(self.data)
         self.assertEqual((self.data/'.skald-format').read_text(), raw)
         self.assertFalse((self.data/'backups').exists())
@@ -140,7 +257,7 @@ class Migrations(unittest.TestCase):
                                 env={**os.environ, 'DATA_DIR': str(self.data)}, capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
         self.assertEqual(len(result.stderr.splitlines()), 1)
-        self.assertIn('9.0.0 (format 2); upgrade Skald or restore a backup', result.stderr)
+        self.assertIn(f'9.0.0 (format {migrate.FORMAT + 1}); upgrade Skald or restore a backup', result.stderr)
 
     def test_setup_status_release_and_format(self):
         with patch.dict(os.environ, {'DATA_DIR': str(self.data)}, clear=True):

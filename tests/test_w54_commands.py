@@ -134,17 +134,17 @@ class Commands(unittest.TestCase):
             b = self.c.special(self.s, query.upper(), 'series')
             self.assertTrue(a['metas'])
             self.assertEqual(b, {'metas': []})
-        self.assertEqual(len(self.c.journal(self.s)['ana']), 2)
+        self.assertEqual(sum(not e.get('undone') for e in self.c.journal(self.s)['ana']), 2)
         req = {'viewer': 'ana', 'client': {'name': 'synthetic'}, 'body': {'plan': self.preview()['plan']}}
         self.c.pending(self.s)['api:synthetic'] = (self.s.time.time(), self.preview())
         self.assertEqual(self.c.api_apply(self.s, req), self.c.api_apply(self.s, req))
         req['body'] = {'undo': True}
         self.assertEqual(self.c.api_apply(self.s, req), self.c.api_apply(self.s, req))
-        self.assertEqual(len(self.c.journal(self.s)['ana']), 2)
+        self.assertEqual(sum(not e.get('undone') for e in self.c.journal(self.s)['ana']), 2)
         later = self.s.time.time() + 61
         with patch.object(self.s.time, 'time', return_value=later):
             self.c.api_apply(self.s, req)
-        self.assertEqual(len(self.c.journal(self.s)['ana']), 1)
+        self.assertEqual(sum(not e.get('undone') for e in self.c.journal(self.s)['ana']), 1)
 
     def test_shared_confirmation_uses_stored_targets(self):
         for named in ('ana', 'everyone'):
@@ -174,5 +174,5 @@ class Commands(unittest.TestCase):
         newer = self.s.write_feedback({**item, 'who': 'ana', 'action': 'meh'})
         result = self.c.undo(self.s, ['ana'])
         self.assertIn('could not be undone', result['name'])
-        self.assertEqual(self.c.journal(self.s)['ana'], [])
+        self.assertTrue(all(e.get('undone') for e in self.c.journal(self.s)['ana']))
         self.assertEqual(self.s.active_feedback(self.s.read_feedback())[('tmdb:1', 'ana')]['id'], newer['id'])

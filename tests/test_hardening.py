@@ -144,7 +144,7 @@ class HardeningTests(unittest.TestCase):
         cleared()
         warm()
         with patch.object(s, 'OR_KEY', 'synthetic'), patch.object(s, 'title_text', return_value='synthetic'), \
-                patch.object(s, 'openrouter', return_value={'data': [{'index': 0, 'embedding': [1., 0.]}]}):
+                patch.object(s, 'openrouter', return_value={'data': [{'index': 0, 'embedding': [1.] + [0.] * (s.EMB_DIM - 1)}]}):
             s.ensure_emb([('a', 'movie')])
         cleared()
         warm()

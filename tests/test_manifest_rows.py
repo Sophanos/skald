@@ -87,7 +87,7 @@ class ManifestRows(unittest.TestCase):
         self.assertEqual({r['id'] for r in self.rows()}, expected)
         for cid, typs, _ in s.feed_rows(s.LANG):
             self.put(cid, [], 'tv' if cid in s.MIXED else typs[0])
-        self.assertEqual({r['id'] for r in self.rows()}, {s.rid('top10'), s.rid('search'), s.rid('shelf_together_1'), s.rid('shelf_together_2')})
+        self.assertEqual({r['id'] for r in self.rows()}, {s.rid('top10'), s.rid('search')})
         cid = s.rid('rewatch')
         for n in (5, 6, 0, 6):
             s._profiles['household'] = {'entries': [

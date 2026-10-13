@@ -41,7 +41,8 @@ class W28Fixes(unittest.TestCase):
         with patch.object(migrate, 'FORMAT', 2), patch.object(migrate, 'MIGRATIONS', {2: change}), patch('os.replace', side_effect=fail_marker):
             with self.assertRaisesRegex(ValueError, 'not in.*backup'):
                 migrate.ensure(self.data)
-        self.assertEqual({p.name: p.read_bytes() for p in self.data.iterdir() if p.is_file()}, originals)
+        self.assertEqual({p.name: p.read_bytes() for p in self.data.iterdir()
+                          if p.is_file() and p.name != migrate.LOCK}, originals)
         self.assertTrue((self.data/'taste.json').is_symlink())
         self.assertEqual(outside.read_text(), 'original bytes')
 

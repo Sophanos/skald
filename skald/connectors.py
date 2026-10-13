@@ -1,8 +1,11 @@
 """Read-only probes using the server's existing bounded clients."""
 from contextlib import closing, redirect_stdout
 import io
+import json
+import os
 import sqlite3
 import time
+import uuid
 import urllib.parse
 from unittest.mock import patch
 
@@ -29,6 +32,55 @@ def source_users(s, cid, options, auth=None):
             raise ValueError('no readable Plex account; check the source address and token')
         return {'account': account['username']}
     return {}
+
+
+def aiostreams_login(path, prefix, private_uuid=None):
+    """Resolve a login without conflating accounts sharing the reader's eight digits."""
+    if not isinstance(prefix, str) or not prefix or any(c not in '0123456789abcdef-' for c in prefix.lower()):
+        raise ValueError('supply an AIOStreams login prefix with --aio-login')
+    prefix = prefix.lower()
+    try:
+        if private_uuid is not None:
+            private_uuid = str(uuid.UUID(private_uuid))
+        uri = 'file:' + urllib.parse.quote(path, safe='/') + '?mode=ro'
+        if os.path.islink(path):
+            raise ValueError()
+        with closing(sqlite3.connect(uri, uri=True)) as con:
+            users = {row[0].lower() for row in con.execute('select distinct uuid from watch_state')}
+    except (ValueError, sqlite3.Error, AttributeError):
+        raise ValueError('cannot resolve login; check the read-only database and private UUID') from None
+    matches = {u for u in users if u.startswith(prefix)}
+    if private_uuid is not None:
+        if not private_uuid.startswith(prefix):
+            raise ValueError('private UUID does not match --aio-login')
+        matches.add(private_uuid)
+    if not matches:
+        raise ValueError('login has no history; supply its full UUID privately with --uuid-stdin')
+    if len(matches) != 1:
+        raise ValueError('ambiguous AIOStreams login prefix')
+    selected = matches.pop()
+    if any(u != selected and u[:8] == selected[:8] for u in users):
+        raise ValueError('ambiguous eight-character AIOStreams login prefix')
+    return selected
+
+
+def aiostreams_access_key(path):
+    """AIOStreams settings stores dotted keys and JSON-encoded values."""
+    try:
+        if os.path.islink(path):
+            raise ValueError()
+        uri = 'file:' + urllib.parse.quote(path, safe='/') + '?mode=ro'
+        with closing(sqlite3.connect(uri, uri=True)) as con:
+            columns = {row[1]: row for row in con.execute('pragma table_info(settings)')}
+            if not {'key', 'value', 'updated_at', 'updated_by'} <= columns.keys() or not columns['key'][5]:
+                raise ValueError()
+            row = con.execute('select value from settings where key=?', ('api.configAccessKey',)).fetchone()
+        value = json.loads(row[0]) if row else None
+        if value is not None and (not isinstance(value, str) or not value or any(ord(c) < 32 for c in value)):
+            raise ValueError()
+        return value
+    except (sqlite3.Error, ValueError, TypeError):
+        raise ValueError('cannot read AIOStreams settings; check the settings schema and read-only database mount') from None
 
 
 def test(s, name=None, *, transport=None, now=None, show=False):

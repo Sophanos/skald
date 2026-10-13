@@ -21,7 +21,7 @@ class PrefsConfig(unittest.TestCase):
         for prefs in ({'discovery': 'surprise'}, {'years': [2000, 1990]},
                       {'years': [True, None]}, {'years': ['1990', None]},
                       {'years': [1990]}, {'years': [-1, None]},
-                      {'excluded_genres': {'movie': ['Reality']}},
+                      {'excluded_genres': {'movie': ['invented']}},
                       {'excluded_genres': {'series': ['invented']}}, {'discovery': []}):
             with self.subTest(prefs=prefs):
                 cfg = members.fresh_config(['alex', 'sam'])
@@ -32,11 +32,11 @@ class PrefsConfig(unittest.TestCase):
     def test_case_insensitive_genres_and_public_config(self):
         cfg = members.fresh_config(['alex'])
         cfg['taste']['people']['alex']['prefs'] = {'discovery': 'gems', 'years': [1990, None],
-            'excluded_genres': {'movie': ['hORror'], 'series': ['reality', 'TALK']}}
+            'excluded_genres': {'movie': ['hORror'], 'series': ['reality', 'TALK', 'hORror']}}
         cfg = members.validate_config(cfg)
         prefs = cfg['taste']['people']['alex']['prefs']
         self.assertEqual(prefs['excluded_genres']['movie'], ['Horror'])
-        self.assertEqual(prefs['excluded_genres']['series'], ['Reality', 'Talk'])
+        self.assertEqual(prefs['excluded_genres']['series'], ['Reality', 'Talk', 'Horror'])
         self.assertEqual(members.public_config(cfg)['taste']['people']['alex']['prefs'], prefs)
 
 
@@ -178,7 +178,7 @@ class PrefsCLI(unittest.TestCase):
             data = Path(temp)
             cfg = setup.publish(data, members.fresh_config(['alex']))
             before = (data/'skald.json').read_bytes()
-            for flags in (['--years', '2000-1990'], ['--years', 'bad'], ['--exclude-movie-genres', 'reality'],
+            for flags in (['--years', '2000-1990'], ['--years', 'bad'], ['--exclude-movie-genres', 'invented'],
                           ['--person', 'unknown', '--clear'], ['--clear', '--discovery', 'gems'], []):
                 with self.subTest(flags=flags):
                     self.assertEqual(main(['setup', 'prefs', '--person', 'alex', '--json', *flags], out=io.StringIO()), 2)

@@ -36,6 +36,20 @@ def command(operation):
                   "cp -p imports.jsonl imports.jsonl.bak-$(date -u +%Y%m%dT%H%M%S)-$$ || exit 1; fi; "
                   "tee imports.jsonl.tmp >/dev/null && chmod 600 imports.jsonl.tmp && mv imports.jsonl.tmp imports.jsonl")
         remote = "sudo -u '#65534' sh -c " + shlex.quote(script)
+    elif operation == "push-undo":
+        script = ("import datetime,json,os,shutil,sys\n"
+                  "sys.path.insert(0,'/opt/skald/app')\n"
+                  "from skald.history import locked,remove_imports\n"
+                  "from skald.intake import write_private\n"
+                  "payload=json.load(sys.stdin)\n"
+                  "with locked('.'):\n"
+                  "    suffix=datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S')+'-'+str(os.getpid())\n"
+                  "    for name in ('imports.jsonl','history-summary.json'):\n"
+                  "        if os.path.isfile(name): shutil.copy2(name,name+'.bak-'+suffix)\n"
+                  "    write_private('imports.jsonl',''.join(json.dumps(e,ensure_ascii=False)+'\\n' for e in payload['imports']))\n"
+                  "    remove_imports('.',set(payload['undo_ids']))\n")
+        remote = "sudo -u '#65534' sh -c " + shlex.quote(
+            f"umask 077; cd {REMOTE_DATA} || exit 1; python3 -c " + shlex.quote(script))
     else:
         raise ValueError("operation is not allowlisted")
     host = os.environ.get("SKALD_SSH_HOST", "")
@@ -74,8 +88,9 @@ def pull(destination=None, run=None):
 
 def push(events, validate, apply=False, run=None, undone=()):
     local = [validate(e) for e in events if e.get("id") not in undone]
-    preview = {"apply": apply, "events": local, "count": len(local), "undo_ids": sorted(undone), "host": command("push")[3],
-               "command": command("push"), "backup": "imports.jsonl.bak-UTC-pid"}
+    upload_command = command("push-undo" if undone else "push")
+    preview = {"apply": apply, "events": local, "count": len(local), "undo_ids": sorted(undone), "host": upload_command[3],
+               "command": upload_command, "backup": "imports.jsonl.bak-UTC-pid"}
     if not apply:
         return preview
     run = run or subprocess.run
@@ -91,5 +106,7 @@ def push(events, validate, apply=False, run=None, undone=()):
     if len(merged) > 20000:
         raise ValueError("remote imports would exceed 20000 events")
     raw = "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in merged.values()).encode("utf-8")
-    run(command("push"), input=raw, check=True, capture_output=True, timeout=60)
+    if undone:
+        raw = json.dumps({"imports": list(merged.values()), "undo_ids": sorted(undone)}, ensure_ascii=False).encode("utf-8")
+    run(upload_command, input=raw, check=True, capture_output=True, timeout=60)
     return {**preview, "uploaded": len(merged)}

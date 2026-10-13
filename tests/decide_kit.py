@@ -125,6 +125,13 @@ def _free_strings(server, schema, value):
     return []
 
 
+def _closed_strings(schema):
+    if isinstance(schema, str):
+        return {schema}
+    members = schema.values() if isinstance(schema, dict) else schema if isinstance(schema, (list, tuple)) else ()
+    return {value for member in members for value in _closed_strings(member)}
+
+
 def check_contract(testcase, server, name, fixtures=None):
     spec = server.DECISIONS[name]
     rows = fixture_rows(server, name, fixtures)
@@ -155,7 +162,9 @@ def check_contract(testcase, server, name, fixtures=None):
     for row in rows:
         for schema, value in ((spec["inp"], row["in"]), (spec["out"], row["expect"])):
             for string in _free_strings(server, schema, value):
-                testcase.assertNotIn(string, text)
+                # A query can equal a public enum such as the history operation.
+                if string not in _closed_strings(spec['out']):
+                    testcase.assertNotIn(string, text)
     if spec["serving"]:
         reset(server)
         with patch("urllib.request.urlopen", side_effect=AssertionError("serving spent")) as network, \

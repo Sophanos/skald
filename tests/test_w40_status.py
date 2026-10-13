@@ -50,11 +50,43 @@ class StatusTests(unittest.TestCase):
         self.assertIn('Next: nothing left\n', out.getvalue())
         self.assertNotIn('Next: restart', out.getvalue())
 
+    def test_status_after_startup_preference_refresh_does_not_request_restart(self):
+        cfg = members.fresh_config(['ana', 'ben'])
+        (self.data / 'skald.json').write_text(json.dumps(cfg))
+        (self.data / 'setup.json').write_text(json.dumps(dict(tmdb_checked=True, base='https://tv.example',
+                                                           watch='stremio', taste='files')))
+        with setup.server(self.data) as s:
+            s.load_state()
+            s.refresh_preferences()
+            self.assertEqual(s.CONFIG['household']['shelves'], 2)
+            setup.record_startup(self.data, s.CONFIG)
+        self.assertEqual(setup.status(self.data)['next'], 'nothing left')
+        cfg['region']['lang'] = 'de-DE'
+        (self.data / 'skald.json').write_text(json.dumps(cfg))
+        self.assertEqual(setup.status(self.data)['next'], setup.RESTART)
+
     def test_setup_status_abbreviation(self):
         self.legacy()
         out = io.StringIO()
         self.assertEqual(main(['setup', '--stat'], out=out), 0)
         self.assertIn('Next:', out.getvalue())
+
+    def test_empty_taste_people_matches_after_startup_preference_refresh(self):
+        cfg = members.fresh_config(['ana', 'ben'])
+        cfg['taste']['people'] = {}
+        (self.data / 'skald.json').write_text(json.dumps(cfg))
+        (self.data / 'setup.json').write_text(json.dumps(dict(tmdb_checked=True, base='https://tv.example',
+                                                           watch='stremio', taste='files')))
+        with setup.server(self.data) as s:
+            s.refresh_preferences()
+            self.assertEqual(s.CONFIG['taste']['people'], {'ana': {}, 'ben': {}})
+            setup.record_startup(self.data, s.CONFIG)
+            self.assertEqual(setup.startup_digest(s.CONFIG), setup.startup_digest(cfg))
+        out = io.StringIO()
+        self.assertEqual(main(['setup', '--status'], out=out), 0)
+        self.assertIn('Next: nothing left\n', out.getvalue())
+        self.assertNotIn('Next: restart', out.getvalue())
+        self.assertEqual(cfg['taste']['people'], {})
 
     def test_startup_continues_when_marker_write_fails(self):
         (self.data / 'skald.json').write_text(json.dumps(members.fresh_config(['ana', 'ben'])))

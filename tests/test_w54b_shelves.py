@@ -24,13 +24,25 @@ class Shelves(unittest.TestCase):
                 patch.object(s, 'member_scores', side_effect=lambda xs, p: {x['id']: i for i, x in enumerate(xs)}):
             out = s.shelf_feed(s.LANG, now=now)
         return out, ai.call_count
-    def test_slots_always_declared_default_counts(self):
+    def test_only_active_slots_declared(self):
         s = self.s
         with patch.object(s, 'pin_shown'), patch.object(s, 'feed', return_value={'metas': {}}), patch.object(s, 'row_metas', return_value=[]):
-            for scope, expected in [('ana', 6), ('together', 2), (None, 2)]:
-                rows = [r for r in s.manifest(s.LANG, scope)['catalogs'] if 'shelf_' in r['id']]
-                self.assertEqual(len(rows), expected)
-                self.assertTrue(all(r['name'] == 'Your Shelf ' + r['id'].rsplit('_', 1)[1] for r in rows))
+            for scope in ('ana', 'together', None):
+                self.assertFalse([r for r in s.manifest(s.LANG, scope)['catalogs'] if 'shelf_' in r['id']])
+            self.add()
+            rows = [r for r in s.manifest(s.LANG, 'ana')['catalogs'] if 'shelf_' in r['id']]
+            self.assertEqual([(r['id'], r['name']) for r in rows], [(s.rid('shelf_ana_1'), 'Classics')])
+            s.shelf_change('ana', 'stop', slot=1, apply=True)
+            self.assertFalse([r for r in s.manifest(s.LANG, 'ana')['catalogs'] if 'shelf_' in r['id']])
+    def test_unnamed_shelf_uses_its_wish_and_stays_listed_outside_window(self):
+        from skald import shelves
+        s = self.s
+        s.shelf_change('ana', 'add', text='genre:drama', when='sun 05-12', apply=True)
+        with s.addon_scope('ana'):
+            self.assertEqual(s.shelf_rows(), [(s.rid('shelf_ana_1'), ('tv',), 'genre:drama')])
+            self.assertEqual(shelves.slots(s, 'ana'), [(s.rid('shelf_ana_1'), 'ana', 1)])
+        self.assertEqual(self.fill(dt.datetime(2026, 10, 12, 6))[0]['_names'][s.rid('shelf_ana_1')]['title'], 'genre:drama')
+
     def test_count_validation_0_to_10(self):
         s = self.s
         for scope in ('ana', 'together'):
@@ -144,7 +156,7 @@ class Shelves(unittest.TestCase):
         for link in (*scopes, None):
             visible = (link, 'together') if link in s.PEOPLE else ('together',)
             with s.addon_scope(link):
-                self.assertEqual({r[0] for r in s.shelf_rows()}, {s.rid(f'shelf_{p}_{n}') for p in visible for n in range(1, 1 + (2 if p == 'together' else 4))})
+                self.assertEqual({r[0] for r in s.shelf_rows()}, {s.rid(f'shelf_{p}_1') for p in visible})
                 for owner in scopes:
                     items = s.row_metas(s.rid(f'shelf_{owner}_1'), 'tv', s.LANG)
                     self.assertEqual({x['name'] for x in items}, {owner} if owner in visible else set())

@@ -116,10 +116,8 @@ class PublicSetupTests(unittest.TestCase):
     def test_stack_boot_names_the_correct_service(self):
         from skald import boot
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {'DATA_DIR': temp, 'SKALD_INTERNAL_BASE': 'http://skald:8080'}, clear=True):
-            def ready(seconds):
-                Path(temp, 'skald.json').write_text(json.dumps(members.fresh_config(['eve'])))
             out = io.StringIO()
-            with patch.object(boot.time, 'sleep', side_effect=ready), patch.object(boot.os, 'execv'):
+            with patch.object(boot.os, 'execv'):
                 boot.main(out=out)
             self.assertIn('compose.stack.example.yaml exec skald skald setup', out.getvalue())
 

@@ -163,9 +163,12 @@ class AddonTokenTests(unittest.TestCase):
         self.assertFalse(list(self.data.glob(".addon-*")))
 
     def test_health_leaks_nothing(self):
-        status, _, raw = self.request("/health")
+        status, _, raw = self.request("/health", peer="203.0.113.1")
         self.assertEqual((status, raw), (200, b'{"ok": true}'))
-        self.assertEqual(self.request("/" + self.token + "/health")[2], raw)
+        local = json.loads(self.request("/health")[2])
+        self.assertEqual(local, {"ok": True, "enabled": False, "checks": [],
+                                 "last_repair": None, "alert_configured": False})
+        self.assertEqual(json.loads(self.request("/" + self.token + "/health")[2]), local)
 
     def test_malformed_get_never_echoes_token_and_has_privacy_headers(self):
         (self.data / "addon.json").write_text(json.dumps({"token": CANARY}))

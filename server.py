@@ -57,7 +57,7 @@ from types import SimpleNamespace
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -139,6 +139,7 @@ LEGACY = {
 
 class ConfigError(ValueError):
     def __init__(self, key, *, missing=False):
+        self.key, self.missing = key, missing
         super().__init__(key + " missing: restore it" if missing else "invalid config: " + key)
 
 
@@ -178,7 +179,7 @@ def invalid_json(_):
 
 
 ROW_KEYS = ('episodes', 'foryou', 'week', 'upcoming', 'catchup', 'rewatch', 'because', 'leap',
-            'top10', 'people', 'moods', 'lanes', 'docs', 'studios', 'anime', 'shelves', 'digital', 'toprated')
+            'top10', 'people', 'moods', 'lanes', 'docs', 'studios', 'anime', 'shelves', 'digital', 'toprated', 'family')
 
 
 def fresh_config(members):
@@ -198,7 +199,11 @@ def validate_addon_config(cfg):
 
 def validate_history_connectors(cfg, need, data=None, environ=None):
     history, connectors = cfg["history"], cfg["connectors"]
-    need(isinstance(history, dict) and set(history) == {"source"}, "history")
+    need(isinstance(history, dict) and "source" in history and
+         set(history) <= {"source", "keep_raw_days", "max_raw_items"}, "history")
+    for field in ("keep_raw_days", "max_raw_items"):
+        value = history.get(field)
+        need(value is None or type(value) is int and value >= 0, "history." + field)
     source = history["source"]
     need(source in ("file", "aiostreams_db", "jellyfin", "plex", "none"), "history.source")
     need(isinstance(connectors, dict), "connectors")
@@ -214,7 +219,8 @@ def validate_history_connectors(cfg, need, data=None, environ=None):
     for cid, c in connectors.items():
         need(isinstance(cid, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,47}", cid), "connectors.id")
         key = "connectors." + cid
-        need(isinstance(c, dict) and set(c) <= {"kind", "enabled", "auth", "options", "accounts"}, key)
+        need(isinstance(c, dict) and set(c) <= {"kind", "enabled", "auth", "options", "accounts", "keep_raw"}, key)
+        need("keep_raw" not in c or type(c["keep_raw"]) is bool, key + ".keep_raw")
         need("accounts" not in c or cid in ("trakt_api", "mdblist", "stremio"), key + ".accounts")
         need(c.get("kind") in ("file_drop", "manual_export", "api", "player", "availability"), key + ".kind")
         need(type(c.get("enabled")) is bool, key + ".enabled")
@@ -306,6 +312,12 @@ def validate_config(doc, *, data=None, environ=None):
         rows = hh['rows']
         need(isinstance(rows, list) and bool(rows) and all(isinstance(k, str) and k in ROW_KEYS for k in rows),
              'household.rows: choose a non-empty list from ' + ', '.join(ROW_KEYS))
+    labels = hh.get('row_labels', {})
+    need(isinstance(labels, dict) and all(k in ROW_KEYS and isinstance(v, str) and v.strip() and
+         len(v) <= 100 and not any(ord(c) < 32 for c in v) for k, v in labels.items()), 'household.row_labels')
+    order = hh.get('row_order', [])
+    need(isinstance(order, list) and all(isinstance(k, str) and k in ROW_KEYS for k in order) and
+         len(set(order)) == len(order), 'household.row_order')
     need(type(hh.get("shelves", 2)) is int and 0 <= hh.get("shelves", 2) <= 10, "household.shelves (0..10)")
     labels = hh["labels"]
     need(isinstance(labels, dict), "household.labels")
@@ -339,7 +351,20 @@ def validate_config(doc, *, data=None, environ=None):
         need(isinstance(loves, list) and all(isinstance(t, str) for t in loves), "taste.people." + p + ".loves")
         prefs = traits.get("prefs", {})
         key = "taste.people." + p + ".prefs"
-        need(isinstance(prefs, dict) and set(prefs) <= {"discovery", "years", "excluded_genres", "hide", "focus", "kids_age", "shelves"}, key)
+        need(isinstance(prefs, dict) and set(prefs) <= {"discovery", "years", "excluded_genres", "hide", "focus", "kids_age", "shelves", "weights", "runtime"}, key)
+        runtime = prefs.get('runtime', {})
+        need(isinstance(runtime, dict) and set(runtime) <= {'movie', 'series'} and
+             all(type(v) is int and 1 <= v <= 600 for v in runtime.values()), key + '.runtime (1..600 minutes)')
+        weights = prefs.get('weights', {})
+        need(isinstance(weights, dict) and set(weights) <= {'genre', 'movie', 'series'}, key + '.weights')
+        for kind in ('movie', 'series'):
+            need(type(weights.get(kind, 0)) is int and -1 <= weights.get(kind, 0) <= 1, key + '.weights.' + kind)
+        genres = weights.get('genre', {})
+        genre_names = {name.casefold(): name for names in TMDB_GENRES.values() for name in names.values()}
+        need(isinstance(genres, dict) and all(isinstance(g, str) and g.casefold() in genre_names and
+             type(v) is int and -1 <= v <= 1 for g, v in genres.items()), key + '.weights.genre')
+        if 'genre' in weights:
+            weights['genre'] = {genre_names[g.casefold()]: v for g, v in genres.items()}
         need(isinstance(prefs.get("discovery", "balanced"), str) and
              prefs.get("discovery", "balanced") in ("balanced", "mainstream", "gems"), key + ".discovery")
         need(type(prefs.get("shelves", 4)) is int and 0 <= prefs.get("shelves", 4) <= 10, key + ".shelves (0..10)")
@@ -355,7 +380,10 @@ def validate_config(doc, *, data=None, environ=None):
         if "hide" in prefs:
             prefs["hide"] = list(dict.fromkeys(hides))
         focus = prefs.get("focus", {})
-        need(isinstance(focus, dict) and set(focus) <= {"genres", "languages", "countries"}, key + ".focus")
+        need(isinstance(focus, dict) and set(focus) <= {"genres", "languages", "countries", "people"}, key + ".focus")
+        names = focus.get('people', [])
+        need(isinstance(names, list) and all(isinstance(n, str) and n.strip() and len(n) <= 100 and
+             not any(ord(c) < 32 for c in n) for n in names), key + '.focus.people')
         for field, transform in (("languages", str.lower), ("countries", str.upper)):
             values = focus.get(field, [])
             need(isinstance(values, list) and all(isinstance(v, str) and re.fullmatch(r"[a-zA-Z]{2}", v) for v in values),
@@ -366,7 +394,8 @@ def validate_config(doc, *, data=None, environ=None):
                               ("focus.genres", focus.get("genres", {}))):
             need(isinstance(genres, dict) and set(genres) <= set(TMDB_GENRES), key + "." + field)
             for kind, values in genres.items():
-                names = {name.casefold(): name for name in TMDB_GENRES[kind].values()}
+                supported = TMDB_GENRES.values() if field == 'excluded_genres' else (TMDB_GENRES[kind],)
+                names = {name.casefold(): name for table in supported for name in table.values()}
                 need(isinstance(values, list) and all(isinstance(g, str) and g.casefold() in names for g in values),
                      key + "." + field + "." + kind + " (TMDB genre names)")
                 genres[kind] = list(dict.fromkeys(names[g.casefold()] for g in values))
@@ -390,6 +419,14 @@ def validate_config(doc, *, data=None, environ=None):
              not any(ord(c) < 32 for c in addon[key]), "addon." + key)
     validate_addon_config(cfg)
     validate_history_connectors(cfg, need, data, environ)
+    metrics_prefs = cfg.get("metrics", {})
+    need(isinstance(metrics_prefs, dict) and set(metrics_prefs) <= {
+        "enabled", "attribution_days", "shown_retention_days", "shown_max_items"}, "metrics")
+    need(type(metrics_prefs.get("enabled", False)) is bool, "metrics.enabled")
+    for field, default, maximum in (("attribution_days", 14, 365), ("shown_retention_days", 30, 365),
+                                    ("shown_max_items", 10000, 100000)):
+        value = metrics_prefs.get(field, default)
+        need(type(value) is int and 1 <= value <= maximum, "metrics." + field)
     return cfg
 
 
@@ -517,20 +554,23 @@ def public_config(cfg):
     schema = fresh_config(cfg["household"]["members"])
     out = {"v": cfg["v"], "row_prefix": cfg.get("row_prefix", DEFAULT_ROW_PREFIX), **{k: {p: cfg[k][p] for p in schema[k]} for k in ("household", "region", "addon")}}
     out["household"] = {**out["household"], "labels": {p: cfg["household"]["labels"][p] for p in (*cfg["household"]["members"], "pair")}}
-    if 'rows' in cfg['household']:
-        out['household']['rows'] = cfg['household']['rows']
+    for key in ('rows', 'row_labels', 'row_order', 'shelves'):
+        if key in cfg['household']:
+            out['household'][key] = cfg['household'][key]
     out["taste"] = {p: {k: v for k, v in traits.items() if k in ("likes", "archived", "rewatch_collections")}
                     for p, traits in cfg["taste"].items() if p in ("household", *cfg["household"]["archived"])}
     out["taste"]["people"] = {p: {k: v for k, v in traits.items() if k in ("type", "loves", "prefs")}
                                for p, traits in cfg["taste"].get("people", {}).items()}
     out.update(history=cfg["history"], connectors=copy.deepcopy(cfg["connectors"]))
+    if "metrics" in cfg:
+        out["metrics"] = copy.deepcopy(cfg["metrics"])
     return out
 # --- end household config ---
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from skald import migrate, shelves
+from skald import migrate, shelves, metrics as row_metrics
 try:
-    if globals().get("__name__") == "__main__" and (not sys.argv[1:] or migrate.check(DATA)["format"] < migrate.FORMAT):
+    if globals().get("__name__") == "__main__" and (not sys.argv[1:] or migrate.rewrite_needed(DATA)):
         migrate.ensure(DATA)
     else:
         migrate.check(DATA)
@@ -540,9 +580,56 @@ except (ValueError, OSError) as e:
         raise SystemExit(2) from None
     raise
 
+class NotConfiguredHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b'{"ok": false, "status": "not-configured"}'
+        self.send_response(503)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def wait_for_config(data):
+    def read_config():
+        try:
+            return load_config(data)
+        except ConfigError as error:
+            if not (error.key == "skald.json" and error.missing
+                    and os.path.lexists(os.path.join(data, ".skald-household"))):
+                raise
+            return copy.deepcopy(LEGACY), "implicit"
+
+    cfg, source = read_config()
+    if source != "implicit":
+        return cfg, source
+    port = int(os.environ.get("PORT", "8080"))
+    if os.environ.get("API_PORT") and int(os.environ["API_PORT"]) == port:
+        return cfg, source  # Let the CLI report the port conflict before waiting.
+    print("empty DATA: set SKALD_MEMBERS=ana,ben or provide skald.json", file=sys.stderr, flush=True)
+    with ThreadingHTTPServer(("0.0.0.0", port), NotConfiguredHandler) as health:
+        worker = threading.Thread(target=health.serve_forever, daemon=True)
+        worker.start()
+        try:
+            while source == "implicit":
+                time.sleep(3)
+                cfg, source = read_config()
+        finally:
+            health.shutdown()
+            worker.join()
+    return cfg, source
+
+
 CONFIG_ERROR = None
 try:
-    CONFIG, CONFIG_SOURCE = load_config(DATA, readonly=globals().get("_CONFIG_READONLY", __name__ != "__main__" or bool(sys.argv[1:])))
+    if __name__ == "__main__" and not any(arg.split("=", 1)[0] in ("--print-config", "--new-client", "--revoke-client",
+            "--addon-url", "--rotate-addon-token", "--help", "-h") for arg in sys.argv[1:]):
+        CONFIG, CONFIG_SOURCE = wait_for_config(DATA)
+    else:
+        CONFIG, CONFIG_SOURCE = load_config(DATA, readonly=globals().get("_CONFIG_READONLY", __name__ != "__main__" or bool(sys.argv[1:])))
 except ConfigError as e:
     CONFIG, CONFIG_SOURCE, CONFIG_ERROR = copy.deepcopy(LEGACY), "invalid", e
 PEOPLE = tuple(CONFIG["household"]["members"])
@@ -621,13 +708,17 @@ AI_MIN_LEN = 4
 SEARCH_SETTLE = 0.35  # seconds a non-title query waits for the next keystroke before spending an AI call
 ROUTE_MODEL = "openai/gpt-6-luna-decisions"
 PICK_MODEL = "openai/gpt-6-luna"
+COMMAND_MODEL = os.environ.get("SKALD_COMMAND_MODEL") or "~google/gemini-flash-latest"
+COMMAND_EFFORT = os.environ.get("SKALD_COMMAND_EFFORT") or "low"
+COMMAND_FALLBACK_MODEL = os.environ.get("SKALD_COMMAND_FALLBACK_MODEL") or "z-ai/glm-5.3-flash"
+COMMAND_FALLBACK_EFFORT = os.environ.get("SKALD_COMMAND_FALLBACK_EFFORT") or "low"
 ROUTE_Q = {"route": {"type": "choice",
     "instructions": "A user typed this into the search box of a movie/TV streaming app. Classify what they want.",
     "criteria": {
         "title": "The name (or partial name) of a specific movie, series, person or franchise, e.g. 'Paddington', 'dark', 'Avengers', 'Haus des Geldes', 'Tom Hanks'.",
-        "command": "A persistent instruction to change your own settings or taste: hide anime for me, no more horror, more Korean shows, I loved Dark. One-off wishes like something light tonight are requests.",
+        "command": "A persistent instruction to change your own settings or taste: hide anime for me, no more horror, more Korean shows, I loved Dark. Also creating, adding or making a new catalog, row, shelf or list about, for, with or of a theme: Create a new catalog about psygoloy crime, add a row for crime, make a shelf with comedies, neue Reihe mit Horrorfilmen, erstelle einen Katalog über Psychologie und Krimi. Typos in the theme do not change a creation command into a request. One-off wishes like something light tonight are requests.",
         "discover": "Only a genre and/or year/decade filter, e.g. '80s action', 'Komödie 1995', 'horror 2023', 'Thriller der 90er'.",
-        "request": "A free-text wish, mood, theme, similarity or curated list, e.g. 'best of heist', 'like Dark', 'filme über zeitreisen', 'something cozy for sunday', 'playlist sad anime'."}}}
+        "request": "A one-off free-text search, wish, mood, theme, similarity or curated list, e.g. 'best of heist', 'best catalog of crime movies', 'like Dark', 'filme über zeitreisen', 'something cozy for sunday', 'playlist sad anime'. Requests do not ask to create, add or make a persistent row, catalog or shelf."}}}
 PICK_SYS = ("You recommend movies and TV series for a streaming search box. Reply with exactly 20 lines, nothing else, "
             "format: Title|Year|m or s  (m=movie, s=series). Real, well-known titles that best match the request, best first. "
             "For 'best/greatest' requests, use broad critical consensus, not one person's taste, across decades and countries. "
@@ -861,13 +952,20 @@ def decision(name, **spec):
     _decision_schema(spec["out"])
     llm = spec["llm"]
     if llm is not None:
-        assert isinstance(llm, dict) and set(llm) == set("path model batch timeout prompt parse".split())
+        fields = set("path model batch timeout prompt parse".split())
+        assert isinstance(llm, dict) and set(llm) in (fields, fields | {"fallback"})
         assert spec["lane"] in AI_CAPS and not spec["serving"]
-        assert isinstance(llm["path"], str) and llm["path"].startswith("/api/")
-        assert isinstance(llm["model"], str) and llm["model"]
-        assert type(llm["batch"]) is int and 1 <= llm["batch"] <= 25
-        assert type(llm["timeout"]) in (int, float) and math.isfinite(llm["timeout"]) and llm["timeout"] > 0
-        assert callable(llm["prompt"]) and callable(llm["parse"])
+        attempts = [llm]
+        if "fallback" in llm:
+            assert isinstance(llm["fallback"], dict) and set(llm["fallback"]) == fields
+            attempts.append(llm["fallback"])
+        for attempt in attempts:
+            assert isinstance(attempt["path"], str) and attempt["path"].startswith("/api/")
+            assert isinstance(attempt["model"], str) and attempt["model"]
+            assert type(attempt["batch"]) is int and 1 <= attempt["batch"] <= 25
+            assert attempt["batch"] == llm["batch"]
+            assert type(attempt["timeout"]) in (int, float) and math.isfinite(attempt["timeout"]) and attempt["timeout"] > 0
+            assert callable(attempt["prompt"]) and callable(attempt["parse"])
     spec["max_usd"] = min(spec["max_usd"], DECIDE_MAX_USD)
     DECISIONS[name] = spec
     return spec
@@ -1169,51 +1267,63 @@ def decide_many(name, items, *, person=None, ctx=None, allow_llm=True, max_usd=N
             if hit:
                 result(i, (hit["answer"], hit["confidence"]), "cache")
         llm = spec["llm"]
+        attempts = [llm] if llm else []
+        if llm and "fallback" in llm:
+            attempts.append(llm["fallback"])
         for offset in range(0, len(pending), llm["batch"] if llm else 1):
             chunk = pending[offset:offset + llm["batch"]]
             cost, over = None, False
             try:
                 batch = [inputs[i] for i in chunk]
-                body = llm["prompt"](batch)
-                reservation = {}
-                gate = _decision_gate(name, spec, allow_llm, limit, client, reservation)
-                if gate:
-                    for i in chunk:
-                        fallback(i, gate)
-                    continue
-                try:
-                    resp = openrouter(llm["path"], body, llm["timeout"], spec["lane"], name)
-                except BudgetExceeded:
-                    if client is not None:
-                        with _usage_lock:
-                            if _usage["day"] == reservation["day"]:
-                                _usage["calls"][f"api:{spec['lane']}"] -= 1
-                    raise
-                reported = (resp.get("usage") or {}).get("cost")
-                if reported is not None:
-                    check(float, reported, "cost")
-                    if reported < 0:
-                        raise ValueError("cost")
-                    over = reported > limit
-                    cost = reported / len(chunk)
-                    if over:
-                        with _usage_lock:
-                            _decision_roll()
-                            _decide_over.add(name)
-                parsed = llm["parse"](resp, batch)
-                if not isinstance(parsed, list) or len(parsed) != len(chunk):
-                    raise ValueError("answers")
-                for i, pair in zip(chunk, parsed):
+                for attempt in attempts:
                     try:
-                        pair = _decision_answer(spec, pair)
+                        body = attempt["prompt"](batch)
+                        reservation = {}
+                        gate = _decision_gate(name, spec, allow_llm, limit, client, reservation)
+                        if gate:
+                            for i in chunk:
+                                fallback(i, gate, cost, over)
+                            break
+                        try:
+                            resp = openrouter(attempt["path"], body, attempt["timeout"], spec["lane"], name)
+                        except BudgetExceeded:
+                            if client is not None:
+                                with _usage_lock:
+                                    if _usage["day"] == reservation["day"]:
+                                        _usage["calls"][f"api:{spec['lane']}"] -= 1
+                            raise
+                        reported = (resp.get("usage") or {}).get("cost")
+                        if reported is not None:
+                            check(float, reported, "cost")
+                            if reported < 0:
+                                raise ValueError("cost")
+                            cost = (cost or 0) + reported / len(chunk)
+                            over = cost * len(chunk) > limit
+                            if over:
+                                with _usage_lock:
+                                    _decision_roll()
+                                    _decide_over.add(name)
+                        parsed = attempt["parse"](resp, batch)
+                        if not isinstance(parsed, list) or len(parsed) != len(chunk):
+                            raise ValueError("answers")
+                        if attempt is not attempts[-1]:
+                            # Validate the whole first attempt before publishing any batch results.
+                            parsed = [_decision_answer(spec, pair) for pair in parsed]
+                        for i, pair in zip(chunk, parsed):
+                            try:
+                                pair = _decision_answer(spec, pair)
+                            except Exception as err:
+                                fallback(i, err, cost, over)
+                            else:
+                                result(i, pair, "llm", cost=cost, over=over)
+                        break
                     except Exception as err:
-                        fallback(i, err, cost, over)
-                    else:
-                        result(i, pair, "llm", cost=cost, over=over)
-            except Exception as err:
-                for i in chunk:
-                    if results[i] is None:
-                        fallback(i, err, cost, over)
+                        if attempt is not attempts[-1] and not isinstance(err, BudgetExceeded) and not over:
+                            continue
+                        for i in chunk:
+                            if results[i] is None:
+                                fallback(i, err, cost, over)
+                        break
             finally:
                 with _decide_lock:
                     for i in chunk:
@@ -1222,7 +1332,7 @@ def decide_many(name, items, *, person=None, ctx=None, allow_llm=True, max_usd=N
                             del _decide_flights[keys[i]]
                         event.set()
         for i, event in followers:
-            event.wait(llm["timeout"] + 1)
+            event.wait(sum(attempt["timeout"] for attempt in attempts) + 1)
             with _decide_lock:
                 hit = _decision_hit(keys[i])
             if hit:
@@ -1282,7 +1392,7 @@ def route_parse(resp, batch):
     return [({"choice": a["choice"], "confidence": a.get("confidence")}, a.get("confidence") or 0)]
 
 
-decision("route_query", ver=1, lane="search", cap=None, ttl=30 * DAY,
+decision("route_query", ver=2, lane="search", cap=None, ttl=30 * DAY,
     inp={"query": str}, out={"choice": ("title", "discover", "request", "command", None), "confidence": (float, None)},
     norm=route_norm, rule=None, params={},
     llm={"path": "/api/alpha/decisions", "model": ROUTE_MODEL, "batch": 1, "timeout": 4,
@@ -1775,11 +1885,168 @@ MOODS_ROWS = [rid('mood1'), rid('mood2'), rid('mood3'), rid('mood4')]
 SHELF_ROWS = [rid(f'shelf_{p}_{n}') for p in (*PEOPLE, 'together') for n in range(1, 11)]
 
 from skald.aio_refresh import BackgroundRefresh
-_aio_refresh = BackgroundRefresh(DATA, lambda line: print(line, file=sys.stderr, flush=True))
+_aio_refresh = BackgroundRefresh(DATA, lambda line: print(line, file=sys.stderr, flush=True),
+                                 server=lambda: SimpleNamespace(**globals()))
 
 
 def aio_rows_changed():
     _aio_refresh.schedule()
+
+
+_health = None
+_health_lock = threading.Lock()
+_health_at = 0
+_feed_thread = None
+_feed_thread_lock = threading.Lock()
+_health_jobs = set()
+_health_poll_runs = {}
+_health_poll_backoff = {}
+_health_served_rows = {}
+_health_row_sources = {}
+_health_started = time.time()
+
+
+def start_feed_worker():
+    global _feed_thread
+    with _feed_thread_lock:
+        if _feed_thread is None or not _feed_thread.is_alive():
+            _feed_thread = threading.Thread(target=feed_worker, daemon=True, name='skald-feeds')
+            _feed_thread.start()
+    return True
+
+
+def health_poll_result(cid, error, backoff=0):
+    if _health is not None:
+        from skald.health import key
+        with _health_lock:
+            prior = _health.state['polls'].get(key('connector', cid), {}).get('failures', 0)
+            _health_poll_runs[cid] = _health_poll_runs.get(cid, prior) + 1 if error else 0
+            _health_poll_backoff[cid] = backoff
+
+
+def health_snapshot():
+    from skald import health
+    hashes = {name: p.get('hash', '') for name, p in _profiles.items()}
+    periods = {'episodes': 3 * 3600, 'upcoming': 6 * 3600, 'airing': 6 * 3600,
+               'top10': 12 * 3600, 'personal': 12 * 3600, 'week': 7 * 86400,
+               'docsai': 7 * 86400, 'shelves': 60}
+    feeds = {}
+    with _feeds_lock:
+        records = dict(_feeds)
+        empty = set(_feeds_empty)
+    for job, cids, stamp, gap, build in job_specs(local_now(), hashes):
+        for lang in list(_langs):
+            for cid in cids:
+                if (cid, lang) in empty:
+                    continue
+                rec = records.get((cid, lang), {})
+                feeds[health.key('feed', (job, cid, lang))] = {
+                    'built': rec.get('built', _health_started), 'interval': periods.get(job, 86400),
+                    'label': cid + ' / ' + lang}
+    with _connectors_lock:
+        connectors = {health.key('connector', cid): {
+            'polls': c['counts']['polls'], 'failed': bool(c['health']['error']),
+            'failures': _health_poll_runs.get(cid, _health.state['polls'].get(health.key('connector', cid), {}).get('failures', 0) if _health else 0)}
+            for cid, c in _connectors.items() if c['health']['state'] != 'disabled'}
+    with _usage_lock:
+        _decision_roll()
+        budget = _usage['month_cost'] / AI_MONTHLY_USD if AI_MONTHLY_USD > 0 else 0
+        over = bool(_decide_over) or AI_MONTHLY_USD > 0 and _usage['month_cost'] >= AI_MONTHLY_USD
+        for lane, cap in AI_CAPS.items():
+            if cap > 0:
+                budget = max(budget, sum(n for k, n in _usage['calls'].items() if k.startswith(lane + ':')) / cap)
+        for name, spec in DECISIONS.items():
+            if spec['cap']:
+                budget = max(budget, _usage['calls'].get(f"{spec['lane']}:{name}", 0) / spec['cap'])
+    with _health_lock:
+        rows = dict(_health_served_rows)
+    return {'worker_alive': _feed_thread is not None and _feed_thread.is_alive(),
+            'feeds': feeds, 'connectors': connectors, 'budget_ratio': budget,
+            'budget_over': over, 'aio_pending': _aio_refresh.failed or _aio_refresh.pending or
+                health.read_json(os.path.join(DATA, 'setup.json'), {}).get('aiostreams_pending', False),
+            'rows': rows}
+
+
+def health_actions():
+    from skald.health import key
+    actions = {'worker': start_feed_worker, 'aiostreams': _aio_refresh.repair}
+    hashes = {name: p.get('hash', '') for name, p in _profiles.items()}
+    def rebuild(job):
+        with _health_lock:
+            _health_jobs.add(job)
+        return 'pending'
+    for job, cids, stamp, gap, build in job_specs(local_now(), hashes):
+        for cid in cids:
+            for lang in list(_langs):
+                actions[key('feed', (job, cid, lang))] = lambda job=job: rebuild(job)
+            with _health_lock:
+                for row, source in _health_row_sources.items():
+                    if source == cid:
+                        actions[row] = lambda job=job: rebuild(job)
+    def retry(cid):
+        global _connectors_generation
+        with _connectors_lock:
+            c = _connectors.get(cid)
+            if not c:
+                return False
+            c['next_due'] = max(time.time() + 60, c.get('next_due') or 0, _health_poll_backoff.get(cid, 0))
+            _connectors_generation += 1
+        return 'pending'
+    with _connectors_lock:
+        for cid in _connectors:
+            actions[key('connector', cid)] = lambda cid=cid: retry(cid)
+    return actions
+
+
+_health_tick_lock = threading.Lock()
+
+
+def health_cache_changed(name, records):
+    def unpack(values):
+        return {tuple(k.split('|')): v for k, v in values.items()}
+    with _pin_lock, _home_lock, _feeds_lock:
+        if name == 'shown_scopes.json':
+            _shown_scoped.clear()
+            _shown_scoped.update({scope: unpack(records[scope]) if scope in records else _shown.copy()
+                                  for scope in SCOPES})
+        else:
+            store = _feeds if name == 'feeds.json' else _shown
+            old = dict(store)
+            store.clear()
+            store.update(unpack(records))
+            if name == 'feeds.json':
+                _langs.update(lang for cid, lang in store)
+            dependents = [*_shown_scoped.values()] + ([_shown] if name == 'feeds.json' else [])
+            for dependent in dependents:
+                for key, value in list(dependent.items()):
+                    if old.get(key) is value:
+                        if key in store:
+                            dependent[key] = store[key]
+                        else:
+                            dependent.pop(key)
+        _home_cache.clear()
+        _pin_cache.clear()
+
+
+def health_tick():
+    global _health_at
+    if _health is None or not _health_tick_lock.acquire(blocking=False):
+        return
+    try:
+        if time.time() - _health_at < 300:
+            return
+        _health_at = time.time()
+        _health.tick(health_snapshot(), health_actions())
+    except Exception:
+        _daily_log('health check failed; check local state permissions')
+    finally:
+        _health_tick_lock.release()
+
+
+def health_supervisor():
+    while True:
+        health_tick()
+        time.sleep(60)
 
 
 def shelf_change(scope, op, **kwargs):
@@ -1796,8 +2063,8 @@ def shelf_feed(lang, now=None, build=True):
 
 def shelf_rows():
     s, doc = SimpleNamespace(**globals()), shelves.read(SimpleNamespace(**globals()))
-    return [(cid, ('tv',), next((w['name'] for w in doc['wishes'] if (w['scope'], w['slot']) == (scope, n) and w['name']), f'Your Shelf {n}'))
-            for cid, scope, n in shelves.slots(s, getattr(_scoping, 'scope', None))]
+    return [(cid, ('tv',), next(w['name'] or w['text'][:100] for w in doc['wishes'] if (w['scope'], w['slot']) == (scope, n)))
+            for cid, scope, n in shelves.slots(s, getattr(_scoping, 'scope', None), doc=doc)]
 
 
 def shelf_items(cid, typ, lang, who=None):
@@ -1884,14 +2151,18 @@ def anime_season(d, offset=0):
     return ANIME_SEASONS[i % 4], d.year + i // 4
 
 
+def row_groups():
+    return {'people': [*ROW_OWNER, *[rid(p) for p in ARCHIVED]],
+              'moods': MOODS_ROWS, 'lanes': LANE_ROWS, 'docs': [*DOCS, rid('docsai')],
+              'studios': STUDIO_ROWS, 'anime': [rid('airing'), rid('nextseason')],
+              'shelves': SHELF_ROWS, 'rewatch': [rid('rewatch'), rid('rewatchai')]}
+
+
 def row_enabled(cid):
     keys = CONFIG['household'].get('rows')
     if keys is None:
         return cid not in (rid('digital'), rid('toprated'))
-    groups = {'people': [*ROW_OWNER, *[rid(p) for p in ARCHIVED]],
-              'moods': MOODS_ROWS, 'lanes': LANE_ROWS, 'docs': [*DOCS, rid('docsai')],
-              'studios': STUDIO_ROWS, 'anime': [rid('airing'), rid('nextseason')],
-              'shelves': SHELF_ROWS, 'rewatch': [rid('rewatch'), rid('rewatchai')]}
+    groups = row_groups()
     return any(cid in groups.get(key, [rid(key)]) for key in keys)
 
 
@@ -1930,11 +2201,38 @@ def feed_rows(lang=LANG, profiles=True):
     if any(kids_age(p) is not None for p in PEOPLE) and (scope not in PEOPLE or kids_age(scope) is not None):
         rows.append((rid('family'), MIX, "Family Picks"))
     rank = {cid: i for i, cid in enumerate(DEDUPE_ORDER)}
+    keys = CONFIG['household'].get('row_order')
+    groups = row_groups()
+    if keys is not None:
+        rank = {cid: i for i, cid in enumerate(cid for key in keys for cid in groups.get(key, [rid(key)]))}
+    labels = {cid: label for key, label in CONFIG['household'].get('row_labels', {}).items()
+              for cid in groups.get(key, [rid(key)])}
+    rows = [(cid, types, labels.get(cid, name)) for cid, types, name in rows]
     return sorted((r for r in rows if row_enabled(r[0])), key=lambda r: rank.get(r[0], len(rank)))
 
 
 def read_history():
-    return _drop_read("history")
+    from skald.history import combine, filter_forgotten
+    _refresh_learning()
+    return combine(DATA, "history.json", filter_forgotten(DATA, CONFIG, "history.json", _drop_read("history")))
+
+
+from skald.history import locked as history_locked, cutoffs as history_cutoffs
+_history_lock = threading.RLock()
+
+
+def cleanup_history(now):
+    from skald.history import cleanup, enabled
+    from types import SimpleNamespace
+    if not enabled(CONFIG):
+        return {'pruned': 0, 'summaries': 0, 'residual': 0}
+    with history_locked(DATA), _history_lock, _imports_lock:
+        return cleanup(SimpleNamespace(**globals()), now)
+
+
+def history_cleanup_due(now):
+    from skald.history import enabled
+    return enabled(CONFIG)
 
 
 def active_profiles():
@@ -2012,11 +2310,18 @@ def _taste_accounts():
             for p, auth in CONFIG["connectors"].get(cid, {}).get("accounts", {}).items()}
 
 
+def taste_drop(cid):
+    from skald.history import combine, filter_forgotten
+    name = os.path.basename(_drop_path(cid))
+    owner = cid.split("-", 1)[1] if "-" in cid else None
+    return combine(DATA, name, filter_forgotten(DATA, CONFIG, name, _drop_read(cid), owner))
+
+
 def read_trakt():
     """Account history, attributed by configured file rather than remote item fields."""
     accounts = CONFIG["connectors"].get("trakt_api", {}).get("accounts")
-    items = ([{**it, "person": person} for person in accounts for it in _drop_read("trakt-" + person)]
-             if accounts is not None else _drop_read("trakt"))
+    items = ([{**it, "person": person} for person in accounts for it in taste_drop("trakt-" + person)]
+             if accounts is not None else taste_drop("trakt"))
     if not any(cid in CONFIG["connectors"] for cid in ("mdblist", "stremio")):
         return items
     if accounts is None:
@@ -2024,7 +2329,7 @@ def read_trakt():
     positions = {(it["person"], it["type"], it["id"]): n for n, it in enumerate(items)}
     for source in ("mdblist", "stremio"):
         for person in CONFIG["connectors"].get(source, {}).get("accounts", {}):
-            for it in _drop_read(source + "-" + person):
+            for it in taste_drop(source + "-" + person):
                 it = {**it, "person": person}
                 n = positions.get((person, it["type"], it["id"]))
                 if n is None:
@@ -2600,6 +2905,20 @@ _connector_pending = None
 
 
 def _connector_write(name, doc, *, indent=None, newline=False):
+    with history_locked(DATA), _history_lock:
+        return _connector_write_locked(name, doc, indent=indent, newline=newline)
+
+
+def _connector_write_locked(name, doc, *, indent=None, newline=False):
+    from skald.history import sources, filter_forgotten, clear_connector_caches
+    origin = name + ".json"
+    for filename, _, person in sources(CONFIG):
+        if filename == origin and "items" in doc:
+            items = filter_forgotten(DATA, CONFIG, origin, doc["items"], person)
+            if items != doc["items"]:
+                doc = {**doc, "items": items}
+                clear_connector_caches(doc)
+            break
     content = (json.dumps(doc, ensure_ascii=indent is None, indent=indent, allow_nan=False) + ("\n" if newline else "")).encode("utf-8")
     path = os.path.join(DATA, name + ".json")
     try:
@@ -3534,6 +3853,7 @@ def connectors_tick(now):
                 for account in c.get("accounts", {}).values():
                     account.update(interval=c["interval"], next_due=c["next_due"])
                 c["health"]["error"] = error
+                health_poll_result(cid, error or any(a.get('last_error') or a['health']['error'] for a in c.get('accounts', {}).values()), stats.get('backoff_until', 0))
                 if error == "CredentialsDirectoryUnsafe":
                     c["health"]["fixHint"] = "Set DATA/credentials/ owner to the engine uid and chmod 0700."
                 elif error == "TraktLoginRequired":
@@ -3570,6 +3890,7 @@ def connectors_tick(now):
                     c["last_sync"] = now
                     c["interval"], c["next_due"] = connector_next(c, new, now)
                     c["health"]["error"] = error
+                    health_poll_result(cid, error)
                 stale_at = at if cid == "history" else c["last_new"]
                 state = "error" if c["health"]["error"] else "stale" if stale_at is not None and now - stale_at >= CONNECTOR_STALE[cid] else "ok"
             else:
@@ -3706,15 +4027,35 @@ def _event(t, eid, key, kind, title, year, who, by, action, src, ctx, conf=1.0, 
 
 def tv_events(now, items, _ids=None):
     ids = {} if _ids is None else _ids
-    jobs = [(it, _pool.submit(tmdb_details, it)) for it in items[:40]]
-    for it, job in jobs:
-        try:
-            hit = job.result()
-        except Exception:
-            continue
-        if not hit:
-            continue
-        kind, det = hit
+    selected, used = [], 0
+    for it in items:
+        if used >= 40:
+            break
+        selected.append(it)
+        used += it.get("_summary", {}).get("raw_items", 1)
+    jobs = [(it, _pool.submit(tmdb_details, it)) for it in selected if "_summary" not in it]
+    def resolved_jobs():
+        for it, job in jobs:
+            try:
+                hit = job.result()
+            except Exception:
+                continue
+            if hit:
+                yield it, *hit
+    has_summaries = any("_summary" in it for it in selected)
+    resolved = list(resolved_jobs()) if has_summaries else resolved_jobs()
+    raw_keys = {(f"tmdb:{det['id']}", kind, it.get("profile", "household"), who, tuple(sorted(by)))
+                for it, kind, det in resolved for who, by, _ in [attribute(it)]} if has_summaries else set()
+    for it in selected:
+        if "_summary" in it:
+            e = it["_summary"]
+            if (e["key"], e["kind"], e["profile"], e["who"], tuple(sorted(e["by"]))) in raw_keys:
+                continue
+            signal, _ = classify(it, now)
+            yield _event(it["at"] / 1000 if it.get("at") else None, f"tv:{e['kind']}:{e['key']}",
+                         e["key"], e["kind"], e["title"], e["year"], e["who"], e["by"],
+                         EVENT_ACTION[signal], "tv", {"item": it, "genres": e["genres"], "flags": e["flags"], "signal": signal}, _ids=ids)
+    for it, kind, det in resolved:
         signal, _ = classify(it, now)
         who, by, ctx = attribute(it)
         yield _event(it["at"] / 1000 if it.get("at") else None, f"tv:{kind}:{it['id']}",
@@ -4276,6 +4617,9 @@ def taste_hash(name, items):
     """Changes only when a title's taste signal changes (not on every progress tick while watching)."""
     now = time.time()
     signal = sorted((it["id"], classify(it, now)[0]) for it in items if name != "household" or attribute(it)[0] != GUEST)
+    from skald.history import read as history_summaries
+    if summaries := history_summaries(DATA):
+        signal.append(summaries)
     if name == "household":
         signal.append(recent_searches())
         if _taste_accounts():
@@ -4349,15 +4693,34 @@ LEARN_WINDOW = 21
 LEARN_TIRED = 6
 _learn = {"served": {}, "rows": {}, "hits": [], "credited": {}, "lanes": {}, "ctx": [], "moodpicks": {}}
 CTX_MAX = 500
-_learn_lock = threading.Lock()
+_learn_lock = threading.RLock()
 _learn_dirty = threading.Event()
+_learn_forgotten = history_cutoffs(DATA)
+
+
+def _refresh_learning():
+    global _learn_forgotten
+    forgotten = history_cutoffs(DATA)
+    with _learn_lock:
+        if forgotten != _learn_forgotten:
+            _learn.clear()
+            _learn.update(served={}, rows={}, hits=[], credited={}, lanes={}, ctx=[], moodpicks={})
+            _learn_dirty.clear()
+            _learn_forgotten = forgotten
 
 
 def row_name(cid, lang, fallback=None, metas=None, key="title"):
+    label = None
+    if key == 'title':
+        groups = row_groups()
+        label = next((name for row, name in CONFIG['household'].get('row_labels', {}).items()
+                      if cid in groups.get(row, [rid(row)])), None)
     if cid in SHELF_ROWS and key == "title":
-        return next((r[2] for r in shelf_rows() if r[0] == cid), fallback)
+        return label or next((r[2] for r in shelf_rows() if r[0] == cid), fallback)
     if key == "title" and kids_age(safety_subject()) is not None:
         return "Picked for You"
+    if label:
+        return label
     names = getattr(metas, "names", feed(cid, lang).get("names") or {})
     name = names.get(key) or (names.get("mixed") if key == "title" else None) or fallback
     return name.get("tv") or name.get("movie") or fallback if isinstance(name, dict) else name
@@ -4377,6 +4740,7 @@ def learn_id(cid, lang, metas=None):
 def note_served(cid, metas):
     if not cid:
         return
+    _refresh_learning()
     day = local_now().strftime("%Y-%m-%d")
     with _learn_lock:
         for pos, m in enumerate(metas[:LEARN_VISIBLE]):
@@ -4394,6 +4758,7 @@ def learn_from_plays(p):
     """Credit rows (once per title) for titles really played on the shared TV within LEARN_WINDOW days after a row
     showed them; when several rows showed it, they share the credit (1/k each)."""
     note_tv(p)
+    _refresh_learning()
     with _learn_lock:
         for e in p["entries"]:
             at = (e["item"].get("at") or 0) / 1000 if e.get("who") in ("tv", "both") and real_play(e) else 0
@@ -4427,6 +4792,7 @@ def year_season(d):
 def log_play_context(p):
     """Append every real shared-TV play once (title + time it was last played): weekday, part of day, season,
     the rows that showed it and that evening's mood shelves. Free, and the raw material for learning 'when'."""
+    _refresh_learning()
     with _learn_lock:
         have = {(c["key"], c["at"]) for c in _learn["ctx"]}
         for e in p["entries"]:
@@ -4451,6 +4817,7 @@ def log_play_context(p):
 
 def tired_keys(cids=None):
     """Titles shown on many days without being played: the household is not interested (right now)."""
+    _refresh_learning()
     played = set(_learn["credited"])
     with _learn_lock:
         return {k: rec["name"] for k, rec in _learn["served"].items() if k not in played and
@@ -4458,6 +4825,7 @@ def tired_keys(cids=None):
 
 
 def learning_records(field):
+    _refresh_learning()
     records = _learn[field]
     adults = set(adult_people())
     if len(adults) == len(PEOPLE):
@@ -4477,6 +4845,7 @@ def learning_records(field):
 
 
 def learning_rows():
+    _refresh_learning()
     if len(adult_people()) == len(PEOPLE):
         return _learn["rows"]
     rows = {k: {**v, "hits": 0} for k, v in _learn["rows"].items()}
@@ -4497,6 +4866,7 @@ def hit_titles(n=12):
 
 
 def save_learn():
+    _refresh_learning()
     save_online()
     if not _learn_dirty.is_set():
         return
@@ -4516,6 +4886,7 @@ def save_learn():
 
 
 def learn_stats():
+    _refresh_learning()
     with _learn_lock:
         rows = {cid: {**r, "hit_rate": round((r["hits"] + 1) / (r["shown"] + 2), 3)} for cid, r in _learn["rows"].items()}
         hits = _learn["hits"][-10:]
@@ -4541,6 +4912,7 @@ _online_meta = {"errors": 0, "corrupt": False, "skipped": 0, "unmapped": 0}
 _online_index = {}
 _online_pruned = None
 _online_error_at = None
+_online_forgotten = history_cutoffs(DATA)
 
 
 def online_day(t):
@@ -4606,8 +4978,13 @@ def online_valid(s):
 
 
 def online_state():
-    global _online, _online_index, _online_pruned
+    global _online, _online_index, _online_pruned, _online_forgotten
     with _online_lock:
+        forgotten = history_cutoffs(DATA)
+        if forgotten != _online_forgotten:
+            _online = None
+            _online_dirty.clear()
+            _online_forgotten = forgotten
         if _online is None:
             path = os.path.join(DATA, "online.json")
             try:
@@ -4939,12 +5316,80 @@ def online_summary():
 # The household's taste vector is the weighted mean of what they watched (minus what they dropped,
 # plus what they played from a row); candidates are ranked by similarity before any LLM sees them.
 
-EMB_MODEL = "openai/text-embedding-3-small"
+EMB_MODEL = os.environ.get("SKALD_EMBED_MODEL") or "google/gemini-embedding-2"
 EMB_DIM = 256
+_emb_model = EMB_MODEL
 _emb = {}
 _emb_kinds = {}
-_emb_lock = threading.Lock()
+_emb_next = {}
+_emb_next_kinds = {}
+_emb_job = None
+_emb_retry = 0
+_emb_lock = threading.RLock()
 _emb_dirty = threading.Event()
+
+
+class Embedding(array):
+    """Keep the source model on vectors held across an atomic cache switch."""
+    def __new__(cls, values, model):
+        obj = super().__new__(cls, 'f', values)
+        obj.model = model
+        return obj
+
+
+class TasteVector(list):
+    """A centroid retains its model without rounding its accumulation."""
+
+
+def emb_status(pairs=()):
+    with _emb_lock:
+        needed = _needed_emb(pairs)
+        return {"model": _emb_model, "active": sum(femb(k, kind) is not None for k, kind in needed),
+                "pending": sum(_emb_get(k, kind, _emb_next, _emb_next_kinds) is not None for k, kind in needed),
+                "needed": len(needed)}
+
+
+def _needed_emb(pairs):
+    needed = set(pairs)
+    for p in list(_profiles.values()):
+        needed.update((e["key"], e["kind"]) for e in p.get("entries", []))
+    for store in (_feeds, _shown, *list(_shown_scoped.values())):
+        for rec in list(store.values()):
+            seed = (rec.get("names") or {}).get("seed")
+            if seed:
+                kind = (_facets.get(seed) or {}).get("kind") or _emb_kinds.get(seed) or profile_kind(seed)
+                if kind in ("movie", "tv"):
+                    needed.add((seed, kind))
+            for metas in (rec.get("metas") or {}).values():
+                if isinstance(metas, list):
+                    needed.update((m["id"], "movie" if m["type"] == "movie" else "tv")
+                                  for m in metas if m.get("id", "").startswith("tmdb:")
+                                  and m.get("type") in ("movie", "series", "tv"))
+    return needed
+
+
+def _refresh_emb(requested):
+    global _emb_model, _emb_retry
+    try:
+        with _emb_lock:
+            pairs = sorted(_needed_emb(requested))
+        _embed_pairs(pairs, EMB_MODEL, _emb_next, _emb_next_kinds)
+        with _emb_lock:
+            coverage = emb_status(requested)
+            if coverage["pending"] >= coverage["active"]:
+                _emb.clear()
+                _emb.update(_emb_next)
+                _emb_kinds.clear()
+                _emb_kinds.update(_emb_next_kinds)
+                _emb_model = EMB_MODEL
+                _emb_next.clear()
+                _emb_next_kinds.clear()
+                _emb_dirty.set()
+        clear_seed_cache()
+    except Exception as e:
+        # Match the feed worker's retry windows without exposing upstream error text.
+        with _emb_lock:
+            _emb_retry = time.time() + (3600 if isinstance(e, BudgetExceeded) else 600)
 
 
 def title_text(kind, tid):
@@ -4959,10 +5404,24 @@ def title_text(kind, tid):
 
 def ensure_emb(pairs):
     """pairs: [(key 'tmdb:1', kind 'movie'|'tv')]; embeds the missing ones. Returns how many are available."""
-    if not OR_KEY:
+    global _emb_job
+    if not OR_KEY or _defer_enrichment:
         return 0
+    pairs = list(pairs)
     with _emb_lock:
-        missing = list(dict.fromkeys((k, kind) for k, kind in pairs if femb(k, kind) is None))
+        if _emb_model != EMB_MODEL:
+            if time.time() >= _emb_retry and (_emb_job is None or _emb_job.done()):
+                _emb_job = _outer.submit(_refresh_emb, pairs)
+            return sum(femb(k, kind) is not None for k, kind in pairs)
+    _embed_pairs(pairs, EMB_MODEL, _emb, _emb_kinds)
+    with _emb_lock:
+        return sum(femb(k, kind) is not None for k, kind in pairs)
+
+
+def _embed_pairs(pairs, model, vectors, kinds):
+    with _emb_lock:
+        missing = list(dict.fromkeys((k, kind) for k, kind in pairs
+                                    if _emb_get(k, kind, vectors, kinds) is None))
     texts = [(k, kind, _pool.submit(title_text, kind, k[5:])) for k, kind in missing]
     ready = []
     for k, kind, job in texts:
@@ -4972,21 +5431,25 @@ def ensure_emb(pairs):
             continue
     for i in range(0, len(ready), 96):
         batch = ready[i:i + 96]
-        j = openrouter("/api/v1/embeddings", {"model": EMB_MODEL, "input": [t for _, _, t in batch], "dimensions": EMB_DIM},
+        j = openrouter("/api/v1/embeddings", {"model": model, "input": [t for _, _, t in batch], "dimensions": EMB_DIM},
                        60, "embed", "titles")
         with _emb_lock:
-            for (k, kind, _), d in zip(batch, sorted(j["data"], key=lambda d: d["index"])):
+            for d in j["data"]:
+                if not isinstance(d["index"], int) or not 0 <= d["index"] < len(batch):
+                    raise ValueError("invalid embedding index")
+                k, kind, _ = batch[d["index"]]
                 v = d["embedding"]
+                if len(v) != EMB_DIM or not all(math.isfinite(x) for x in v):
+                    raise ValueError("invalid embedding dimensions or values")
                 n = sum(x * x for x in v) ** 0.5 or 1.0
                 slot = fkey(k, kind)
-                if _emb_kinds.get(slot) not in (None, kind):
+                if kinds.get(slot) not in (None, kind):
                     slot = f"{k}@{kind}"
-                _emb[slot] = array('f', (x / n for x in v))
-                _emb_kinds[slot] = kind
-        _emb_dirty.set()
-        clear_seed_cache()
-    with _emb_lock:
-        return sum(femb(k, kind) is not None for k, kind in pairs)
+                vectors[slot] = Embedding((x / n for x in v), model)
+                kinds[slot] = kind
+        if vectors is _emb:
+            _emb_dirty.set()
+            clear_seed_cache()
 
 
 def save_emb():
@@ -4996,24 +5459,33 @@ def save_emb():
     with _emb_lock:
         snap = {k: base64.b64encode(struct.pack(f"{EMB_DIM}e", *v)).decode() for k, v in _emb.items()}
         kinds = {k: kind for k, kind in _emb_kinds.items() if k in snap}
+        model = _emb_model
     try:
         with open(os.path.join(DATA, "emb.json.tmp"), "w") as fh:
-            json.dump({"model": EMB_MODEL, "dim": EMB_DIM, "v": snap, "kinds": kinds}, fh)
+            json.dump({"model": model, "dim": EMB_DIM, "v": snap, "kinds": kinds}, fh)
         os.replace(os.path.join(DATA, "emb.json.tmp"), os.path.join(DATA, "emb.json"))
     except OSError:
         pass
 
 
 def load_emb():
+    global _emb_model
     try:
         with open(os.path.join(DATA, "emb.json")) as fh:
             raw = json.load(fh)
-        if raw.get("model") == EMB_MODEL and raw.get("dim") == EMB_DIM:
-            _emb.update({k: array('f', struct.unpack(f"{EMB_DIM}e", base64.b64decode(b))) for k, b in raw["v"].items()})
-            for k in raw["v"]:
-                kind = (raw.get("kinds") or {}).get(k) or (_facets.get(k) or {}).get("kind")  # Stored slots have no request kind.
-                if kind in ("movie", "tv"):
-                    _emb_kinds[k] = kind
+        if raw.get("dim") == EMB_DIM:
+            model = raw.get("model") or "openai/text-embedding-3-small"
+            vectors = {k: Embedding(struct.unpack(f"{EMB_DIM}e", base64.b64decode(b)), model)
+                       for k, b in raw["v"].items()}
+            with _emb_lock:
+                _emb_model = model
+                _emb.clear()
+                _emb.update(vectors)
+                _emb_kinds.clear()
+                for k in raw["v"]:
+                    kind = (raw.get("kinds") or {}).get(k) or (_facets.get(k) or {}).get("kind")  # Stored slots have no request kind.
+                    if kind in ("movie", "tv"):
+                        _emb_kinds[k] = kind
     except Exception:
         pass
     finally:
@@ -5040,6 +5512,7 @@ def taste_vector(p, min_titles=5):
     hits = {h["key"] for h in _learn["hits"]} if HIT_TASTE and p.get("learned", True) else set()
     acc, n = [0.0] * EMB_DIM, 0
     with _emb_lock:
+        model = _emb_model
         for e in p["entries"]:
             v = femb(e["key"], e["kind"])
             if not v:
@@ -5051,12 +5524,17 @@ def taste_vector(p, min_titles=5):
     if n < min_titles:
         return None
     norm = sum(x * x for x in acc) ** 0.5 or 1.0
-    return [x / norm for x in acc]
+    vec = TasteVector(x / norm for x in acc)
+    vec.model = model
+    return vec
 
 
 def fit(vec, key, kind=None):
-    v = femb(key, kind)
-    return sum(a * b for a, b in zip(vec, v)) if vec and v else None
+    with _emb_lock:
+        if getattr(vec, "model", _emb_model) != _emb_model:
+            return None
+        v = femb(key, kind)
+        return sum(a * b for a, b in zip(vec, v)) if vec and v else None
 
 
 # --- taste facets (C) -------------------------------------------------------------------
@@ -5149,6 +5627,8 @@ _facets_lock = threading.Lock()
 _facets_dirty = threading.Event()
 _model = {"sig": None, "m": None}
 _model_lock = threading.Lock()
+_feed_started = False
+_defer_enrichment = False
 
 
 def fkey(key, kind):
@@ -5164,10 +5644,17 @@ def frec(key, kind):
 
 
 def femb(key, kind):
-    slot = fkey(key, kind)
-    if kind and _emb_kinds.get(slot) not in (None, kind):
+    with _emb_lock:
+        return _emb_get(key, kind, _emb, _emb_kinds)
+
+
+def _emb_get(key, kind, vectors, kinds):
+    rec = _facets.get(key) or {}
+    owner = rec.get("kind") if rec else kinds.get(key)
+    slot = f"{key}@{kind}" if kind and owner not in (None, kind) else key
+    if kind and kinds.get(slot) not in (None, kind):
         slot = f"{key}@{kind}"
-    return _emb.get(slot) if not kind or _emb_kinds.get(slot) in (None, kind) else None
+    return vectors.get(slot) if not kind or kinds.get(slot) in (None, kind) else None
 
 
 def origin_countries(det):
@@ -5262,6 +5749,28 @@ def backfill_countries():
     if todo:
         clear_seed_cache()
 
+def backfill_runtime():
+    """Worker only: fill missing runtime when that type has a personal limit."""
+    kinds = {('tv' if kind == 'series' else 'movie') for p in PEOPLE
+             for kind in CONFIG['taste'].get('people', {}).get(p, {}).get('prefs', {}).get('runtime', {})}
+    if not kinds:
+        return
+    with _facets_lock:
+        todo = [(key, rec['kind']) for key, rec in _facets.items() if 'runtime' not in rec
+                and key.startswith('tmdb:') and rec.get('kind') in kinds][:200]
+    for key, kind in todo:
+        try:
+            det = tmdb(f"{kind}/{key[5:].split('@')[0]}", language='en-US')
+        except Exception:
+            continue
+        minutes = det.get('runtime') if kind == 'movie' else next(iter(det.get('episode_run_time') or []), None)
+        with _facets_lock:
+            if key in _facets and _facets[key].get('kind') == kind:
+                _facets[key]['runtime'] = minutes
+                _facets_dirty.set()
+    if todo:
+        clear_seed_cache()
+
 
 def facet_record(kind, tid):
     det = tmdb(f"{kind}/{tid}", language="en-US", append_to_response="keywords,credits,release_dates" if kind == "movie" else "keywords,credits,content_ratings")
@@ -5280,6 +5789,7 @@ def facet_record(kind, tid):
             "g": genre_names([g["name"] for g in det.get("genres") or []]),
             "cr": certifications(det, kind), "adult": bool(det.get("adult")),
             "oc": origin_countries(det), "lang": det.get("original_language"), "title": det.get("title") or det.get("name") or "",
+            "runtime": det.get('runtime') if kind == 'movie' else next(iter(det.get('episode_run_time') or []), None),
             "y": (det.get("release_date") or det.get("first_air_date") or "")[:4], "kind": kind,
             "vote_average": det.get("vote_average"), "vote_count": det.get("vote_count"),
             "collection": (det.get("belongs_to_collection") or {}).get("id"),
@@ -5343,7 +5853,7 @@ _tagging = set()
 def tag_experiences(pairs, max_batches=4):
     """Experience tags for known titles without tags, TAG_BATCH per LLM call. Worker only (seconds per call),
     never on a search. pairs: [(key, kind)], strongest first; returns how many titles got tags."""
-    if not OR_KEY:
+    if not OR_KEY or _defer_enrichment:
         return 0
     ensure_facets([(k, kind) for k, kind in pairs if fkey(k, kind) != k and not frec(k, kind)])
     with _facets_lock:
@@ -5587,7 +6097,7 @@ def quality_prior(rec):
     return .02 * max(0, min(10, (rec or {}).get("vote_average") or 0))/10 * min(1, math.log1p(max(0, (rec or {}).get("vote_count") or 0))/math.log1p(10000))
 
 
-def build_model(p):
+def build_model(p, enrich=True):
     """Taste model of the household: fingerprint centroid, facet affinities (also per person), the loved titles
     behind each facet (for reasons) and a match calibration."""
     global _seed_stats
@@ -5597,8 +6107,9 @@ def build_model(p):
         ensure_facets([(e["key"], e["kind"]) for e in p["entries"][:400]])
     except Exception as e:
         print(f"facets: {type(e).__name__}: {e}", flush=True)
-    tag_experiences([(e["key"], e["kind"]) for e in pos_entries[:400]], max_batches=16)
-    vec = taste_vector(house)
+    if enrich:
+        tag_experiences([(e["key"], e["kind"]) for e in pos_entries[:400]], max_batches=16)
+    vec = taste_vector(house) if enrich else None
     hits = {h["key"] for h in _learn["hits"]} if HIT_TASTE else set()
     with _facets_lock:
         store = dict(_facets)
@@ -5652,7 +6163,7 @@ def build_model(p):
             embedded = sum(e["weight"] > 0 and femb(e["key"], e["kind"]) is not None for e in mine)
         seeds = mine if embedded >= 5 else [e for e in mine if e.get("explicit")]
         try:
-            m["pvec"][person] = taste_vector({"entries": seeds, "learned": False}, min_titles=1)
+            m["pvec"][person] = taste_vector({"entries": seeds, "learned": False}, min_titles=1) if enrich else None
         except Exception as e:
             print(f"pvec {person}: {type(e).__name__}: {e}", flush=True)
             m["pvec"][person] = None
@@ -5679,6 +6190,9 @@ def build_model(p):
     own = [b for b in (facet_bonus(m, store.get(fkey(e["key"], e["kind"])))[0] for e in pos_entries[:150]) if b > 0]
     if own:
         m["bscale"] = sorted(own)[len(own) // 2] or 1.0
+    if not enrich:
+        m["taste_line"] = taste_line(m)
+        return m
     # Calibration: the percentile among this week's ~80 trending titles (median ~70%, top ones 95+).
     try:
         bg = []
@@ -6009,11 +6523,11 @@ def get_model(build=True):
     with _model_lock:
         with _memory_lock:
             seq = _memory_read()["seq"]
-        sig = (p.get("hash"), len(_learn["hits"]) if HIT_TASTE else 0, local_now().strftime("%Y-%m-%d"), seq)
+        sig = (p.get("hash"), len(_learn["hits"]) if HIT_TASTE else 0, local_now().strftime("%Y-%m-%d"), seq, _emb_model)
         if len(adult_people()) != len(PEOPLE):
             sig += (adult_people(),)
         if _model["sig"] != sig or _model["m"] is None:
-            _model["m"] = build_model(p)
+            _model["m"] = build_model(p, enrich=False) if _defer_enrichment else build_model(p)
             _model["sig"] = sig
             m = _model["m"]
             print(f"taste model: {len(m['aff'])} facets, cal {m['cal']}, {m['taste_line'][:160]}", flush=True)
@@ -6072,6 +6586,7 @@ MEMORY_WHY_MIN, MEMORY_WHY_ROW = .4, 2
 VETO_EXEMPT = {rid('episodes'), rid('catchup'), rid('rewatch')}
 _memory, _memory_lock, _memory_index = None, threading.Lock(), {}
 _memory_veto = {}
+_memory_forget_stamp = None
 
 
 class MemoryFull(ValueError):
@@ -6141,7 +6656,16 @@ def _memory_log(ops):
 
 
 def _memory_read():
-    global _memory
+    global _memory, _memory_forget_stamp
+    try:
+        marker = os.stat(os.path.join(DATA, "history-forgotten.json"))
+        stamp = (DATA, marker.st_mtime_ns, marker.st_size)
+    except FileNotFoundError:
+        stamp = None
+    if stamp != _memory_forget_stamp:
+        _memory, _memory_forget_stamp = None, stamp
+        _memory_index.clear()
+        _memory_veto.clear()
     if _memory is None:
         path = os.path.join(DATA, "memory.json")
         try:
@@ -6208,7 +6732,7 @@ def _memory_save(store, ops, forget=False):
 
 
 def memory_save(store, ops):
-    with _memory_lock:
+    with history_locked(DATA), _memory_lock:
         _memory_save(store, ops)
 
 
@@ -6354,7 +6878,7 @@ def curate(evts, m, now=None, store=None, stamp=None, dry_run=False, facets=None
     now = time.time() if now is None else now
     if dry_run:
         return _memory_curate(evts, m, now, memory_load() if store is None else _memory_copy(store), stamp, facets)
-    with _memory_lock:
+    with history_locked(DATA), _memory_lock:
         result = _memory_curate(evts, m, now, _memory_copy(_memory_read() if store is None else store), stamp, facets)
         if result["refused"]:
             _memory_log([{"t": now, "op": "refused", "n": sum(r["ending"] for r in result["refused"])}])
@@ -6530,7 +7054,7 @@ def memory_tell(person, kind, about, src="told:cli", conf=1.0, now=None, names=N
     if not isinstance(src, str) or not re.fullmatch(r"(?:told:(?:cli|phone)|agent:[a-z][a-z0-9_-]{0,31}|utterance|(?:import|sync):[a-z]+|tv|trakt|told|remote|interview)", src):
         raise ValueError("invalid memory source")
     trusted = not tainted({"src": "told" if src.startswith("told:") else src})
-    with _memory_lock:
+    with history_locked(DATA), _memory_lock:
         store, ops = _memory_copy(_memory_read()), []
         live = [f for f in store["facts"] if f["person"] == person and _memory_live(f)]
         same = next((f for f in live if f["about"] == about and f["kind"] == kind), None)
@@ -6578,7 +7102,7 @@ def _memory_find(store, fid, viewer):
 
 def _memory_decide(fid, viewer, now, reject):
     now = time.time() if now is None else now
-    with _memory_lock:
+    with history_locked(DATA), _memory_lock:
         store, ops = _memory_copy(_memory_read()), []
         f = _memory_find(store, fid, viewer)
         if not _memory_live(f):
@@ -6607,7 +7131,7 @@ def memory_forget(person, now=None):
     if person not in PEOPLE:
         raise ValueError("person must be " + " or ".join(reversed(PEOPLE)))
     now = time.time() if now is None else now
-    with _memory_lock:
+    with history_locked(DATA), _memory_lock:
         store = _memory_copy(_memory_read())
         n = sum(f["person"] == person for f in store["facts"])
         store["facts"] = [f for f in store["facts"] if f["person"] != person]
@@ -8523,14 +9047,16 @@ def studios_feed(lang):
 
 # --- backups ---
 BACKUP_FILES = ("commands.json", "skald.json", "legacy.json", ".skald-household", ".skald-format", "feedback.jsonl", "imports.jsonl", "sessions.jsonl", "taste.json", "trakt.json",
-                "history.json", "learn.json", "online.json", "decisions.jsonl", "usage.json",
+                "history.json", "history-summary.json", "history-forgotten.json", "health-settings.json", "learn.json", "online.json", "metrics.json", "decisions.jsonl", "usage.json",
                 "searches.jsonl", "emb.json", "facets.json", "memory.json", "memory.log.jsonl", "memory.prev.json", "interview.json", "shelves.json", "undo.jsonl") + (("connectors.json",) if CONNECTOR_BACKUP else ())
 BACKUP_SKIP = {"addon.json": "secret, never opened", "remote.json": "secret, never opened", "clients.json": "secret, never opened",
                "credentials": "private credential contents, never read",
                "hydra.json": "secret, never opened", "decide_cache.json": "TTL LLM cache, refilled on demand",
                "feeds.json": "serving cache, rebuilt by feed_worker", "shown.json": "serving cache, rebuilt by feed_worker",
                "shown_scopes.json": "serving cache, starts from legacy pins when absent",
+               "metrics_shown.json": "private attribution evidence, never archived",
                "shelves.lock": "shelf writer coordination, recreated on demand",
+               "history.lock": "history writer coordination, recreated on demand",
                "nzb.json": "serving cache, rebuilt from Hydra", "daily.json": "this runner's own state",
                "taste_ring.json": "bounded taste report cache, starts empty when absent",
                "memory.json.bad": "quarantined corrupt bytes, not usable state",
@@ -8645,6 +9171,7 @@ def backup_state(now, *, archive_name=None):
     import errno
     import stat
     import tarfile
+    from skald.history import sources
     day = online_day(now)[0]
     credential_inodes = _backup_credential_inodes()
     try:
@@ -8667,8 +9194,7 @@ def backup_state(now, *, archive_name=None):
     opened, skipped, files = {}, {}, {}
     tmp = None
     try:
-        for name in (*BACKUP_FILES, *(source + "-" + p + ".history.json" for source, cid in (("trakt", "trakt_api"), ("mdblist", "mdblist"), ("stremio", "stremio"))
-                                        for p in CONFIG["connectors"].get(cid, {}).get("accounts", {}))):
+        for name in dict.fromkeys((*BACKUP_FILES, *(name for name, _, _ in sources(cfg, DATA) if name.endswith('.history.json')))):
             if name in ("skald.json", ".skald-household"):
                 continue
             if BACKUP_SECRET.search(name):
@@ -8772,6 +9298,8 @@ def backup_state(now, *, archive_name=None):
 # --- daily jobs ---
 DAILY_JOBS = [("backup", backup_due, backup_state)]
 DAILY_JOBS.append(("memory", memory_due, memory_job))
+DAILY_JOBS.append(("history", history_cleanup_due, cleanup_history))
+DAILY_JOBS.append(("row_metrics", lambda now: True, lambda now: update_row_metrics(now, cleanup=True)))
 _daily = None
 _daily_lock = threading.Lock()
 
@@ -9038,6 +9566,8 @@ def save_feeds():
 
 
 def load_state():
+    if not row_metrics.settings(CONFIG)['enabled']:
+        row_metrics.disable(DATA)
     connectors_load()
     import zlib
     ring = {}
@@ -9126,21 +9656,42 @@ def load_state():
 
 
 def feed_pass(d, retry):
+    global _feed_started, _defer_enrichment
+    if not _feed_started:
+        _feed_started = True
+        _defer_enrichment = not bool(_feeds or _profiles)
+        if _defer_enrichment:
+            build_feeds(d, {}, retry, only={"top10", "toprated"})
     try:
         hashes = refresh_profiles()
+        m = _model["m"] or {}
+        stale = any(v and getattr(v, "model", _emb_model) != _emb_model
+                    for v in (m.get("vec"), *(m.get("pvec") or {}).values()))
+        if _defer_enrichment or stale:
+            get_model()
     except Exception as e:
         print(f"profiles failed: {type(e).__name__}: {e}", flush=True)
         hashes = {}
+    build_feeds(d, hashes, retry)
+
+
+def build_feeds(d, hashes, retry, only=None, *, force=False):
     for lang in list(_langs):
         try:
             for job, cids, stamp, min_gap, build in job_specs(d, hashes):
+                if only is not None and job not in only:
+                    continue
+                try:
+                    connectors_tick(time.time())
+                except Exception as e:
+                    _daily_log(f"connectors tick failed: {type(e).__name__}")
                 try:
                     stamp = f"v{STAMP_V}/{stamp}"
                     cur = _feeds.get((cids[0], lang))
-                    if (cur and cur.get("stamp") == stamp) or retry.get((job, lang), 0) > time.time():
+                    if not force and ((cur and cur.get("stamp") == stamp) or retry.get((job, lang), 0) > time.time()):
                         continue
                     # Same time window, only the taste changed: rebuild at most every min_gap seconds.
-                    if cur and min_gap and cur.get("stamp", "").split("/")[:-1] == stamp.split("/")[:-1] \
+                    if not force and cur and min_gap and cur.get("stamp", "").split("/")[:-1] == stamp.split("/")[:-1] \
                             and time.time() - cur.get("built", 0) < min_gap:
                         continue
                     try:
@@ -9184,9 +9735,40 @@ def feed_pass(d, retry):
                         _daily_log(f"save feeds failed: {type(e).__name__}: {e}".replace("\n", " ").replace("\r", " ")[:240])
                 except Exception as e:
                     _daily_log(f"job {job} {lang} failed: {type(e).__name__}: {e}".replace("\n", " ").replace("\r", " ")[:240])
-            pin_decision(lang)
+            if only is None:
+                pin_decision(lang)
         except Exception as e:
             _daily_log(f"feed lang {lang} failed: {type(e).__name__}: {e}".replace("\n", " ").replace("\r", " ")[:240])
+
+
+def finish_cold_enrichment(d, retry):
+    """Enrich after the first rows are published; retain them until their replacements are ready."""
+    global _defer_enrichment
+    if not _defer_enrichment or not _profiles.get("household"):
+        return
+    _defer_enrichment = False
+    with _model_lock:
+        _model["sig"] = None
+    try:
+        get_model()
+    except Exception:
+        _defer_enrichment = True
+        raise
+    finally:
+        with _person_model_lock:
+            _person_models.clear()
+        clear_seed_cache()
+        independent = {"top10", "toprated", "digital"}
+        hashes = {name: p.get("hash", "") for name, p in _profiles.items()}
+        affected = {cid for job, cids, _, _, _ in job_specs(d, hashes) if job not in independent for cid in cids}
+        with _feeds_lock:
+            for (cid, lang), rec in _feeds.items():
+                if cid in affected:
+                    rec.pop("stamp", None)
+        for key in list(retry):
+            if key[0] not in independent:
+                retry.pop(key)
+        save_feeds()
 
 
 def feed_worker():
@@ -9198,9 +9780,20 @@ def feed_worker():
             _daily_log(f"connectors tick failed: {type(e).__name__}")
         try:
             feed_pass(local_now(), retry)
+            with _health_lock:
+                repair_jobs = set(_health_jobs)
+                _health_jobs.clear()
+            if repair_jobs:
+                hashes = {name: p.get('hash', '') for name, p in _profiles.items()}
+                build_feeds(local_now(), hashes, {}, only=repair_jobs, force=True)
+            finish_cold_enrichment(local_now(), retry)
             refresh_preferences()
+            update_row_metrics(time.time())
             backfill_countries()
             backfill_ratings()
+            backfill_runtime()
+            if _emb_model != EMB_MODEL:
+                ensure_emb([])
         except Exception as e:
             _daily_log(f"feed pass failed: {type(e).__name__}: {e}".replace("\n", " ").replace("\r", " ")[:240])
         for name, save in (("learn", save_learn), ("nzb", save_nzb), ("emb", save_emb), ("facets", save_facets)):
@@ -9210,6 +9803,15 @@ def feed_worker():
                 _daily_log(f"save {name} failed: {type(e).__name__}: {e}".replace("\n", " ").replace("\r", " ")[:240])
         daily_jobs(time.time())
         time.sleep(60)
+
+
+def update_row_metrics(now, *, cleanup=False):
+    if not row_metrics.settings(CONFIG)['enabled']:
+        row_metrics.disable(DATA)
+        return {"enabled": 0}
+    plays, sources = row_metrics.collect(SimpleNamespace(**globals()), now)
+    row_metrics.update(DATA, CONFIG, plays, now, sources=sources, cleanup=cleanup)
+    return {"inputs": len(plays)}
 
 
 def interleave(*lists):
@@ -9260,6 +9862,7 @@ def row_facts(meta):
     facts = dict(meta.get("_row") or {})
     facts["g"] = set(facts.get("g") or ()) | set(rec.get("g") or ()) | set(meta.get("genres") or ())
     facts["lang"] = facts.get("lang") or rec.get("lang")
+    facts['runtime'] = facts.get('runtime') or rec.get('runtime')
     facts.setdefault("rating", float(meta["imdbRating"]) if meta.get("imdbRating") else None)
     facts.setdefault("date", (meta.get("releaseInfo") or rec.get("y") or "")[:4] + "-01-01")
     return facts
@@ -9823,7 +10426,14 @@ def preference_ok(meta, cid, who):
     if any(names & {(g if genre_ids else GENRE_ALIASES.get(g, g)).casefold()
                     for g in pref.get("excluded_genres", {}).get(kind, [])} for pref in prefs):
         return False
+    # Series have no native Horror id; named facts still support untyped exclusions.
+    native = {g.casefold() for g in TMDB_GENRES[kind].values()}
+    if any({g.casefold() for g in facts['g']} & {g.casefold() for g in pref.get('excluded_genres', {}).get(kind, []) if g.casefold() not in native} for pref in prefs):
+        return False
     if person in PEOPLE:
+        limit = prefs[0].get('runtime', {}).get(kind)
+        if limit is not None and (not facts.get('runtime') or facts['runtime'] > limit):
+            return False
         low, high = prefs[0].get("years", [None, None])
         if low is not None or high is not None:
             year = (facts.get("date") or meta.get("releaseInfo") or "")[:4]
@@ -9836,7 +10446,8 @@ def preference_order(metas, cid, who):
     person, prefs = row_preferences(cid, who)
     style = prefs[0].get("discovery", "balanced") if person in PEOPLE else "balanced"
     focus = prefs[0].get("focus", {}) if person in PEOPLE else {}
-    if len(metas) < 2 or style == "balanced" and not any(focus.values()):
+    weights = prefs[0].get('weights', {}) if person in PEOPLE else {}
+    if len(metas) < 2 or style == "balanced" and not any(focus.values()) and not weights:
         return metas
     if style != "balanced":
         m = get_model(False)
@@ -9856,10 +10467,23 @@ def preference_order(metas, cid, who):
         wanted = focus.get("genres", {}).get(meta["type"], [])
         names = {(g if facts.get("genre_ids") else GENRE_ALIASES.get(g, g)).casefold() for g in wanted}
         rec = frec(meta["id"], "movie" if meta["type"] == "movie" else "tv")
-        return (bool(preference_genres(facts, meta["type"]) & names) +
+        people_names = {n.casefold() for n in focus.get('people', [])}
+        credits = {name.casefold() for field in ('d', 'a') for _, name in rec.get(field) or []}
+        return (bool(preference_genres(facts, meta["type"]) & names) + bool(people_names & credits) +
                 (facts.get("lang") in focus.get("languages", [])) +
                 bool(set(rec.get("oc") or []) & set(focus.get("countries", []))))
-    return sorted(metas, key=focus_score, reverse=True) if any(focus.values()) else metas
+    if any(focus.values()):
+        metas = sorted(metas, key=focus_score, reverse=True)
+    if weights:
+        def weight_score(meta):
+            facts = row_facts(meta)
+            names = preference_genres(facts, meta['type'])
+            value = weights.get(meta['type'], 0) + sum(v for g, v in weights.get('genre', {}).items()
+                if (g if facts.get('genre_ids') else GENRE_ALIASES.get(g, g)).casefold() in names)
+            return max(-1, min(1, value))
+        # Soft preferences can move a title by at most three places, never remove it.
+        metas = [meta for _, meta in sorted(enumerate(metas), key=lambda pair: pair[0] - 2 * weight_score(pair[1]))]
+    return metas
 
 
 def row_eligible(meta, cid, lang, p, animation=None):
@@ -10158,7 +10782,7 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
     token = _viewer.set(who) if who is not None else None
     try:
         if cid in (rid('digital'), rid('toprated')):
-            blocked = masks[0] | (masks[2] if len(masks) > 2 else set())
+            blocked = masks[0] | (masks[2] if len(masks) > 2 else set()) | getattr(above, "deep", above)
             metas = [x for x in row_list(cid, typ, lang) if x['id'] not in blocked
                      and quality_ok(x) and preference_ok(x, cid, _viewer.get())]
             metas = preference_order(metas, cid, _viewer.get())
@@ -10356,10 +10980,17 @@ def refresh_preferences():
         with open(path, encoding="utf-8") as fh:
             cfg = validate_config(json.load(fh, parse_constant=invalid_json), data=DATA)
         CONFIG["household"]["shelves"] = cfg["household"].get("shelves", 2)
-        if 'rows' in cfg['household']:
-            CONFIG['household']['rows'] = cfg['household']['rows']
+        if 'metrics' in cfg:
+            CONFIG['metrics'] = cfg['metrics']
         else:
-            CONFIG['household'].pop('rows', None)
+            CONFIG.pop('metrics', None)
+        if not row_metrics.settings(CONFIG)['enabled']:
+            row_metrics.disable(DATA)
+        for key in ('rows', 'row_labels', 'row_order'):
+            if key in cfg['household']:
+                CONFIG['household'][key] = cfg['household'][key]
+            else:
+                CONFIG['household'].pop(key, None)
         # Other household changes still require a restart.
         for person in PEOPLE:
             traits = CONFIG["taste"].setdefault("people", {}).setdefault(person, {})
@@ -10374,6 +11005,18 @@ def refresh_preferences():
 
 
 def row_metas(cid, typ, lang, who=None):
+    metas = _row_metas_current(cid, typ, lang, who)
+    if _health is not None:
+        from skald.health import key
+        scope = getattr(_scoping, 'scope', None)
+        with _health_lock:
+            row = key('row', (cid, typ, lang, scope, who))
+            _health_served_rows[row] = len(metas)
+            _health_row_sources[row] = cid
+    return metas
+
+
+def _row_metas_current(cid, typ, lang, who=None):
     refresh_preferences()
     if not row_enabled(cid):
         return []
@@ -10419,6 +11062,7 @@ def stats():
     u["daily"] = daily_stats()
     u["learn"] = learn_stats()
     u["fingerprints"] = len(_emb)
+    u["embedding"] = emb_status()
     u["facets"] = len(_facets)
     m = _model["m"]
     if m:
@@ -10507,8 +11151,16 @@ def import_state():
         try:
             st = os.stat(path)
             stamp = (path, st.st_mtime_ns, st.st_size)
+            for name in ("history-summary.json", "history-forgotten.json"):
+                try:
+                    other = os.stat(os.path.join(DATA, name))
+                    stamp += (other.st_mtime_ns, other.st_size)
+                except FileNotFoundError:
+                    pass
             if _imports_cache.get("stamp") != stamp:
-                _imports_cache.update(stamp=stamp, state={"active": active_imports(read_imports())})
+                from skald.history import combine, filter_forgotten
+                combined = combine(DATA, "imports.jsonl", filter_forgotten(DATA, CONFIG, "imports.jsonl", read_imports()))
+                _imports_cache.update(stamp=stamp, state={"active": active_imports(combined)})
             return _imports_cache["state"]
         except OSError:
             _imports_cache.clear()
@@ -10525,6 +11177,13 @@ def active_imports(events=None):
 
 
 def save_imports(events):
+    with history_locked(DATA):
+        return _save_imports(events)
+
+
+def _save_imports(events):
+    from skald.history import filter_forgotten
+    events = filter_forgotten(DATA, CONFIG, "imports.jsonl", events)
     path = os.path.join(DATA, "imports.jsonl")
     tmp = path + ".tmp"
     try:
@@ -10541,19 +11200,27 @@ def save_imports(events):
 
 
 def write_imports(bodies, keep_ids=False):
+    from skald.history import combine, folded_imports
     incoming = [validate_import(e) for e in bodies]  # validate the whole batch before writing.
     if keep_ids:
-        with _imports_lock:
+        with history_locked(DATA), _imports_lock:
             events = read_imports()
-            ids = {e["id"]: e for e in events}
-            latest = {(e["key"], e["who"], e["src"]): e for e in active_imports(events)}
+            folded = folded_imports(DATA)
+            ids = {e["id"]: e for e in events + folded}
+            scoped_ids = {(e["id"], e["who"]): e for e in events + folded}
+            folded_claims = {(e["id"], e["who"]) for e in folded}
+            latest = {(e["key"], e["who"], e["src"]): e for e in active_imports(combine(DATA, "imports.jsonl", events))}
             added, duplicates, conflicts = [], 0, []
             for i, e in enumerate(incoming):
-                old = ids.get(e.get("id"))
+                old = scoped_ids.get((e.get("id"), e["who"])) or ids.get(e.get("id"))
                 e = {"t": old["t"] if old else datetime.datetime.now(datetime.timezone.utc).date().isoformat(),
                      "id": uuid.uuid4().hex, **e}
                 if old is not None:
-                    if old == e:
+                    comparable = e
+                    if (old["id"], old["who"]) in folded_claims:
+                        # Folded evidence retains only the month of the original date.
+                        comparable = {**e, "t": e["t"][:7] + "-01"}
+                    if old == comparable:
                         duplicates += 1
                     else:
                         conflicts.append(i)
@@ -10564,6 +11231,7 @@ def write_imports(bodies, keep_ids=False):
                     duplicates += 1
                     continue
                 ids[e["id"]] = latest[key] = e
+                scoped_ids[(e["id"], e["who"])] = e
                 added.append(e)
             if len(events) + len(added) > IMPORT_MAX:
                 raise ValueError("imports limit")
@@ -10580,9 +11248,9 @@ def write_imports(bodies, keep_ids=False):
             newest = min((old, e), key=lambda item: _claim_rank(item, 0, newest=True))
             e = {**newest, "n": max(old["n"], e["n"])}
         batch[key] = e
-    with _imports_lock:
+    with history_locked(DATA), _imports_lock:
         events = read_imports()
-        latest = {(e["key"], e["who"], e["src"]): e for e in active_imports(events)}
+        latest = {(e["key"], e["who"], e["src"]): e for e in active_imports(combine(DATA, "imports.jsonl", events))}
         added = []
         for e in batch.values():
             e = {**e, "id": uuid.uuid4().hex}
@@ -10600,12 +11268,14 @@ def write_imports(bodies, keep_ids=False):
 
 
 def undo_import(event_id):
-    with _imports_lock:
+    with history_locked(DATA), _imports_lock:
+        from skald.history import folded_imports, remove_imports
         events = read_imports()
-        target = next((e for e in events if e["id"] == event_id), None)
+        target = next((e for e in events + folded_imports(DATA) if e["id"] == event_id), None)
         if target is None:
             raise ValueError("unknown import id")
         save_imports([e for e in events if e["id"] != event_id])
+        remove_imports(DATA, {event_id})
         return target
 
 
@@ -10784,6 +11454,12 @@ def session_view(bound=None):
 
 
 def attribute(it):
+    if "history_by" in it:
+        by = it["history_by"]
+        return by[0] if len(by) == 1 else "together", by, {}
+    if "_summary" in it:
+        e = it["_summary"]
+        return e["who"], e["by"], {}
     if CONFIG["history"]["source"] in HISTORY_ADAPTERS and it.get("profile") in PEOPLE:
         return it["profile"], [it["profile"]], {}
     at = it.get("at")
@@ -11658,11 +12334,13 @@ def imports_write(events, req):
 
 def undo_write(events, req):
     accepted, rejected = 0, []
-    with _imports_lock:
+    with history_locked(DATA), _imports_lock:
+        from skald.history import folded_imports, remove_imports
         stored_events = read_imports()
         by_id = {}
-        for stored in stored_events:
-            by_id.setdefault(stored["id"], stored)
+        for stored in stored_events + folded_imports(DATA):
+            if not req["viewer"] or stored["who"] == req["viewer"]:
+                by_id.setdefault(stored["id"], stored)
         removed = set()
         for i, e in enumerate(events):
             if not isinstance(e, dict) or set(e) != {"id"} or not isinstance(e["id"], str) \
@@ -11677,7 +12355,10 @@ def undo_write(events, req):
             removed.add(e["id"])
             accepted += 1
         if accepted:
-            save_imports([e for e in stored_events if e["id"] not in removed])
+            kept = [e for e in stored_events if e["id"] not in removed or
+                    req["viewer"] and e["who"] != req["viewer"]]
+            save_imports(kept)
+            remove_imports(DATA, removed, req["viewer"], {e["id"] for e in kept})
     return {"accepted": accepted, "duplicates": 0, "rejected": rejected}
 
 
@@ -12669,7 +13350,12 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(raw)
             return
         if parts == ["health"]:
-            return self.send_json(200, {"ok": True})
+            from skald.health import view
+            client, error = _api_auth(self) if self.headers.get('Authorization') else (None, None)
+            local = loopback(self) and not any(name in self.headers for name in
+                ('X-Forwarded-For', 'X-Real-IP', 'Forwarded'))
+            detail = local or client and 'read' in client['scopes'] and client.get('person') is None
+            return self.send_json(200, view(DATA) if detail else {"ok": True}, no_store=True)
         legacy = CONFIG["addon"]["legacy_open"]
         if LANG_RE.match(parts[0]) or parts[0] in ("stats", "why"):
             if legacy:
@@ -12685,7 +13371,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def route(self, parts, admin):
         if parts == ["health"]:
-            return self.send_json(200, {"ok": True})
+            from skald.health import view
+            return self.send_json(200, view(DATA) if admin else {"ok": True}, no_store=True)
         if parts == ["stats"] and admin:
             return self.send_json(200, stats())
         if len(parts) == 2 and parts[0] == "why" and parts[1].endswith(".json") and admin:
@@ -12714,6 +13401,12 @@ class Handler(BaseHTTPRequestHandler):
             metas = row_metas(parts[3][:-5], parts[2], lang, who=SCOPES[scope]) if scope is not None else row_metas(parts[3][:-5], parts[2], lang)
             if CONNECTOR_CATALOG_DEMAND: connectors_demand(time.time())
             note_served(learn_id(parts[3][:-5], lang, metas), metas)
+            viewer = SCOPES[scope] if scope is not None else who_watching()[0]
+            try:
+                row_metrics.record_shown(DATA, CONFIG, parts[3][:-5],
+                                         'together' if viewer == 'both' else viewer, metas)
+            except Exception:
+                _daily_log('row metrics exposure could not be saved')
             return self.send_json(200, {"metas": metas}, shelves.cache_age(SimpleNamespace(**globals()), parts[3][:-5]) if parts[3][:-5] in SHELF_ROWS else 60 if parts[3][:-5] in SESSION_ROWS else 900, cors=True)
         if len(parts) == 5 and parts[1] == "catalog" and parts[2] in ("movie", "series") \
                 and parts[3] == rid('search') and parts[4].endswith(".json"):
@@ -12795,6 +13488,11 @@ if __name__ == "__main__":
             threading.Thread(target=api.serve_forever, daemon=True).start()
         from skald.setup import record_startup
         record_startup(DATA, CONFIG)
-        threading.Thread(target=feed_worker, daemon=True).start()
+        from skald.health import Health, settings
+        if settings(DATA)['enabled']:
+            _health = Health(DATA, cache_changed=health_cache_changed)
+        start_feed_worker()
+        if _health is not None:
+            threading.Thread(target=health_supervisor, daemon=True, name='skald-health').start()
         threading.Thread(target=remote.serve_forever, daemon=True).start()
         main.serve_forever()

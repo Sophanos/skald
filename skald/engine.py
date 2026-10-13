@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_FILES = (".skald-format", "skald.json", "legacy.json", "profile.json", "emb.json", "facets.json", "learn.json", "taste.json", "trakt.json",
-              "feeds.json", "shown.json", "history.json", "feedback.jsonl", "imports.jsonl", "online.json", "memory.json", "interview.json", "taste_ring.json", "connectors.json", "shelves.json", "undo.jsonl")
+              "feeds.json", "shown.json", "history.json", "history-summary.json", "history-forgotten.json", "feedback.jsonl", "imports.jsonl", "online.json", "metrics.json", "memory.json", "interview.json", "taste_ring.json", "connectors.json", "shelves.json", "undo.jsonl")
 
 
 def data_files(config):
@@ -71,7 +71,7 @@ class Engine:
         self._temp = tempfile.TemporaryDirectory(prefix="skald-engine-")
         self._work = Path(self._temp.name)
         try:
-            for name in DATA_FILES:
+            for name in (*DATA_FILES, "metrics_shown.json"):
                 if (self.data_dir / name).is_file():
                     shutil.copyfile(self.data_dir / name, self._work / name)
             from .members import load_config
@@ -528,7 +528,8 @@ class Engine:
                 pools = self.rows()
         else:
             pools = self.rows()
-        paths = [self._work / n for n in ("memory.json", "memory.prev.json", "memory.log.jsonl")] if facts else []
+        from .history import LOCK
+        paths = [self._work / n for n in ("memory.json", "memory.prev.json", "memory.log.jsonl", LOCK)] if facts else []
         saved = {path: path.read_bytes() if path.exists() else None for path in paths}
         memory = copy.deepcopy(s._memory)
         try:
@@ -590,8 +591,9 @@ class Engine:
         self._refresh()
         return {"events": added, "added": len(added)}
 
-    def metrics(self, days=21):
-        return plain(self._server.metrics(days=days))
+    def metrics(self, days=None):
+        from .metrics import report
+        return report(self._work, self._server.CONFIG, days=days)
 
     def memory(self, person=None, explain=None, now=None):
         self._person(person)

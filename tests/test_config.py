@@ -127,7 +127,7 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(s.CONFIG_SOURCE, "implicit")
             finally:
                 close_server(s)
-            result = self.serve(data, {"TMDB_API": "offline"})
+            result = self.serve(data, {"TMDB_API": "offline"}, ["--print-config"])
             self.assertEqual(result.returncode, 2)
             self.assertEqual(len(result.stderr.splitlines()), 1)
             self.assertIn("SKALD_MEMBERS", result.stderr)
@@ -414,9 +414,10 @@ class ConfigTests(unittest.TestCase):
                 with self.assertRaises(self.s.ConfigError) as err:
                     self.resolve(data, env)
                 self.assertEqual(str(err.exception), "skald.json missing: restore it")
-            for argv in ([str(ROOT / "server.py")], ["-m", "skald", "rows"]):
+            for argv in ([str(ROOT / "server.py"), "--print-config"], ["-m", "skald", "rows"]):
                 result = self.process(data, argv)
-                self.assertEqual((result.returncode, result.stderr), (2, "skald.json missing: restore it\n" if len(argv) == 1 else "skald: skald.json missing: restore it\n"))
+                prefix = "" if argv[0] == str(ROOT / "server.py") else "skald: "
+                self.assertEqual((result.returncode, result.stderr), (2, prefix + "skald.json missing: restore it\n"))
             Path(data, ".skald-household").unlink()
             Path(data, "history.json").write_text('{}')
             with self.assertRaisesRegex(self.s.ConfigError, "skald.json missing: restore it"):

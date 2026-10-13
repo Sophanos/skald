@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 import shutil
 import sys
+import time
 import tempfile
 import datetime
 import sqlite3
@@ -37,8 +38,8 @@ def parser():
     def cmd(parent, name):
         descriptions = {"taste": "inspect taste and learning", "show": "show the taste profile", "why": "explain a title's fit",
                         "report": "summarize recent learning", "explain": "trace a title's score", "rows": "preview recommendation rows",
-                        "react": "simulate a reaction", "learn": "inspect learning signals", "metrics": "show engine metrics",
-                        "connectors": "show input health and sync cadence", "memory": "inspect memory proposals", "doctor": "check local setup and state", "keys": "inspect mixed title keys",
+                        "react": "simulate a reaction", "learn": "inspect learning signals", "metrics": "show local weekly row play counts",
+                        "connectors": "show input health and sync cadence", "health": "show saved server checks, repairs and alert availability", "memory": "inspect memory proposals", "doctor": "check local setup and state", "keys": "inspect mixed title keys",
                         "import": "import one local export", "imports": "list or undo imports", "list": "list saved items", "undo": "undo a saved import",
                         "onboard": "set up and resume local exports", "me": "show what Skald knows about you", "forget": "forget imported signals",
                         "correct": "correct a memory fact", "push": "preview or push resolved imports", "decide": "run a structured decision", "interview": "rate interview anchors to start a taste",
@@ -123,10 +124,20 @@ def parser():
     cmd(cmd(commands, "login").add_subparsers(dest="login", required=True), "trakt").add_argument(
         "--person", "--member", dest="person", choices=PEOPLE if not members.CONFIG_ERROR else None)
     cmd(commands, "learn")
-    cmd(commands, "metrics").add_argument("--days", type=int, default=21)
+    cmd(commands, "health")
+    cmd(commands, "metrics").add_argument("--days", type=int, help="include row weeks touching the last 1..35 days (default: 4 weeks)")
     suggestions = cmd(commands, "suggest")
     suggestions.add_argument("--person", choices=PEOPLE, required=True)
     suggestions.add_argument("--dismiss", help="dismiss one suggestion id for 90 days")
+    history = commands.add_parser("history", help="preview cleanup or forget old evidence")
+    action = history.add_mutually_exclusive_group(required=True)
+    action.add_argument("--forget-before", metavar="DATE", help="forget evidence before YYYY-MM-DD")
+    action.add_argument("--cleanup", action="store_true", help="run the configured raw retention cleanup")
+    history.add_argument("--person", choices=PEOPLE, help="household member whose evidence to forget")
+    mode = history.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="show counts without writing (default)")
+    mode.add_argument("--yes", action="store_true", help="apply after reviewing the dry-run counts")
+    history.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="print JSON")
     memory = cmd(commands, "memory")
     person(memory)
     memory.add_argument("--explain")
@@ -542,23 +553,9 @@ def text_output(args, data, out):
                 health += "; " + c['health']['fixHint']
             line(f"{c['id']}{origin} | {c['kind']} | {c['person']} | {health} | {date(c['last_new'])} | {date(c['next_due'])} | {c['reminder'] or '—'}")
     elif args.command == "metrics":
-        def rate(k, n, ci):
-            return f"{number(k)}/{n} [{number(ci[0])}–{number(ci[1])}]" if n and ci else "n/a"
-        w, plays = data["window"], data["plays"]
-        line(f"{w['from']}…{w['to']} · since {w['since'] or 'n/a'}")
-        line(f"{data['fetches']} fetches · {data['exposures']} exposures · {data['impressions']} impressions")
-        line(f"{data['title_days']} title-days · {data['titles']} titles covered")
-        line(f"TV: {data['tv']['real']} real · {data['tv']['opens']} opens · {plays['pre_since']} pre-since")
-        hit12 = plays['hit']['12']
-        line(f"Credited plays: {rate(plays['credited'], plays['n'], hit12[2:] if hit12 else None)} · {data['clicks']} clicks")
-        for depth, hit in plays["hit"].items():
-            line(f"hit@{depth}: " + (rate(hit[0], hit[1], hit[2:]) if hit else "n/a"))
-        q = data["ttp_min"]
-        line(f"Time-to-play upper bound: ≤{q['p50']:.1f} min median (n={q['n']}, p25={q['p25']:.1f}, p75={q['p75']:.1f})" if q else "Time-to-play upper bound: n/a")
-        a = data["abandon"]
-        line(f"Abandon: {rate(a['k'], a['n'], a['ci'])} · {a['pending']} pending")
-        for lid, row in sorted(data["rows"].items(), key=lambda p: -p[1]["credit"])[:10]:
-            line(f"{lid}: {row['impressions']} impressions · credit {rate(row['credit'], row['title_days'], row['ci'])}")
+        from .metrics import text
+        for message in text(data):
+            line(message)
     elif args.command == "memory":
         facts = [data["fact"]] if "fact" in data else data["facts"]
         proposed = sum(f["status"] == "proposed" for f in facts)
@@ -684,6 +681,22 @@ def main(argv=None, out=None):
     known.command = known.command[0] if known.command else None
     args = None
     try:
+        if known.command == "health":
+            args = parser().parse_args(argv)
+            if args.live:
+                raise ValueError("health reads local state only; omit --live")
+            from .health import view
+            data = view(args.snapshot or os.environ.get("DATA_DIR", "/data"))
+            if args.json:
+                print(json.dumps(data), file=out)
+            else:
+                print("Health checks: " + ("on" if data['enabled'] else "off"), file=out)
+                print("Alert channel configured: " + ("yes" if data['alert_configured'] else "no"), file=out)
+                for check in data['checks']:
+                    print(check.get('label', check['id']) + ": " + check['state'], file=out)
+                repair = data['last_repair']
+                print("Last repair: " + (json.dumps(repair) if repair else "none"), file=out)
+            return 0 if data['ok'] else 1
         if known.command == "backup":
             candidate = parser().parse_args(argv)
             if candidate.command == "backup":
@@ -699,11 +712,14 @@ def main(argv=None, out=None):
                 else:
                     print("\n".join(backup.text(data)), file=out)
                 return 0 if ok else 1
-        from .migrate import check, ensure, FORMAT
-        if not known.snapshot and not known.live and known.command != "suggest":
+        from . import migrate
+        cli_argv = sys.argv[1:] if argv is None else argv
+        if not known.snapshot and not known.live and not known.remote and known.command != "suggest" and not any(
+                flag in cli_argv for flag in ('--help', '-h')):
             local_data = os.environ.get("DATA_DIR", "/data")
-            if check(local_data)["format"] < FORMAT:
-                ensure(local_data)
+            # Additive settings/history formats need no writes for read-only commands.
+            if migrate.rewrite_needed(local_data):
+                migrate.ensure(local_data)
         members.configure(known.snapshot if not known.live else None, readonly=True)
         if known.remote and not known.snapshot and members.CONFIG_SOURCE == "implicit" and known.person not in (None, "both", "together", "guest"):
             members.CONFIG = members.validate_config(members.fresh_config([known.person]))
@@ -720,6 +736,53 @@ def main(argv=None, out=None):
             p.print_help(file=out)
             if not (state / "onboard.json").exists():
                 print("start with: skald onboard", file=out)
+            return 0
+        if args.command == "history":
+            from .history import forget
+            if args.live or args.snapshot and args.yes:
+                raise ValueError("history writes local DATA_DIR only; omit --live and --snapshot")
+            directory = args.snapshot or os.environ.get("DATA_DIR", "/data")
+            if args.cleanup:
+                from .history import cleanup, enabled
+                if args.yes and enabled(members.CONFIG):
+                    migrate.ensure(directory)
+                with Engine(directory) as engine, patch.object(engine._server, 'DATA', str(directory)):
+                    data = {**cleanup(engine._server, time.time(), apply=args.yes), 'dry_run': not args.yes}
+                if args.json:
+                    print(json.dumps(data), file=out)
+                else:
+                    print(f"{'Would prune' if data['dry_run'] else 'Pruned'} {data['pruned']} raw items; "
+                          f"{data['summaries']} monthly summaries.", file=out)
+                    print(f"Residual raw records: {data['residual']} (no taste event).", file=out)
+                return 0
+            if not args.person:
+                raise ValueError('forget requires --person')
+            data = forget(directory, members.CONFIG, args.forget_before, args.person)
+            if args.yes:
+                from .migrate import ensure
+                ensure(directory)
+                data = forget(directory, members.CONFIG, args.forget_before, args.person, apply=True)
+            if args.json:
+                print(json.dumps(data), file=out)
+            else:
+                print(f"{'Would forget' if data['dry_run'] else 'Forgot'} {data['raw']} raw items, "
+                      f"{data['summaries']} monthly summaries, {data['facts']} inferred memory facts; "
+                      f"{data['metrics']} metric cohorts invalidated.", file=out)
+                if data['dry_run']:
+                    print("Repeat with --yes to apply these counts.", file=out)
+            return 0
+        if args.command == "metrics":
+            from .metrics import report, settings, disable
+            if args.live:
+                raise ValueError('metrics reads local DATA_DIR or --snapshot only; omit --live')
+            members.require_config(members.CONFIG_SOURCE, members.CONFIG_ERROR)
+            if not args.snapshot and not settings(members.CONFIG)['enabled']:
+                disable(os.environ.get('DATA_DIR', '/data'))
+            data = report(args.snapshot or os.environ.get('DATA_DIR', '/data'), members.CONFIG, days=args.days)
+            if args.json:
+                print(json.dumps(data, ensure_ascii=False, allow_nan=False), file=out)
+            else:
+                text_output(args, data, out)
             return 0
         if args.command == "suggest":
             from .engine import suggestions
@@ -761,11 +824,15 @@ def main(argv=None, out=None):
                     data = commands.preview(s, args.text, args.person)
                     if data is None:
                         raise ValueError("Skald cannot set this yet")
-                    if args.plan and args.plan != data["plan"]:
+                    if not data.get('read_only'):
+                        data['source'] = 'cli'
+                    if args.plan and args.plan != data.get("plan"):
                         raise ValueError("Plan changed; preview again")
                     if args.yes or args.plan:
                         data = commands.apply(s, data)
             print(json.dumps(data, ensure_ascii=False) if args.json else data["name"] + ("? Plan: " + data["plan"] if "plan" in data else ""), file=out)
+            if not args.json and data.get('description'):
+                print(data['description'], file=out)
             return 0
         if args.command in ("setup", "connect") or args.command == "connectors" and args.connector_action == "test":
             from . import setup, connectors
@@ -802,7 +869,7 @@ def main(argv=None, out=None):
                         print(label + " " + person + ": " + ("connected" if connected else "not connected"), file=out)
                 print("AIOStreams login: " + data["aiostreams_login"], file=out)
                 print("Next: " + data["next"], file=out)
-            elif args.setup_action in ("link", "adopt", "prefs", "rows") or args.disconnect:
+            elif args.setup_action in ("household", "link", "adopt", "prefs", "rows", "alerts") or args.disconnect:
                 print("\n".join(data["lines"]), file=out)
             return 0 if data.get("ok", True) else 1
         if args.command == "onboard" and args.sources and not args.snapshot and not args.live:
@@ -913,6 +980,10 @@ def main(argv=None, out=None):
                         shutil.copyfile(snapshot / name, work / name)
             snapshot_ids = {json.loads(line)["id"] for line in (work / "imports.jsonl").read_text().splitlines() if line.strip()} \
                 if (work / "imports.jsonl").exists() else set()
+            from .history import folded_imports, remove_imports
+            snapshot_ids.update(e['id'] for e in folded_imports(work))
+            if undone:
+                remove_imports(work, set(undone))
             # Merge a pulled remote log with local events, preserving event ids.
             if (state / "imports.jsonl").exists() or undone:
                 remote_log = (work / "imports.jsonl").read_text(encoding="utf-8") if (work / "imports.jsonl").exists() else ""

@@ -137,7 +137,7 @@ Search command previews require the exact `yes NN` code shown first in the card 
 
 ### parse_command (LLM)
 - inp: `{"query":"str"}`
-- out: `{"op":["hide","show","exclude_genre","include_genre","focus","unfocus","discovery","years","like","dislike","shelf_add","shelf_stop","shelf_count",null],"kind":["movie","tv","series","languages","countries",null],"values":[["str","int",null],10],"person":["str",null]}`
+- out: `{"op":["hide","show","exclude_genre","include_genre","focus","unfocus","discovery","years","like","dislike","seen","less","more","runtime","kids_age","settings","history","undo","redo","reset","shelf_list","shelf_add","shelf_stop","shelf_count","row_rename","row_hide","row_show","row_move",null],"kind":["movie","tv","series","genre","people","languages","countries",null],"values":[[["str","int",null],10],null],"person":["str",null]}`
 - CLI: `python3 -m skald decide parse_command --in '{"query":"Synthetic command 0"}'`
 - API: `python3 -m skald decide parse_command --remote --in '{"query":"Synthetic command 0"}'`
 
@@ -156,8 +156,8 @@ Search command previews require the exact `yes NN` code shown first in the card 
 ### route_query (LLM)
 - inp: `{"query":"str"}`
 - out: `{"choice":["title","discover","request","command",null],"confidence":["float",null]}`
-- CLI: `python3 -m skald decide route_query --in '{"query":"Synthetic text 0"}'`
-- API: `python3 -m skald decide route_query --remote --in '{"query":"Synthetic text 0"}'`
+- CLI: `python3 -m skald decide route_query --in '{"query":"Create a new catalog about psygoloy crime"}'`
+- API: `python3 -m skald decide route_query --remote --in '{"query":"Create a new catalog about psygoloy crime"}'`
 
 - `/api/v1/command`: POST → events; query []; tail null; example `{"body":{"plan":"preview hash"}}`
 - `/api/v1/connectors`: GET → read; query []; tail null; example `{}`

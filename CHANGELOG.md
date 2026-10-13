@@ -4,6 +4,22 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.4.0
+
+Skald checks its own health on a schedule, repairs a small set of known faults by itself and can alert you by Telegram, ntfy, Gotify or Discord; `skald health` shows the saved checks and the last repair.
+Optional local row metrics count which rows lead to plays, per person and week; they are off by default and `skald metrics` reads them.
+Settings changes made in plain words keep a history: `history`, targeted `undo`, `redo` and a confirmed `reset` work from search and `skald command`.
+Optional history minimisation folds old evidence into monthly summaries, and `skald history --forget-before DATE` forgets evidence before a date, including derived copies; both are off by default and preview before writing.
+Search understands more command phrasings, with a cheaper fallback model when the main one fails.
+Shelves get fixed slots, and AIOStreams re-syncs rows after shelf changes.
+Household setup, row building speed and several setup fixes improve.
+Embeddings default to Gemini Embedding 2; set `SKALD_EMBED_MODEL` to choose another.
+Detailed `/health` is no longer treated as local when a proxy forwards the request, a malformed metrics file can no longer break rows, and Discord alerts count as sent only once Discord confirms them.
+A household evaluation harness under `eval/household` compares row changes on frozen copies of a household's data.
+
+**Data changes:** DATA format goes from 1 to 5 (2 household settings, 3 row metrics store, 4 settings history metadata, 5 empty minimisation summary store); all additive, run at engine startup after Skald makes and verifies a backup of household state.
+Version 1.3.0 refuses format 5 data. To roll back, stop the engine, restore the DATA backup made before the upgrade and `.env`, then start 1.3.0; swapping the release alone is not enough.
+
 ## 1.3.0
 
 Each member can set a kids age with `skald setup prefs --kids-age N|off`; their rows, search and details then show only titles certified for that age, and unknown or adult titles stay hidden.

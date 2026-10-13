@@ -403,6 +403,33 @@ class RemoteResolutionTests(unittest.TestCase):
 
 
 class PrivateWriteTests(unittest.TestCase):
+    def test_file_sync_replace_directory_sync_order(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'summary.json'
+            calls = []
+            fsync, replace = os.fsync, os.replace
+            def synced(fd):
+                calls.append('directory' if stat.S_ISDIR(os.fstat(fd).st_mode) else 'file')
+                return fsync(fd)
+            def replaced(source, dest):
+                calls.append('replace')
+                return replace(source, dest)
+            with patch('skald.intake.os.fsync', synced), patch('skald.intake.os.replace', replaced):
+                write_private(path, 'synthetic')
+            self.assertEqual(calls, ['file', 'replace', 'directory'])
+
+    def test_directory_open_failure_is_tolerated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'summary.json'
+            opened = os.open
+            def unsupported(name, *args, **kwargs):
+                if Path(name) == path.parent:
+                    raise OSError('directory opening unsupported')
+                return opened(name, *args, **kwargs)
+            with patch('skald.intake.os.open', unsupported):
+                write_private(path, 'synthetic')
+            self.assertEqual(path.read_text(), 'synthetic')
+
     def test_failed_replace_preserves_previous_file(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "state/log"

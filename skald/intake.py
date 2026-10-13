@@ -31,6 +31,16 @@ def write_private(path, text):
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(name, path)
+        if os.name == 'posix':
+            try:
+                directory = os.open(path.parent, os.O_RDONLY)
+            except OSError:
+                pass  # Some platforms cannot open directories for syncing.
+            else:
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
     finally:
         Path(name).unlink(missing_ok=True)
 
@@ -520,7 +530,8 @@ def onboard(args, engine, state):
         record = previous.get(args.undo)
         if record is None or record["status"] == "undone":
             return {**_result(args.person, "undo"), "changed": 0}
-        live_ids = {e["id"] for e in engine._server.read_imports()}
+        from .history import folded_imports
+        live_ids = {e["id"] for e in engine._server.read_imports() + folded_imports(engine._server.DATA)}
         ids = [i for i in record["added"] if i in live_ids]
         with patch.object(engine._server, "DATA", str(engine.data_dir)):
             for i in ids:

@@ -64,6 +64,42 @@ class ServerCase(unittest.TestCase):
 
 
 class BackupTests(ServerCase):
+    def test_pre_migration_archive_keeps_shelves_health_and_disconnected_history(self):
+        cfg = self.s.fresh_config(['ana', 'ben'])
+        cfg['household']['shelves'] = 7
+        (self.data / 'skald.json').write_text(json.dumps(cfg))
+        (self.data / '.skald-household').touch()
+        retained = {'health-settings.json': b'{"enabled":true,"repair":false}\n'}
+        for source in ('trakt', 'mdblist', 'stremio'):
+            retained[source + '-ana.history.json'] = b'{"items":[{"id":"tmdb:5","type":"movie"}]}\n'
+        for name, raw in retained.items():
+            (self.data / name).write_bytes(raw)
+        excluded = ('credentials/alerts.json', 'token.json', '.env', 'health-state.json',
+                    'health-status.json', 'health-cache-feeds.json', 'feeds.json',
+                    'trakt-token.history.json', 'mdblist-auth.history.json')
+        for name in excluded:
+            path = self.data / name
+            path.parent.mkdir(exist_ok=True)
+            path.write_bytes(b'SYNTHETIC_EXCLUSION_CANARY')
+        with patch.dict(os.environ, {'SKALD_CONFIG': ''}), patch.object(self.s, 'CONFIG', cfg):
+            path = backup.create(self.data, from_format=2, to_format=5)
+        report = backup.verify(path)
+        self.assertTrue(report['ok'], report)
+        for name in retained:
+            with self.subTest(archived=name):
+                self.assertIn(name, report['files'])
+        restored = self.data / 'restored'
+        self.assertTrue(backup.restore(path, restored)['ok'])
+        restored_cfg, _ = self.s.load_config(str(restored), {}, readonly=True)
+        with self.subTest(setting='shelves'):
+            self.assertEqual(restored_cfg['household'].get('shelves'), 7)
+        for name, raw in retained.items():
+            with self.subTest(restored=name):
+                self.assertTrue((restored / name).exists())
+                self.assertEqual((restored / name).read_bytes(), raw)
+        self.assertFalse(set(excluded) & set(report['files']))
+        self.assertNotIn(b'SYNTHETIC_EXCLUSION_CANARY', gzip.decompress(path.read_bytes()))
+
     def test_legacy_config_roundtrip_keeps_mode_and_is_private(self):
         (self.data / 'history.json').write_text('{"items": []}')
         path, _ = self.archive()
@@ -229,9 +265,14 @@ class BackupTests(ServerCase):
 
     def test_classification_and_drift(self):
         import re
+        from skald.history import SUMMARY, LOCK
         names = {n for n in re.findall(r'os\.path\.join\(\s*\w+\s*,\s*"([^"/]+)"\s*\)',
                                       (ROOT / 'server.py').read_text()) if not n.endswith('.tmp')}
         names.update(re.findall(r"Path\(s.DATA\) / '([^'/]+)'", (ROOT / 'skald/shelves.py').read_text()))
+        names.add(SUMMARY)
+        names.add(LOCK)
+        names.add('health-settings.json')
+        names.update(re.findall(r"Path\(data\)/'([^'/]+)'", (ROOT / 'skald/metrics.py').read_text()))
         self.assertEqual(names | {'skald.json', '.skald-format', 'commands.json'}, set(self.s.BACKUP_FILES) | set(self.s.BACKUP_SKIP))
         self.assertFalse(set(self.s.BACKUP_FILES) & set(self.s.BACKUP_SKIP))
         self.assertTrue(all(self.s.BACKUP_SKIP.values()))
