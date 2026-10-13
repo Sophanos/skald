@@ -127,7 +127,7 @@ class SettingsHistory(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'changed since'):
             c.preview(self.s, 'undo find gems', 'ana')
         with patch.object(c, 'context', return_value=('adult', 'ana', 'ana')):
-            self.assertIn('changed since', c.special(self.s, 'undo find gems', 'movie', routed=True)['metas'][0]['name'])
+            self.assertIn('changed since', c.special(self.s, 'undo find gems', 'movie', routed=True)['metas'][0]['description'])
         self.assertEqual(self.prefs()['discovery'], 'mainstream')
 
     def test_plain_undo_keeps_lifo_and_can_be_redone(self):

@@ -265,6 +265,7 @@ class HardeningTests(unittest.TestCase):
         with ExitStack() as stack, redirect_stdout(io.StringIO()):
             stack.enter_context(patch.object(s, '_langs', ['de-DE', 'en-US']))
             stack.enter_context(patch.object(s, 'refresh_profiles', return_value={}))
+            stack.enter_context(patch.object(s, 'finish_cold_enrichment'))
             specs = stack.enter_context(patch.object(s, 'job_specs', side_effect=[ValueError('synthetic\n' + 'x'*300), jobs]))
             log = stack.enter_context(patch.object(s, '_daily_log'))
             saves = [stack.enter_context(patch.object(s, 'save_' + name)) for name in ('feeds', 'learn', 'nzb', 'emb', 'facets')]

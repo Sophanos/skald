@@ -128,6 +128,6 @@ class Fixes(unittest.TestCase):
                     with self.subTest(q=q):
                         result = self.c.special(self.s, q, 'movie')
                         self.assertIsNotNone(result)
-                        self.assertEqual(result['metas'][0]['name'], 'Settings for Mary Ann')
+                        self.assertEqual(result['metas'][0]['name'], 'About Mary Ann')
             for q in ('settings Nobody', 'Nobody settings'):
-                self.assertEqual(self.c.special(self.s, q, 'movie')['metas'][0]['name'], 'Add a member name to this command')
+                self.assertEqual(self.c.special(self.s, q, 'movie')['metas'][0]['name'], 'Who is asking?')

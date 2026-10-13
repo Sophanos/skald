@@ -22,7 +22,8 @@ class Odin(unittest.TestCase):
         plan = self.c.preview(self.s, 'hide anime', 'ana')
         code = self.c.confirm_code(plan)
         card = self.c.preview_card(self.s, plan, 'movie')['metas'][0]
-        self.assertEqual(card['name'], 'yes '+code+': Hide anime for Ana')
+        self.assertEqual(card['name'], 'yes '+code+': Hide anime...')
+        self.assertEqual(card['description'].splitlines()[0], 'Hide anime for Ana')
         self.assertIn('yes '+code, card['description'])
         rows = [{'person': 'ana', 'id': 'cozy', 'text': 'cozy', 'name': 'Cozy',
                  'when': {'days': [6], 'from_hour': 8, 'to_hour': 9}}]
@@ -32,7 +33,7 @@ class Odin(unittest.TestCase):
         for card in cards:
             self.assertRegex(card['name'], r'^yes \d{2}: ')
             self.assertIn(card['name'][:6], card['description'])
-            self.assertIn(': Add shelf: Cozy for Ana', card['name'])
+            self.assertIn('Add shelf: Cozy for Ana', card['description'])
 
     def test_friendly_plan_names_and_labels(self):
         with patch.dict(self.s.LABELS, {'ana': 'Alex'}):
@@ -57,8 +58,8 @@ class Odin(unittest.TestCase):
                         self.assertEqual(plan['name'], name+' for Alex')
             with patch.object(self.s, 'who_watching', return_value=('ana', None)):
                 card = self.c.special(self.s, 'my settings', 'movie')['metas'][0]
-                self.assertEqual(card['name'], 'Settings for Alex')
-                self.assertIn('"Alex"', card['description'])
+                self.assertEqual(card['name'], 'About Alex')
+                self.assertIn('Taste profile is still being built.', card['description'])
             self.c.apply(self.s, self.c.preview(self.s, 'hide anime', 'ana'))
             self.assertEqual(self.c.undo(self.s, ['ana'])['name'], 'Undone for Alex')
         for article in ('a', 'an', 'the', 'some'):
@@ -111,7 +112,7 @@ class Odin(unittest.TestCase):
                 patch.object(self.c, '_special', wraps=self.c._special) as action:
             result = self.c.special(self.s, 'help', 'movie')
             self.assertEqual(result['metas'][0]['name'], 'Skald help')
-            self.assertEqual([m['name'] for m in result['metas'][1:]], ['Try: '+p for p in phrases])
+            self.assertTrue(all(len(m['name']) <= 24 and m['name'].startswith('Try: ') for m in result['metas'][1:]))
             for meta, phrase in zip(result['metas'][1:], phrases):
                 self.assertIn('Type "'+phrase+'" in search.', meta['description'])
             self.assertEqual(self.c.special(self.s, 'HELP', 'series'), {'metas': []})

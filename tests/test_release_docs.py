@@ -7,15 +7,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseDocs(unittest.TestCase):
-    def test_readme_explains_adaptation_after_how_it_works(self):
-        text = (ROOT / 'README.md').read_text()
+    def test_taste_doc_explains_adaptation_after_how_it_works(self):
+        text = (ROOT / 'docs/TASTE.md').read_text()
         start = text.index('## What changes as you watch')
         self.assertLess(text.index('## How it works'), start)
-        self.assertLess(start, text.index('## Rows'))
-        section = text[start:text.index('## Rows')]
+        section = text[start:text.index('\n## ', start + 1)]
         self.assertIn('| What happens | What Skald changes | How soon |', section)
         self.assertIn('OpenRouter', section)
-        self.assertNotIn('—', section)
+        self.assertNotIn('\u2014', section)
         self.assertGreaterEqual(len([line for line in section.splitlines() if line.startswith('| ')]) - 1, 8)
 
     def test_readme_person_token_skips_other_members(self):
@@ -26,7 +25,7 @@ class ReleaseDocs(unittest.TestCase):
     def test_readme_links_and_plain_quickstart(self):
         text = (ROOT/'README.md').read_text()
         self.assertLessEqual(len(text.splitlines()), 220)
-        for name in ('SETUP', 'WATCH', 'CONNECTORS', 'UPGRADE', 'CLI'):
+        for name in ('SETUP', 'WATCH', 'CONNECTORS', 'UPGRADE', 'CLI', 'ROWS', 'SEARCH', 'TASTE', 'PRIVACY'):
             self.assertIn('docs/' + name + '.md', text)
         self.assertIn('docker compose exec engine skald setup', text)
         self.assertNotIn('Setup A', text)
@@ -34,11 +33,71 @@ class ReleaseDocs(unittest.TestCase):
 
     def test_readme_shows_home_search_and_member_controls(self):
         text = (ROOT/'README.md').read_text()
-        self.assertIn('skald setup --connect stremio --person NAME', text)
-        self.assertIn('skald setup prefs --person NAME', text)
-        for image in ('skald-odin.jpg', 'skald-home.jpg', 'skald-search.jpg', 'skald-import-preview.svg'):
+        self.assertIn('skald setup --connect stremio --person NAME', (ROOT/'docs/CONNECTORS.md').read_text())
+        self.assertIn('skald setup prefs --person NAME', (ROOT/'docs/ROWS.md').read_text())
+        self.assertIn('images/skald-import-preview.svg', (ROOT/'docs/TASTE.md').read_text())
+        for image in ('skald-odin.jpg', 'skald-home.jpg', 'skald-search.jpg'):
             self.assertIn('docs/images/' + image, text)
         self.assertNotIn('addons cannot read', text)
+
+    def test_readme_starts_with_install_and_safe_import_steps(self):
+        text = (ROOT/'README.md').read_text()
+        headings = ('## Install', '### 1. Pick your setup', '### 2. Connect AI (optional)', '### 3. Quickstart',
+                    '## How Skald learns', '## Sources', '## Rows', '## Talk to it from the search box',
+                    '## Your data', '## Docs', '## License')
+        self.assertEqual(sorted(headings, key=text.index), list(headings))
+        self.assertLess(len(text[:text.index('## Install')].splitlines()), 35)
+        commands = ('python3 -m skald connect',
+                    'python3 -m skald import imdb ratings.csv --person NAME --remote',
+                    'python3 -m skald push imports --remote\n',
+                    'python3 -m skald push imports --remote --apply')
+        self.assertEqual(sorted(commands, key=text.index), list(commands))
+        self.assertIn('saves only on the laptop', text)
+        self.assertNotIn('--dry-run', text)
+        self.assertNotIn('--yes', text)
+        for fact in ('stored on your machine', 'docs/PRIVACY.md', 'Keep addon links, tokens, data and backups private',
+                     "Anyone with the household addon link can choose any member's rows"):
+            self.assertIn(fact, text)
+        privacy = (ROOT/'docs/PRIVACY.md').read_text()
+        for fact in ('Raw exports stay on the laptop', 'title candidates', 'resolved signals',
+                     'Keep addon links, tokens, data and backups private',
+                     "Anyone with the household addon link can choose any member's rows",
+                     'TMDB', 'OpenRouter', 'AniList', 'NZBHydra', 'AIOStreams', 'Telegram'):
+            self.assertIn(fact, privacy)
+        for block in text.split('```text\n')[1:]:
+            diagram = block.split('```', 1)[0].splitlines()
+            self.assertLessEqual(len(diagram), 14)
+            self.assertTrue(all(len(line) <= 72 for line in diagram))
+        diagram = text.split('## Sources', 1)[1].split('```text\n', 1)[1].split('```', 1)[0]
+        for source in ('Stremio', 'Trakt', 'MDBList', 'Jellyfin', 'Plex', 'AIOStreams',
+                       'Netflix', 'IMDb', 'Letterboxd', 'YouTube', 'Chrome', 'Trakt zip', 'Plain text', 'Together'):
+            self.assertIn(source, diagram)
+
+    def test_public_readme_docs_links_and_table_spacing(self):
+        import re
+        for name in ('README.md', 'docs/ROWS.md', 'docs/SEARCH.md', 'docs/TASTE.md', 'docs/PRIVACY.md', 'docs/CONNECTORS.md', 'docs/CLI.md'):
+            with self.subTest(name=name):
+                path = ROOT/name
+                text = path.read_text()
+                self.assertNotIn(chr(0x2014), text)
+                for target in re.findall(r'\]\(([^)]+)\)|src="([^"]+)"', text):
+                    link = next(part for part in target if part)
+                    if '://' in link or link.startswith('#'):
+                        continue
+                    self.assertNotIn('eval/README.md', link)
+                    self.assertNotIn('ops/', link)
+                    self.assertNotIn('briefs/', link)
+                    for private in ('HANDOVER', 'A1-NETFLIX-AUDIT', 'OPUS-REVIEW', 'skald-luna-notes'):
+                        self.assertNotIn(private, link)
+                    self.assertTrue((path.parent/link.split('#', 1)[0]).exists(), link)
+                lines = text.splitlines()
+                for before, after in zip(lines, lines[1:]):
+                    if before.startswith('|') and not after.startswith('|'):
+                        self.assertEqual(after, '', 'A table needs a blank line after it')
+        search = (ROOT/'README.md').read_text().split('## Talk to it from the search box', 1)[1].split('## Your data', 1)[0]
+        rows = [line for line in search.splitlines() if line.startswith('|')][2:]
+        self.assertLessEqual(len(rows), 7)
+        self.assertTrue(all(len(row.split('|')[1].strip()) <= 35 for row in rows))
 
     def test_upgrade_build_matches_compose(self):
         text = (ROOT/'docs/UPGRADE.md').read_text()
@@ -85,6 +144,6 @@ class ReleaseDocs(unittest.TestCase):
             with self.subTest(name=name):
                 text = (ROOT/name).read_text()
                 if name == 'README.md':
-                    text = text.split('## Quickstart', 1)[1]
+                    text = text.split('### 3. Quickstart', 1)[1]
                 self.assertIn(command, text)
                 self.assertLess(text.index(command), text.index('docker compose -f compose.stack.example.yaml'))

@@ -350,7 +350,7 @@ class AIORefresh(unittest.TestCase):
 
     def test_docs_explain_automatic_names_and_catalog_delay(self):
         root = Path(__file__).resolve().parents[1]
-        for name in ('docs/CLI.md', 'docs/SETUP.md', 'skills/skald-taste/SKILL.md', 'README.md'):
+        for name in ('docs/CLI.md', 'docs/SETUP.md', 'skills/skald-taste/SKILL.md', 'docs/SEARCH.md'):
             text = (root / name).read_text()
             self.assertNotIn('apps may need one addon refresh', text)
             self.assertIn('skald setup aiostreams', text)

@@ -90,8 +90,8 @@ class Plans(Household):
 
     def test_plan_previews_all_steps_applies_together_and_undoes_once(self):
         card = self.say('hide anime and rename For You to Ana Picks')
-        self.assertIn('Hide anime for Ana', card['name'])
-        self.assertIn('Rename foryou to Ana Picks', card['name'])
+        self.assertIn('Hide anime for Ana', card['description'])
+        self.assertIn('Rename foryou to Ana Picks', card['description'])
         self.assertEqual(self.prefs(), {})
         self.confirm()
         self.assertEqual(self.prefs()['hide'], ['anime'])
@@ -129,7 +129,7 @@ class Corrections(Household):
     def test_fix_pending_change(self):
         self.say('no horror')
         card = self.say('no, I meant Ben')
-        self.assertIn('No more Horror for Ben', card['name'])
+        self.assertIn('No more Horror for Ben', card['description'])
         self.confirm()
         self.assertEqual(self.prefs('ben')['excluded_genres']['movie'], ['Horror'])
         self.assertEqual(self.prefs('ana'), {})
@@ -139,12 +139,12 @@ class Corrections(Household):
         self.confirm()
         self.assertEqual(self.prefs()['excluded_genres']['movie'], ['Horror'])
         card = self.say('not horror, thriller')
-        self.assertIn('No more Thriller for Ana', card['name'])
+        self.assertIn('No more Thriller for Ana', card['description'])
         self.confirm()
         self.assertEqual(self.prefs()['excluded_genres'], {'movie': ['Thriller'], 'series': ['Thriller']})
 
     def test_nothing_to_correct(self):
-        self.assertIn('Nothing to correct', self.say('no, I meant Ben')['name'])
+        self.assertIn('Nothing to correct', self.say('no, I meant Ben')['description'])
 
 
 class Questions(Household):
@@ -160,7 +160,7 @@ class Questions(Household):
             self.assertTrue(answer['question'].endswith('?'))
             self.assertEqual((answer['values'], answer['person'], answer['kind']), ([], None, None))
         card = self.say('Maybe hide some of those?')
-        self.assertTrue(card['name'].endswith('?'))
+        self.assertTrue(card['description'].splitlines()[0].endswith('?'))
         self.assertIsNone(c.get_pending(self.s, 'w92'))
         self.assertEqual(self.prefs(), {})
         self.assertIsNone(self.parse('Find the film Maybe Tomorrow')['op'])
@@ -179,8 +179,8 @@ class Wishes(Household):
             self.assertEqual((answer['op'], answer['values'], answer['person']), ('wish', values, person), text)
         self.assertIsNone(self.parse('Find the movie Wish')['op'])
         before = (self.root / 'skald.json').read_text()
-        self.assertIn('gentle mysteries', self.say('I wish there were more gentle mysteries in my rows')['name'])
-        self.assertIn('No settings changed', self.confirm()['name'])
+        self.assertIn('gentle mysteries', self.say('I wish there were more gentle mysteries in my rows')['description'])
+        self.assertIn('No settings changed', self.confirm()['description'])
         rows = [json.loads(line) for line in (self.root / 'wishes.jsonl').read_text().splitlines()]
         self.assertEqual([(r['who'], r['text']) for r in rows], [('ana', 'gentle mysteries')])
         self.assertEqual((self.root / 'skald.json').read_text(), before)
@@ -235,7 +235,7 @@ class ShelfRules(Household):
             self.assertFalse(shelves.rule_ok(self.s, {'id': 'tt2', 'type': 'series'}, shelves.rules(self.s)[wish['id']]))
         self.say('undo')
         self.assertNotIn(wish['id'], shelves.rules(self.s))
-        self.assertIn('unknown or ambiguous shelf', self.say('Limit my Westerns shelf to movies under 90 minutes')['name'])
+        self.assertIn('unknown or ambiguous shelf', self.say('Limit my Westerns shelf to movies under 90 minutes')['description'])
 
     def test_season_schedule(self):
         self.say('Christmas movies every December')
@@ -264,8 +264,8 @@ class Members(Household):
             self.assertIsNone(self.parse(text)['op'], text)
 
     def test_create_update_and_undo(self):
-        self.assertIn('Kim', self.say('Add a household member named Kim, age 12')['name'])
-        self.assertIn('Restart', self.confirm()['name'])
+        self.assertIn('Kim', self.say('Add a household member named Kim, age 12')['description'])
+        self.assertIn('Restart', self.confirm()['description'])
         cfg = c.config(self.s)
         self.assertEqual(cfg['household']['members'], ['ana', 'ben', 'kim'])
         self.assertEqual(cfg['taste']['people']['kim']['prefs']['kids_age'], 12)
@@ -276,7 +276,7 @@ class Members(Household):
         self.assertEqual(c.config(self.s)['household']['labels']['ben'], 'Ben')
         self.say('rückgängig')  # A repeated identical undo within a minute is deduplicated.
         self.assertEqual(c.config(self.s)['household']['members'], ['ana', 'ben'])
-        self.assertIn('already', self.say('Add a household member named Ben, age 30')['name'])
+        self.assertIn('already', self.say('Add a household member named Ben, age 30')['description'])
 
 
 class SearchIntents(Household):
@@ -321,7 +321,7 @@ class ReviewFixes(Household):
         self.say('Add a household member named Kim, age 12')
         self.confirm()
         (self.root / 'memory.json').write_text(json.dumps({'facts': [{'who': 'kim', 'text': 'likes owls'}]}))
-        self.assertIn('has data', self.say('undo')['name'])
+        self.assertIn('has data', self.say('undo')['description'])
         self.assertIn('kim', c.config(self.s)['household']['members'])
 
     def test_wish_append_holds_the_forgetting_lock(self):
@@ -365,18 +365,18 @@ class ReviewFixes(Household):
         self.say('hide Top Rated')
         self.confirm()
         card = self.say('show Top Rated and move Top Rated before For You')
-        self.assertIn('Move toprated before foryou', card['name'])
+        self.assertIn('Move toprated before foryou', card['description'])
         self.confirm()
         self.assertNotIn('toprated', self.s.CONFIG['household'].get('hidden_rows', []))
 
     def test_serbian_correction_uses_genre_aliases(self):
         self.say('no horror')
         self.confirm()
-        self.assertIn('No more Thriller for Ana', self.say('Ne horor, nego triler')['name'])
+        self.assertIn('No more Thriller for Ana', self.say('Ne horor, nego triler')['description'])
 
     def test_correction_to_everyone(self):
         self.say('no horror')
-        self.assertIn('No more Horror for Ana, Ben', self.say('No, I meant for everyone')['name'])
+        self.assertIn('No more Horror for Ana, Ben', self.say('No, I meant for everyone')['description'])
 
 if __name__ == '__main__':
     unittest.main()

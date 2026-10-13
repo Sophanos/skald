@@ -401,7 +401,7 @@ class Surfaces(Base):
     def test_docs_and_changelog(self):
         cli = (ROOT / "docs/CLI.md").read_text()
         self.assertIn("newtoyou", cli)
-        head = (ROOT / "CHANGELOG.md").read_text().split("**Data changes:** none.", 1)[0]
+        head = (ROOT / "CHANGELOG.md").read_text().split("## 1.4.1", 1)[1].split("**Data changes:** none.", 1)[0]
         self.assertIn("New to You", head)
         self.assertIn("archetypes.json", head)
         self.assertLessEqual(len((ROOT / "README.md").read_text().splitlines()), 220)

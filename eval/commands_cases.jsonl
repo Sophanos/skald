@@ -324,3 +324,14 @@
 {"id": "row-newtoyou-4", "group": "rows", "text": "Vrati red New to You", "lang": "sr", "expect": {"op": "row_show", "values": ["newtoyou"]}, "contract": "now"}
 {"id": "row-newtoyou-5", "group": "rows", "text": "add the new to yuo row", "expect": {"op": "row_show", "values": ["newtoyou"]}, "contract": "now"}
 {"id": "row-newtoyou-6", "group": "rows", "text": "add a row with new movies", "expect": {"op": "shelf_add", "values": ["new movies", "always"]}, "contract": "now"}
+{"id": "w96-1", "group": "about cards", "text": "what do you know about me", "lang": "en", "contract": "now", "expect": {"op": "settings", "kind": null, "values": [], "person": null}}
+{"id": "w96-2", "group": "about cards", "text": "what do you know about Ana", "lang": "en", "contract": "now", "expect": {"op": "settings", "kind": null, "values": [], "person": "ana"}}
+{"id": "w96-3", "group": "about cards", "text": "was weißt du über Ana", "lang": "de", "contract": "now", "expect": {"op": "settings", "kind": null, "values": [], "person": "ana"}}
+{"id": "w96-4", "group": "about cards", "text": "was weißt du über Anas?", "lang": "de", "contract": "now", "expect": {"op": "settings", "kind": null, "values": [], "person": "ana"}}
+{"id": "w96-5", "group": "about cards", "text": "šta znaš o Ana", "lang": "sr", "contract": "now", "expect": {"op": "settings", "kind": null, "values": [], "person": "ana"}}
+{"id": "w96-6", "group": "about cards", "text": "šta znaš o Anu", "lang": "sr", "contract": "now", "expect": {"op": "settings", "kind": null, "values": [], "person": "ana"}}
+{"id": "w96-7", "group": "about cards", "text": "sta znas o Ana", "lang": "sr", "contract": "now", "expect": {"op": "settings", "kind": null, "values": [], "person": "ana"}}
+{"id": "w96-8", "group": "about cards", "text": "what do you knwo about Ana", "lang": "en", "contract": "now", "expect": {"op": "settings", "kind": null, "values": [], "person": "ana"}}
+{"id": "w96-9", "group": "about cards", "text": "what do you know about Dune", "lang": "en", "contract": "now", "expect": {"op": null, "kind": null, "values": [], "person": null}}
+{"id": "w96-10", "group": "about cards", "text": "was weißt du über Dune", "lang": "de", "contract": "now", "expect": {"op": null, "kind": null, "values": [], "person": null}}
+{"id": "w96-11", "group": "about cards", "text": "šta znaš o Dune", "lang": "sr", "contract": "now", "expect": {"op": null, "kind": null, "values": [], "person": null}}

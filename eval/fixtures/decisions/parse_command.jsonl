@@ -50,3 +50,14 @@
 {"in": {"query": "alles auf Standard zurücksetzen"}, "expect": {"op": "reset", "kind": null, "values": ["everything"], "person": null}, "recorded": null, "note": "Synthetic: settings history, inverse undo, redo or scoped reset"}
 {"in": {"query": "reset shelves for us"}, "expect": {"op": "reset", "kind": null, "values": ["shelves"], "person": "together"}, "recorded": null, "note": "Synthetic: settings history, inverse undo, redo or scoped reset"}
 {"in": {"query": "reset filters for ben"}, "expect": {"op": "reset", "kind": null, "values": ["filters"], "person": "ben"}, "recorded": null, "note": "Synthetic: settings history, inverse undo, redo or scoped reset"}
+{"in": {"query": "what do you know about me"}, "expect": {"op": "settings", "kind": null, "values": [], "person": null}, "recorded": null, "note": "Synthetic: named about cards and title look-alikes"}
+{"in": {"query": "what do you know about Ana"}, "expect": {"op": "settings", "kind": null, "values": [], "person": "ana"}, "recorded": null, "note": "Synthetic: named about cards and title look-alikes"}
+{"in": {"query": "was weißt du über Ana"}, "expect": {"op": "settings", "kind": null, "values": [], "person": "ana"}, "recorded": null, "note": "Synthetic: named about cards and title look-alikes"}
+{"in": {"query": "was weißt du über Anas?"}, "expect": {"op": "settings", "kind": null, "values": [], "person": "ana"}, "recorded": null, "note": "Synthetic: named about cards and title look-alikes"}
+{"in": {"query": "šta znaš o Ana"}, "expect": {"op": "settings", "kind": null, "values": [], "person": "ana"}, "recorded": null, "note": "Synthetic: named about cards and title look-alikes"}
+{"in": {"query": "šta znaš o Anu"}, "expect": {"op": "settings", "kind": null, "values": [], "person": "ana"}, "recorded": null, "note": "Synthetic: named about cards and title look-alikes"}
+{"in": {"query": "sta znas o Ana"}, "expect": {"op": "settings", "kind": null, "values": [], "person": "ana"}, "recorded": null, "note": "Synthetic: named about cards and title look-alikes"}
+{"in": {"query": "what do you knwo about Ana"}, "expect": {"op": "settings", "kind": null, "values": [], "person": "ana"}, "recorded": null, "note": "Synthetic: named about cards and title look-alikes"}
+{"in": {"query": "what do you know about Dune"}, "expect": {"op": null, "kind": null, "values": [], "person": null}, "recorded": null, "note": "Synthetic: named about cards and title look-alikes"}
+{"in": {"query": "was weißt du über Dune"}, "expect": {"op": null, "kind": null, "values": [], "person": null}, "recorded": null, "note": "Synthetic: named about cards and title look-alikes"}
+{"in": {"query": "šta znaš o Dune"}, "expect": {"op": null, "kind": null, "values": [], "person": null}, "recorded": null, "note": "Synthetic: named about cards and title look-alikes"}

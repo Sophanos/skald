@@ -13,6 +13,30 @@ and recent plays. A failed test exits with an error.
 Account names are hidden by default; `--show` reveals unmapped names locally.
 Counts follow the existing adapters' limits; they are a preview, not a full audit.
 
+## Sources
+
+Accounts connect on the server; exports import on a laptop. Trakt works both ways.
+
+Run connector commands on the server. Prefix them with `docker compose -f compose.stack.example.yaml exec skald` for the stack, or `docker compose exec engine` for Stremio direct. Run imports on a linked laptop with Python 3.12. Replace `NAME` with a configured member and filenames with your exports. Import commands resolve and review titles, then save only on the laptop. Preview the push before sending resolved signals with `--apply`. After changing connectors, restart Skald now (`docker compose restart engine`, or `docker compose -f compose.stack.example.yaml restart skald` for the stack) so it starts reading.
+
+| Source | What it supplies | Connect or import command |
+|---|---|---|
+| Stremio library | Watched titles, library interests, loves and likes. | `skald setup --connect stremio --person NAME` |
+| Trakt | Watch history and ratings; export at [Trakt Settings → Data](https://app.trakt.tv/settings/data) with "Export now". | `skald setup --connect trakt --person NAME`; export: `python3 -m skald import trakt trakt-export.zip --person NAME --remote` |
+| MDBList | Watched titles and watchlist interests. | `skald setup --connect mdblist --person NAME` |
+| PublicMetaDB | Watched titles, watchlist and resume interests, abandoned titles. | `skald setup --connect pmdb --person NAME` |
+| Jellyfin server | Watched titles, favourites and progress; setup maps users. | `skald setup --connect jellyfin --source-url http://jellyfin:8096` |
+| Plex | Watched titles and progress for the token's account. | `skald setup --connect plex --source-url http://plex:32400 --person NAME` |
+| AIOStreams database | Watched state, progress, favourites and ratings from Odin and other Jellyfin apps. | `skald setup --connect aiostreams-db --source-path /aio-data/db.sqlite` |
+| Netflix | [Viewing activity](https://help.netflix.com/en/node/101917) ("Download all"); profile mapping for shared exports. | `python3 -m skald import netflix ViewingActivity.csv --person NAME --remote` |
+| IMDb | Ratings or watchlist CSV. | `python3 -m skald import imdb ratings.csv --person NAME --remote` |
+| Letterboxd | Ratings, diary, watched, likes and watchlist export. | `python3 -m skald import letterboxd export-folder --person NAME --remote` |
+| YouTube | Takeout watch history, JSON or HTML. | `python3 -m skald import youtube watch-history.json --person NAME --remote` |
+| Chrome | Title interests from allowed sites in a history database copy. | `python3 -m skald import chrome History --person NAME --remote` |
+| Plain text | One title per line. | `python3 -m skald import plain titles.txt --person NAME --remote` |
+
+Stremio viewing reaches Skald directly. AIOStreams records Jellyfin-app viewing, not Stremio playback. Trakt remains optional; its API app may need VIP, but JSON imports need no API app. Mount the AIOStreams database directory read-only before connecting it. Netflix exports with named profiles need `--profile-map "PROFILE=NAME"` for each profile. The sections below explain source limits and credentials.
+
 ## Trakt
 
 **You get:** watch history and ratings for the selected household member.
@@ -191,22 +215,18 @@ skald setup --connect files
 python3 -m skald onboard --sources
 ```
 
-| Export | Import command (add your member with `--person alex --remote`) |
-|---|---|
-| Netflix CSV from [Viewing activity](https://help.netflix.com/en/node/101917), "Download all" | `python3 -m skald import netflix ViewingActivity.csv --dry-run` |
-| IMDb ratings/watchlist CSV | `python3 -m skald import imdb ratings.csv --dry-run` |
-| Letterboxd export folder | `python3 -m skald import letterboxd export-folder --dry-run` |
-| Trakt zip from [Trakt Settings → Data](https://app.trakt.tv/settings/data), "Export now" | `python3 -m skald import trakt trakt-export.zip --dry-run` |
-| YouTube Takeout JSON | `python3 -m skald import youtube watch-history.json --dry-run` |
-| Chrome database copy | `python3 -m skald import chrome History --dry-run` |
-| One title per line | `python3 -m skald import plain titles.txt --dry-run` |
+[The source table](#sources) lists exports, what they supply and exact import commands.
+First [link your laptop](SETUP.md#6-link-a-laptop-optional), then:
 
-Review first. Remove `--dry-run` and add `--yes` to save an import.
+1. Import and answer unclear title matches: `python3 -m skald import imdb ratings.csv --person NAME --remote`.
+2. Preview the send: `python3 -m skald push imports --remote`.
+3. Send the reviewed signals: `python3 -m skald push imports --remote --apply`.
+
+Import saves resolved signals only on the laptop; unclear titles stay in a private review file.
 With `--remote`, your linked server resolves titles using its TMDB key; the laptop needs no TMDB key.
 Only title, year, kind and external ids go to the server for lookup, including in dry runs.
 Without server lookups, use `--resolve-online` and set `TMDB_API` in the laptop environment.
-Keep originals local. Run `push imports --remote` to preview the send;
-after a yes, add `--apply`. There is no SSH in this route.
+Keep originals local. Only the push with `--apply` writes signals to the server. There is no SSH in this route.
 A token linked with `--person` sends only that member's titles and reports skipped titles in preview and apply.
 For everyone, make a household token with `skald setup link --name laptop` (no `--person`).
 The older route without `--remote` uses SSH and requires your explicit `SKALD_SSH_HOST`.

@@ -148,7 +148,7 @@ class Defer(Household):
     def test_tonight_hides_for_one_person_and_returns_by_itself(self):
         card = self.say('Not tonight for Dune; keep it for another evening')
         self.assertIn('Dune', card['name'])
-        self.assertIn('Ana', card['name'])
+        self.assertIn('Ana', card['description'])
         self.assertEqual(self.fixes(), [])
         self.assertIn('Hide', self.confirm()['name'])
         self.assertEqual(os.stat(self.root / c.FIXES).st_mode & 0o777, 0o600)
@@ -211,7 +211,7 @@ class Defer(Household):
     def test_targeted_undo_and_kids(self):
         self.say('Not tonight for Dune')
         self.confirm()
-        self.assertIn('plain undo only', self.say('undo Dune')['name'])
+        self.assertIn('plain undo only', self.say('undo Dune')['description'])
         with self.assertRaises(PermissionError):
             c.preview(self.s, 'x', 'ana', 'guest', answer=dict(op='defer', kind=None, values=['Dune'], person=None, until='tonight'))
 
@@ -219,7 +219,7 @@ class Defer(Household):
 class Reject(Household):
     def test_reason_maps_to_chips_and_undo_restores(self):
         card = self.say('Dune nije za mene, previše je spor')
-        self.assertIn('previše je spor', card['name'])
+        self.assertIn('previše je spor', card['description'])
         self.confirm()
         event = self.feedback()[('tmdb:438631', 'ana')]
         self.assertEqual((event['action'], event['reasons']), ('not_for_us', ['too slow']))
@@ -245,7 +245,7 @@ class Reject(Household):
         lines = (self.root / 'feedback.jsonl').read_text()
         prefs = (self.root / 'skald.json').read_text()
         card = self.say('Dune is not for me, bad acting')
-        self.assertIn('bad acting', card['name'])
+        self.assertIn('bad acting', card['description'])
         self.confirm()
         self.assertEqual(c.journal(self.s)['ana'][-1]['reason'], 'bad acting')
         self.assertEqual((self.root / 'feedback.jsonl').read_text(), lines)
@@ -331,7 +331,7 @@ class Learning(Household):
         self.profile(entry(ARRIVAL, ['ana']))
         p = self.s._profiles['household']
         card = self.say('Arrival je gledao Ben, ne ja; ispravi kome pripada gledanje')
-        self.assertIn('Ben', card['name'])
+        self.assertIn('Ben', card['description'])
         self.confirm()
         self.assertEqual(self.s.person_entries(p, 'ana'), [])
         [moved] = self.s.person_entries(p, 'ben')
@@ -343,7 +343,7 @@ class Learning(Household):
 
     def test_reattribute_needs_a_watch_and_another_member(self):
         self.profile(entry(ARRIVAL, ['ben']))
-        self.assertIn('No watch', self.say('Ben watched Dune, not me')['name'])
+        self.assertIn('No watch', self.say('Ben watched Dune, not me')['description'])
         with self.assertRaises(ValueError):
             c.preview(self.s, 'x', 'ana', answer=dict(op='reattribute', kind=None, values=['Arrival'], person='ana'))
         with self.assertRaises(ValueError):

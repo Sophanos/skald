@@ -36,6 +36,13 @@ Clone from `https://github.com/Sophanos/skald`.
 Delete the `SKALD_MEMBERS`, `SKALD_LANG` and `SKALD_TZ` lines copied into `.env`;
 setup asks for these household settings instead.
 
+### After the quickstart
+
+- Skald runs as user 65534 and keeps DATA private.
+- Setup saves members, language, timezone, country and connector mappings in `DATA/skald.json`. Credentials use private files and prompts.
+- The first row build takes several minutes. Check progress with `docker compose -f compose.stack.example.yaml exec skald skald setup --status`. Restart after connector changes.
+- Outside your home network, give AIOStreams an HTTPS address through a proxy or tunnel. Skald stays inside Docker for watching through AIOStreams. Stremio direct and laptop imports need their own reachable Skald address.
+
 ### One command for a fresh household with AIOStreams
 
 Keep Compose, network addresses, DATA ownership, API keys and the player login
@@ -168,6 +175,8 @@ After changing `.env`, run `docker compose up -d --force-recreate`.
 
 OpenRouter is optional. Add `OPENROUTER_API_KEY=YOUR_KEY` for AI picks,
 natural-language search, mood shelves and weekly picks. Rows work without it.
+Every OpenRouter call counts against a daily limit per task and a monthly cost cap.
+`AI_MONTHLY_USD` sets the cap (default 3 US dollars); when it is reached, search falls back to TMDB titles and rows keep their last build.
 
 Embeddings use OpenRouter's `/api/v1/embeddings` with `google/gemini-embedding-2`
 and 256 dimensions. Set `SKALD_EMBED_MODEL` to any OpenRouter embedding id to

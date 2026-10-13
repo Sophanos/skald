@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 import tempfile
 import threading
+import textwrap
 import uuid
 def _op(group, verb=None, inverse=None, *, feedback=None, kids=False, removes=False, hint=''):
     return dict(group=group, verb=verb, inverse=inverse, feedback=feedback, kids=kids, removes=removes, hint=hint)
@@ -392,6 +393,9 @@ def parse_local(text, s=None, viewer=None, bound=None):
     raw = text.strip()
     if LOOKUP.fullmatch(raw):
         return dict(NONE)
+    about = parse_about(raw, s)
+    if about is not False:
+        return dict(NONE, op='settings', person=about)
     found = parse_ask(raw.casefold()) or parse_search(raw) or parse_fix(raw, s) or parse_wish(raw, s) or parse_member(raw, s) or parse_correct(raw, s) or parse_shelf_rule(raw, s)
     if found:
         return {**NONE, **found}
@@ -457,6 +461,17 @@ def member_name(s, name):
     key = name.casefold()
     keys = [key] + ([key[:-1], key[:-1]+'a'] if key[-1:] == 'u' else [key[:-1]] if key[-1:] in ('a', 's') else []) * (len(key) >= 3)
     return next((p for k in keys for p in s.PEOPLE if k in (p.casefold(), s.LABELS[p].casefold())), name)
+
+ABOUT = re.compile(r'(?:what do you (?:know|knwo) about|was wei(?:ß|ss)t du über|[šs]ta zna[šs] o) (.+?)[.!?]?', re.I)
+
+def parse_about(query, s):
+    match = ABOUT.fullmatch(query.strip())
+    if not match:
+        return False
+    if match[1].casefold() in ('me', 'mich', 'mene'):
+        return None
+    named = member_name(s, match[1]) if s is not None else None
+    return named if named in getattr(s, 'PEOPLE', ()) else False
 
 def shelf_hits(s, name, scope):
     from . import shelves
@@ -638,7 +653,7 @@ def register(s):
     def rule(inp, params):
         answer = parse_local(inp['query'], s)
         q = inp['query'].strip().casefold()
-        return (answer, 1) if answer['op'] or q.startswith('stop ') or q in ('sunday bloody sunday', 'heist', 'yes man', 'reset my taste') or re.fullmatch(r'best (?:catalog|row|shelf|list) (?:of|about|for|with) .+', q) else None
+        return (answer, 1) if answer['op'] or ABOUT.fullmatch(q) or q.startswith('stop ') or q in ('sunday bloody sunday', 'heist', 'yes man', 'reset my taste') or re.fullmatch(r'best (?:catalog|row|shelf|list) (?:of|about|for|with) .+', q) else None
     def fallback_request(batch):
         body = request(batch[0]['query'], fallback_model, fallback_effort)
         body['max_tokens'] = 1200
@@ -1676,9 +1691,99 @@ def undo(s, targets, actor=None):
         if count_changed:
             s.aio_rows_changed()
     return {'name': 'Undone for '+', '.join('Together' if p == 'together' else s.LABELS[p] for p in targets) + ('. Newer ratings kept; could not be undone: '+ '; '.join(skipped) if skipped else '')}
-def card(s, name, stype, description=''):
-    return {'metas': [{'id': s.rid('cmd:'+hashlib.sha256(name.encode()).hexdigest()[:12]), 'type': stype,
-                       'name': name, 'description': description, 'poster': '/command.svg'}]}
+def card(s, name, stype, description='', *, title=None):
+    cid = s.rid('cmd:'+hashlib.sha256(name.encode()).hexdigest()[:12])
+    short = textwrap.shorten(title or name, width=24, placeholder='...')
+    if short != name:
+        full = re.sub(r'^yes \d{2}: ', '', name)
+        description = full+('\n'+description if description else '')
+    return {'metas': [{'id': cid, 'type': stype,
+                       'name': short, 'description': description, 'poster': '/command.svg'}]}
+
+def error_card(s, error, stype, query=''):
+    message, detail = str(error), ''
+    title = 'Check this command'
+    if isinstance(error, PermissionError):
+        title = 'Ask a grown-up'
+    elif message.startswith('Add a member name'):
+        title = 'Who is asking?'
+        label = s.LABELS[s.PEOPLE[0]]
+        example = 'what do you know about '+label if parse_about(query, s) is not False else query+' for '+label
+        if re.search(r'\bsettings\b', query, re.I):
+            example = 'settings for '+label
+        detail = 'Add a member name, for example "'+example+'", or choose Who\'s watching.'
+    elif 'shelf' in message.casefold():
+        title = 'Check your shelves'
+    elif 'preview' in message.casefold() or 'changed' in message.casefold():
+        title = 'Preview again'
+    elif 'title' in message.casefold():
+        title = 'Which title?'
+    return card(s, message, stype, detail, title=title)
+
+def about_detail(s, person):
+    from . import shelves
+    traits = s.CONFIG['taste']['people'].get(person, {})
+    prefs = traits.get('prefs', {})
+    detail = []
+    detail.append('Shows '+str(shelves.slot_count(s, person))+' shelves for '+scope_label(s, person)+'.')
+    for key, values in row_settings(s.CONFIG).items():
+        if values:
+            text = ', '.join(row+' is '+label for row, label in values.items()) if key == 'row_labels' else ', '.join(values)
+            detail.append('Household '+key.replace('_', ' ')+': '+text+'.')
+    if traits.get('likes'):
+        detail.append('Likes: '+traits['likes']+'.')
+    if traits.get('loves'):
+        detail.append('Loves: '+', '.join(traits['loves'])+'.')
+    if prefs.get('hide'):
+        detail.append('Avoids: '+', '.join(prefs['hide'])+'.')
+    for kind, values in prefs.get('excluded_genres', {}).items():
+        if values:
+            detail.append('Avoids '+kind+' genres: '+', '.join(values)+'.')
+    focus = prefs.get('focus', {})
+    for kind, values in focus.items():
+        if kind == 'genres':
+            for typ, genres in values.items():
+                if genres:
+                    detail.append('Likes '+typ+' genres: '+', '.join(genres)+'.')
+        elif values:
+            names = s.LANGUAGE_NAMES if kind == 'languages' else s.COUNTRY_NAMES if kind == 'countries' else {}
+            detail.append('Likes '+kind+': '+', '.join(names.get(v, v) for v in values)+'.')
+    weights = prefs.get('weights', {})
+    for name, weight in {**{k: v for k, v in weights.items() if k != 'genre'}, **weights.get('genre', {})}.items():
+        if weight:
+            detail.append(('Prefers more ' if weight > 0 else 'Prefers less ')+name+'.')
+    for kind, minutes in prefs.get('runtime', {}).items():
+        detail.append('Prefers '+kind+' up to '+str(minutes)+' minutes.')
+    if prefs.get('years') and any(y is not None for y in prefs['years']):
+        detail.append('Prefers years '+ ' to '.join(str(y) if y is not None else 'any' for y in prefs['years'])+'.')
+    if prefs.get('discovery'):
+        detail.append('Discovery: '+prefs['discovery']+'.')
+    if prefs.get('kids_age'):
+        detail.append('Age guidance: '+str(prefs['kids_age'])+'.')
+    for w in shelves.read(s)['wishes']:
+        if w['scope'] in (person, 'together'):
+            sentence = 'Shelf '+w['name']+' for '+scope_label(s, w['scope'])+': '+w['text']
+            if w['when'] != 'always':
+                sentence += '; '+', '.join(w['when']['days'])+' from '+str(w['when']['hours'][0])+' to '+str(w['when']['hours'][1])+' '+s.CONFIG['region']['tz']
+            detail.append(sentence+'.')
+    wishes = Path(s.DATA)/'wishes.jsonl'
+    if wishes.exists():
+        for line in wishes.read_text().splitlines():
+            if line.strip():
+                wish = json.loads(line)
+                if wish['who'] in (person, 'together'):
+                    detail.append('Wishes for '+scope_label(s, wish['who'])+': '+wish['text']+'.')
+    model = s.get_model(False) or {}
+    facets = model.get('paff', {}).get(person, {})
+    if facets:
+        names = model.get('names', {})
+        detail.append('Top taste: '+', '.join(names.get(k, k) for k in sorted(facets, key=lambda k: -facets[k])[:5])+'.')
+    else:
+        detail.append('Taste profile is still being built.')
+    recent = journal(s).get(person, [])[-3:]
+    if recent:
+        detail.append('Recent commands: '+ '; '.join(e['name'] for e in recent)+'.')
+    return '\n'.join(detail)
 def context(s):
     scope = getattr(s._scoping, 'scope', None)
     return scope, s.SCOPES.get(scope), s._viewer.get() or s.who_watching()[0]
@@ -1750,7 +1855,7 @@ def suggestion_cards(s, scope, viewer, bound, stype, dismiss=None, *, text=''):
             if len(metas) == 2:
                 break
             if len([w for w in shelves.read(s)['wishes'] if w['scope'] == person and w['slot'] <= shelves.slot_count(s, person)]) >= shelves.slot_count(s, person):
-                return card(s, 'Shelves are full; stop a shelf first', stype)
+                return error_card(s, ValueError('Shelves are full; stop a shelf first'), stype)
             name = re.sub(r'^(?:a|an|the|some)\s+', '', row['name'], flags=re.I).title()
             shelf = s.shelf_change(person, 'add', text=row['text'], name=name, when=when)
             plan = dict(people=[person], shelf=shelf, plan=shelf['plan'], suggestion=row['id'], at=s.time.time(), text=text[:200], name='Add shelf: '+name+' for '+s.LABELS[person]+'; '+str(shelf['when'])+' '+s.CONFIG['region']['tz'])
@@ -1785,8 +1890,9 @@ def _special(s, query, stype, routed=False):
     if q.startswith('stop ') and not local or REGISTRY.get(local, {}).get('group') == 'search':
         return None
     dismissing = bool(re.fullmatch(r'no \d{2}', q))
-    about = q in ('what do you know about me', 'my settings', 'settings', 'was weißt du über mich')
-    named = None
+    named = parse_about(query, s)
+    about = named is not False or q in ('my settings', 'settings')
+    named = named if named is not False else None
     match = None if about else (re.fullmatch(r'(?:my )?settings(?: for)? (.+)', q) or re.fullmatch(r"(.+?)(?:'s)? (?:my )?settings", q))
     if match:
         about, named = True, member_name(s, match[1])
@@ -1795,7 +1901,7 @@ def _special(s, query, stype, routed=False):
         return None
     try:
         if not help_q and (bound == s.GUEST or viewer == s.GUEST):
-            return card(s, 'Ask a grown-up to change settings', stype)
+            raise PermissionError('Ask a grown-up to change settings')
         if ideas or dismissing:
             return suggestion_cards(s, scope, viewer, bound, stype, q if dismissing else None, text=query)
         if help_q:
@@ -1805,19 +1911,8 @@ def _special(s, query, stype, routed=False):
                 result['metas'].extend(card(s, 'Try: '+phrase, stype, 'Type "'+phrase+'" in search.')['metas'])
             return result
         if about:
-            targets = [shelf_scope(s, named, viewer, bound)]
-            model = s.get_model(False) or {}
-            facets = model.get('paff', {}).get(targets[0], {})
-            names = model.get('names', {})
-            detail = json.dumps({'Together' if p == 'together' else s.LABELS[p]: s.CONFIG['taste']['people'].get(p, {}).get('prefs', {}) for p in targets}, ensure_ascii=False)
-            detail += '\nHousehold rows: '+json.dumps(row_settings(s.CONFIG), ensure_ascii=False)
-            from . import shelves
-            for w in shelves.read(s)['wishes']:
-                if w['scope'] in (*targets, 'together'):
-                    detail += '\n'+w['name']+'; '+str(w['when'])+'; '+('Together' if w['scope'] == 'together' else s.LABELS[w['scope']])
-            detail += '\nTop taste: '+', '.join(names.get(k, k) for k, v in sorted(facets.items(), key=lambda kv: -kv[1])[:5])
-            detail += '\nRecent commands: '+ '; '.join(e['name'] for p in targets for e in journal(s).get(p, [])[-3:])
-            return card(s, 'Settings for '+', '.join('Together' if p == 'together' else s.LABELS[p] for p in targets), stype, detail)
+            person = shelf_scope(s, named, viewer, bound)
+            return card(s, 'About '+scope_label(s, person), stype, about_detail(s, person))
         plan = get_pending(s, scope)
         if confirming and q.startswith('yes '):
             plan = getattr(s, '_command_suggestions', {}).get(scope, {}).get(q[4:], plan)
@@ -1873,7 +1968,7 @@ def _special(s, query, stype, routed=False):
         getattr(s, '_command_results', {}).pop(scope, None)
         return preview_card(s, plan, stype)
     except (ValueError, PermissionError) as e:
-        return card(s, str(e) if isinstance(e, PermissionError) or 'name' in str(e) or 'shelf' in str(e).lower() or 'changed since' in str(e) or not routed else 'Skald cannot set this yet', stype)
+        return error_card(s, e, stype, query)
 def api_apply(s, req):
     with _LOCK:
         s.refresh_preferences()

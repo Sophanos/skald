@@ -194,7 +194,7 @@ class TraktZipTests(unittest.TestCase):
 
     def test_export_documentation(self):
         root = Path(__file__).resolve().parents[1]
-        for name in ("README.md", "docs/CONNECTORS.md"):
+        for name in ("docs/CONNECTORS.md",):
             text = (root / name).read_text()
             for link in ("[Trakt Settings → Data](https://app.trakt.tv/settings/data)",
                          "[Viewing activity](https://help.netflix.com/en/node/101917)"):

@@ -4,6 +4,19 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.4.2
+
+For You keeps this week's trending titles out unless they fit your taste as well as your usual recommendations, and shows at most two of them.
+Latest Digital Releases and Top Rated Movies now hide titles you have seen or rejected and fill back up to 20 from later pages.
+Latest Digital Releases skips old films that only came out again digitally.
+Cards no longer show a cut-off reason such as "For your.".
+After a restart, Skald builds the taste model right after the first row pass instead of waiting for the next scheduled rebuild.
+Command answers in search keep short card names that players do not cut off; the full text is on the card's detail page.
+Ask "what do you know about Ana" (also German and Serbian) for a plain-language summary of a member's settings, shelves and taste.
+The README is shorter and starts with install; details moved to new guides on rows, search and how Skald learns.
+
+**Data changes:** none. The data format stays 5 with no migration; rolling back needs no restore.
+
 ## 1.4.1
 
 Connect a PublicMetaDB (PMDB) account per person. Skald reads watch history, watchlist, resume points and dropped shows with each person's private key, never writes to PMDB, and includes PMDB in backups, forgetting and `skald connectors test pmdb`.

@@ -40,6 +40,7 @@ import re
 import secrets
 import sqlite3
 import stat
+import statistics
 import struct
 import threading
 import time
@@ -57,7 +58,7 @@ from types import SimpleNamespace
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -7730,15 +7731,26 @@ def top10_feed(lang):
 def digital_feed(lang):
     today = local_now().date()
     since = today - datetime.timedelta(days=60)
+    premiere_cutoff = since - datetime.timedelta(days=365)
     country_code = rating_country(CONFIG['region']['country'])
-    data, art = with_art('discover/movie', lang, region=country_code, with_release_type=4,
-                         **{'release_date.gte': since.isoformat(), 'release_date.lte': today.isoformat(),
-                            'sort_by': 'popularity.desc', 'include_adult': 'false'})
+    data, art = [], {}
+    for page in range(1, 4):
+        more, more_art = with_art('discover/movie', lang, page=page, region=country_code, with_release_type=4,
+                                 **{'release_date.gte': since.isoformat(), 'release_date.lte': today.isoformat(),
+                                    'sort_by': 'popularity.desc', 'include_adult': 'false'})
+        data += more
+        art.update(more_art)
+    data = list({it['id']: it for it in data}.values())
     names, out = genres('movie', lang), []
     for it in sorted(data, key=lambda x: x.get('popularity') or 0, reverse=True):
+        if len(out) >= 60:
+            break
         if it.get('adult'):
             continue
         releases = tmdb(f"movie/{it['id']}/release_dates").get('results', [])
+        if any(r.get('type') in (1, 2, 3) and (day := date_or_none((r.get('release_date') or '')[:10]))
+               and day < premiere_cutoff for country in releases for r in country.get('release_dates', [])):
+            continue
         if any(r.get('type') == 4 and (day := date_or_none((r.get('release_date') or '')[:10]))
                and since <= day <= today for country in releases if country.get('iso_3166_1') == country_code
                for r in country.get('release_dates', [])):
@@ -7747,7 +7759,12 @@ def digital_feed(lang):
 
 
 def toprated_feed(lang):
-    data, art = with_art('movie/top_rated', lang)
+    data, art = [], {}
+    for page in range(1, 4):
+        more, more_art = with_art('movie/top_rated', lang, page=page)
+        data += more
+        art.update(more_art)
+    data = list({it['id']: it for it in data}.values())
     names = genres('movie', lang)
     return {'movie': [row_meta(it, 'movie', 'movie', names, art.get(it['id'], {}), lang=lang)
                       for it in data if not it.get('adult') and (it.get('vote_count') or 0) >= 200]}
@@ -9062,9 +9079,10 @@ def week_feed(lang):
 
 # --- LLM rows ------------------------------------------------------------------
 
-def candidate_pool(p, n=40, metas=False):
+def candidate_pool(p, n=40, metas=False, trending_only=None):
     """TMDB recommendations of their strongest titles plus this week's trending: real candidates the LLM can rerank.
-    With the taste model, a wider pool is ranked by match (fingerprint + facets); without, the first n in TMDB order."""
+    Trending must meet the median recommendation score; without a model it only fills a pool below 20.
+    With the taste model, a wider pool is ranked by match; without, the first n in TMDB order."""
     try:
         m = get_model()
     except Exception as e:
@@ -9077,6 +9095,9 @@ def candidate_pool(p, n=40, metas=False):
     jobs = [(e, _pool.submit(tmdb, f"{e['kind']}/{e['id']}/recommendations", language="en-US")) for e in seeds]
     jobs += [({"kind": k, "title": None}, _pool.submit(tmdb, f"trending/{k}/week", language="en-US")) for k in ("movie", "tv")]
     cands, seen = [], set(p["seen"]) | set(p["negative"]) | set(tired_keys({rid('foryou')}))
+    if trending_only is None:
+        trending_only = set()
+    recommended = set()
     for e, job in jobs:
         try:
             data = job.result().get("results", [])
@@ -9084,16 +9105,26 @@ def candidate_pool(p, n=40, metas=False):
             continue
         for it in data[:per]:
             key = f"tmdb:{it['id']}"
+            if e.get('title'):
+                recommended.add((key, e['kind']))
+            else:
+                trending_only.add((key, e['kind']))
             if key in seen or (it.get("vote_count") or 0) < 100:
                 continue
             seen.add(key)
             cands.append((key, e["kind"], it, e))
+    trending_only.difference_update(recommended)
     why = {}
     if m:
         ranked = rank_by_taste(m, [(key, kind, (it, e)) for key, kind, it, e in cands])
-        cands = [(key, kind, it, e) for _, _, key, kind, (it, e) in ranked]
+        rec_scores = [sc for sc, _, _, _, (_, e) in ranked if e.get('title') and sc is not None]
+        floor = statistics.median(rec_scores) if rec_scores else None
+        cands = [(key, kind, it, e) for sc, _, key, kind, (it, e) in ranked
+                 if e.get('title') or floor is not None and sc is not None and sc >= floor]
         why = {key: (match_pct(m, sc), reasons(m, key, w, kind=kind)) for sc, w, key, kind, _ in ranked}
         n = 50
+    elif sum(bool(e.get('title')) for _, _, _, e in cands) >= 20:
+        cands = [c for c in cands if c[3].get('title')]
     if metas:
         out = [row_meta(it, "movie" if kind == "movie" else "series", kind, genres(kind, "en-US"), it, lang="en-US")
                for _, kind, it, _ in cands]
@@ -9162,7 +9193,8 @@ def personal_feed(lang):
                         "are welcome here; skip the first films of sagas they named, those are covered)")
         heads.append('REWATCH')
     system = PERSONAL_SYS.format(sections='\n'.join(sections), example="Because you loved Paddington 2")
-    pool = candidate_pool(p) if foryou_enabled else []
+    trending_only = set()
+    pool = candidate_pool(p, trending_only=trending_only) if foryou_enabled else []
     hits, tired = hit_titles(), tired_keys({rid('foryou')}) if foryou_enabled else {}
     m = get_model()
     types = {n: (c or {}).get("type") for n, c in (read_taste().get("people") or {}).items() if len(adult_people()) == len(PEOPLE) or n in adult_people()}
@@ -9183,8 +9215,11 @@ def personal_feed(lang):
         exclude = p["seen"] | p["negative"] | set(tired)
         foryou = picks_to_rows(sec.get("FOR YOU", []), lang, exclude)
         mixed = interleave(foryou.get("movie", []), foryou.get("series", []))
-        mixed = interleave(mixed, candidate_pool(p, n=100, metas=True))
+        mixed = interleave(mixed, candidate_pool(p, n=100, metas=True, trending_only=trending_only))
         out[rid('foryou')] = {"tv": polish_row(balance_row([x for x in mixed if quality_ok(x) and tone_ok(x)], foryou=True))[:40]}
+        # Derived feed provenance also covers AI picks and borrowed refills outside the filtered pool.
+        if trending_only:
+            out['_names'] = {rid('foryou'): {'trending_only': sorted(trending_only)}}
     if rewatch_enabled:
         recent = {e["key"] for e in p["entries"] if e["age"] < 60}
         out[rid('rewatchai')] = picks_to_rows(sec.get("REWATCH", []), lang, recent)
@@ -10278,9 +10313,9 @@ def build_feeds(d, hashes, retry, only=None, *, force=False):
 
 
 def finish_cold_enrichment(d, retry):
-    """Enrich after the first rows are published; retain them until their replacements are ready."""
+    """Build or enrich taste after the first feed pass; retain rows until their replacements are ready."""
     global _defer_enrichment
-    if not _defer_enrichment or not _profiles.get("household"):
+    if not _profiles.get("household") or (not _defer_enrichment and _model["m"] is not None):
         return
     _defer_enrichment = False
     with _model_lock:
@@ -10501,7 +10536,10 @@ def clean_note(note):
     note = re.sub(r"(?<=[A-Za-z])\.[a-z_]{3,}\b", "", note).strip()
     if len(note) > 90:
         note = note[:91].rsplit(" ", 1)[0].rstrip(" ,;:·")
-    return note.rstrip(" .") + "." if note else ""
+    note = note.rstrip(" .,!?:;·…")
+    if re.search(r"\b(my|your|his|her|its|our|their|a|an|the)$", note, re.I):
+        return ""
+    return note + "." if note else ""
 
 
 def card_parts(meta):
@@ -10546,7 +10584,7 @@ def human_cards(metas, person=None):
             if not reason_ok(part, meta["id"], kind="movie" if meta["type"] == "movie" else "tv"):
                 continue
             part = clean_note(part)
-            if counts.get(part.casefold(), 0) >= 2 or part in notes:
+            if not part or counts.get(part.casefold(), 0) >= 2 or part in notes:
                 continue
             notes.append(part)
             counts[part.casefold()] = counts.get(part.casefold(), 0) + 1
@@ -11320,6 +11358,7 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
         if cid in (rid('digital'), rid('toprated')):
             blocked = masks[0] | (masks[2] if len(masks) > 2 else set()) | getattr(above, "deep", above)
             metas = [x for x in row_list(cid, typ, lang) if x['id'] not in blocked
+                     and x['id'] not in p.get('seen', ()) and x['id'] not in p.get('negative', ())
                      and quality_ok(x) and preference_ok(x, cid, _viewer.get())]
             metas = preference_order(metas, cid, _viewer.get())
             return metas[:20] if len(metas) >= ROW_MIN else []
@@ -11451,6 +11490,15 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
             metas = rotate_row(metas, cid)
         metas = remote_order(metas, masks)
         metas = person_animation_sink(metas, who) if who in PEOPLE and cid in PERSON_ROWS | set(LANE_BENCH) else metas
+        if cid == rid('foryou'):
+            trending_only = {tuple(x) for x in names.get('trending_only', [])}
+            kept, trending = [], 0
+            for x in metas:
+                is_trending = (x['id'], 'movie' if x['type'] == 'movie' else 'tv') in trending_only
+                trending += is_trending
+                if not is_trending or trending <= 2:
+                    kept.append(x)
+            metas = kept
         return LaneRow(metas, names) if cid in LANE_ROWS else metas
     finally:
         if token is not None: _viewer.reset(token)
