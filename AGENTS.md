@@ -79,7 +79,7 @@ Mark cases for behaviour not built yet `"contract": "next"`; switch them to
 `now` when it lands. Run `python eval/commands_eval.py --fixture` and
 `python eval/decisions.py` offline. Before a release, compare models with
 `python eval/commands_eval.py --live --models A,B` and note accuracy and cost
-in `eval/README.md`.
+in the eval README.
 
 Version releases slowly. A patch release (1.4.1) carries fixes and small
 additions that need no DATA migration and change no command, setting or default.
