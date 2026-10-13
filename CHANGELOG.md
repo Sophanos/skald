@@ -4,6 +4,28 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.4.4
+
+You can now talk to your search results. After a search, type a reply in the same box and Skald treats it as a follow-up: "more like the second one", "but less violent", "also some series", "weniger albern". The decision model decides whether a reply refines the last search, acts on it, or starts a new one; no fixed phrases. Works in English, German, Serbian, Spanish and Portuguese.
+"I like these, save them as my taste" and "save this as a row" act on the titles you were just shown. Both show a preview with the titles and need the usual yes-code; guests and kids get the same limits as for likes and shelves.
+Skald remembers the last search per viewer for 30 minutes, in memory only.
+A slow AI answer is no longer thrown away when search gives up waiting; searching again shows it at once instead of paying for a new call.
+Search answers are no longer cached by the player, so follow-ups always reach Skald.
+New follow-up cases are in the router test set, and `python eval/route_compare.py` compares decision models and prompts on them (speed, cost, accuracy per question and language).
+
+**Data changes:** none. Search context stays in memory; saved taste and shelves use existing storage. Rolling back needs no restore.
+
+## 1.4.3
+
+Search now understands what you ask instead of matching fixed phrases. A decision model reads every search and answers three questions: is it a title, a wish, a genre filter or a command; should it show only titles you have not watched, only ones you have, or any; and do you want the widely acclaimed best or picks for your taste. It works with typos and missing apostrophes in English, German, Serbian, Spanish and Portuguese.
+"Dark" on its own still finds the series; "dark movies" now gives dark films picked for your taste instead of "Not in your library".
+"Animes I havent watched" and "something new to me" leave out everything in your watch history, and a row that falls under 8 titles tops up with unseen recommendations.
+Search rows show at most 15 titles, and the AI picks now see your watched titles so they suggest fewer of them.
+The router uses Perplexity's decision model, which scored best in a live test of five decision models (94% on 173 cases, about $0.015 per thousand searches). Set SKALD_ROUTE_MODEL to try another.
+The router test cases live in eval/fixtures/decisions/route_query_live.jsonl; `python eval/decisions.py --type route_query --live` scores them.
+
+**Data changes:** none. The data format stays 5 with no migration; rolling back needs no restore.
+
 ## 1.4.2
 
 For You keeps this week's trending titles out unless they fit your taste as well as your usual recommendations, and shows at most two of them.

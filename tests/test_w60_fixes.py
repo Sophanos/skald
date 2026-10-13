@@ -94,8 +94,9 @@ class Fixes(unittest.TestCase):
             with self.subTest(name=name):
                 body = llm['prompt']([fixture_rows(self.s, name)[0]['in']])
                 if llm['path'] == '/api/alpha/decisions':
-                    self.assertEqual(llm['model'], self.s.ROUTE_MODEL)
-                    self.assertEqual(body['model'], self.s.ROUTE_MODEL)
+                    model = self.s.ROUTE_MODEL if name == 'route_query' else self.s.LUNA_DECIDER_MODEL
+                    self.assertEqual(llm['model'], model)
+                    self.assertEqual(body['model'], model)
                 elif llm['path'] == '/api/v1/chat/completions':
                     self.assertNotEqual(llm['model'], self.s.ROUTE_MODEL)
                     self.assertNotEqual(body['model'], self.s.ROUTE_MODEL)

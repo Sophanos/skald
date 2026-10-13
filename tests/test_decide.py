@@ -3,6 +3,7 @@ import copy
 import datetime
 import json
 import math
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -29,6 +30,24 @@ class DecideTests(unittest.TestCase):
         if cost is not None:
             response["usage"] = {"cost": cost}
         return response
+
+    def test_route_model_default_and_environment_override_preserve_other_models(self):
+        for override, expected in (('', 'perplexity/pplx-decider-v1.1-27b'), ('synthetic/router', 'synthetic/router')):
+            with self.subTest(override=override), tempfile.TemporaryDirectory() as data, \
+                    patch.dict(os.environ, {'SKALD_ROUTE_MODEL': override}):
+                s = load_server(data)
+                try:
+                    spec = s.DECISIONS['route_query']
+                    self.assertEqual(s.ROUTE_MODEL, expected)
+                    self.assertEqual(spec['llm']['model'], expected)
+                    self.assertEqual(spec['llm']['path'], '/api/alpha/decisions')
+                    self.assertEqual(spec['llm']['prompt']([{'query': 'synthetic query'}]),
+                                     {'model': expected, 'state': 'synthetic query', 'questions': s.ROUTE_Q})
+                    self.assertEqual(s.PICK_MODEL, 'openai/gpt-6-luna')
+                    for name in ('resolve_title', 'mood_pick'):
+                        self.assertEqual(s.DECISIONS[name]['llm']['model'], 'openai/gpt-6-luna-decisions')
+                finally:
+                    close_server(s)
 
     def test_schema_edges_and_paths(self):
         s = self.s
@@ -92,18 +111,18 @@ class DecideTests(unittest.TestCase):
             with self.subTest(length=length), patch.object(self.s, "_pool") as pool, ReplayLLM(self.s) as replay:
                 pool.submit.return_value = picks
                 replay.arm(self.reply())
-                self.assertEqual(self.s.ai_plan(query), picks.result.return_value)
-                self.assertEqual(pool.submit.call_args.args[2], query)
+                self.assertIs(self.s.ai_plan(query)["picks"], picks)
+                self.assertTrue(pool.submit.call_args.args[2].startswith(query + "\n"))
                 self.assertEqual(replay.bodies[0]["state"], query[:200])
                 picks.cancel.assert_not_called()
         self.assertEqual(self.s.route_norm({"query": " " + "X" * 225 + " "}), {"query": "X" * 200})
 
-    def test_plan_validation_error_cancels_picks(self):
+    def test_plan_router_error_keeps_picks(self):
         self.s._model["m"] = None
         with patch.object(self.s, "_pool") as pool, patch.object(self.s, "decide", side_effect=ValueError("query")):
-            self.assertIsNone(self.s.ai_plan("query"))
-            pool.submit.return_value.cancel.assert_called_once_with()
-            pool.submit.return_value.result.assert_not_called()
+            pool.submit.return_value.result.return_value = []
+            self.assertIs(self.s.ai_plan("query")["picks"], pool.submit.return_value)
+            pool.submit.return_value.cancel.assert_not_called()
 
     def test_rule_precedes_cache_and_gates(self):
         row = fixture_rows(self.s, "resolve_title")[0]
@@ -392,5 +411,5 @@ class DecideTests(unittest.TestCase):
     def test_route_fixtures_match_original_answers(self):
         for row in fixture_rows(self.s, "route_query"):
             if row["expect"]["choice"] is not None:
-                answer = row["recorded"]["answers"]["route"]
+                answer = row["expect"]
                 self.assertEqual(self.s.route_parse(row["recorded"], [row["in"]])[0][0], answer)

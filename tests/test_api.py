@@ -120,6 +120,22 @@ class ApiTests(unittest.TestCase):
                                           headers={"Authorization": "Bearer " + bound})[0], expected)
         self.assertEqual(self.request(path, method="POST", body=body, headers={"Authorization": "Bearer " + bound})[0], 200)
 
+    def test_route_history_and_list_fields_and_compatible_defaults(self):
+        path = "/api/v1/decide/route_query"
+        for i, choices in enumerate(({}, {"watched": {"choice": "unseen"}, "list": {"choice": "best"}})):
+            with patch.object(self.s, "openrouter", return_value={"answers": {
+                    "route": {"choice": "request", "confidence": .9}, **choices}}) as model:
+                code, _, raw, _ = self.request(path, method="POST", body={"in": {"query": f"synthetic query {i}"}})
+            self.assertEqual(code, 200)
+            answer = json.loads(raw)["answer"]
+            self.assertEqual(answer, {"choice": "request", "confidence": .9,
+                                      "watched": "unseen" if choices else "any", "list": "best" if choices else "taste"})
+            self.assertEqual(set(model.call_args.args[1]["questions"]), {"route", "watched", "list"})
+            model.assert_called_once()
+        code, _, raw, _ = self.request(path, method="POST", body={"in": {"query": "synthetic fallback"}, "no_llm": True})
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(raw)["answer"], {"choice": None, "confidence": None, "watched": "any", "list": "taste"})
+
     def test_guards_and_status_codes(self):
         path = "/api/v1/decide/route_query"
         body = {"in": {"query": "guarded request"}, "no_llm": True}

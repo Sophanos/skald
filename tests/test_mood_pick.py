@@ -34,7 +34,7 @@ class MoodPickTests(ApiCase):
                 replay.arm({"answers": answers, "usage": {"cost": .001}})
                 self.pick()
                 self.assertEqual(replay.calls, 1)
-                self.assertEqual(replay.bodies[0], {"model": s.ROUTE_MODEL, "state": state, "questions": s.MOOD_Q,
+                self.assertEqual(replay.bodies[0], {"model": s.LUNA_DECIDER_MODEL, "state": state, "questions": s.MOOD_Q,
                                                    "usage": {"include": True}})
                 self.assertEqual(s._usage["calls"]["feed:mood_pick"], 1)
                 self.assertNotIn("feed:moodpick", s._usage["calls"])

@@ -70,7 +70,7 @@ class CommandEval(unittest.TestCase):
             with self.subTest(id=case.get('id')):
                 self.assertTrue({'id', 'group', 'text', 'expect', 'contract'} <= case.keys())
                 self.assertIn(case['contract'], ('now', 'next'))
-                self.assertIn(case.get('lang', 'en'), ('en', 'de', 'sr'))
+                self.assertIn(case.get('lang', 'en'), ('en', 'de', 'sr', 'es', 'pt'))
                 self.assertTrue(case['id'] and case['group'] and case['text'])
                 self.assertIn('op', case['expect'])
         for lang in ('de', 'sr'):
@@ -165,16 +165,17 @@ class CommandEval(unittest.TestCase):
             self.assertEqual(ev.main(['--fixture', '--json', str(dest)], out=out), 0)
             reports = json.loads(dest.read_text())
             report = reports[0]
-            self.assertEqual(report['count'], 337)
-            self.assertEqual(len(report['results']), 337)
+            self.assertEqual(report['count'], 355)
+            self.assertEqual(len(report['results']), 355)
             self.assertEqual(report['no_answer'], 145)
-            self.assertEqual(sum(r['op_ok'] for r in report['results']), 186)
-            self.assertEqual(sum(r['full_ok'] for r in report['results']), 185)
-            self.assertEqual(report['now_count'], 337)
-            self.assertEqual(report['now_op_accuracy'], 186 / 337)
-            self.assertEqual(report['now_full_accuracy'], 185 / 337)
+            self.assertEqual(sum(r['op_ok'] for r in report['results']), 204)
+            self.assertEqual(sum(r['full_ok'] for r in report['results']), 203)
+            self.assertEqual(report['now_count'], 355)
+            self.assertEqual(report['now_op_accuracy'], 204 / 355)
+            self.assertEqual(report['now_full_accuracy'], 203 / 355)
             self.assertEqual((report['next_count'], report['next_op_accuracy'], report['next_full_accuracy']), (0, 0, 0))
             self.assertEqual(report['by_tier'], {
+                'followup': {'now_count': 18, 'op_accuracy': 1, 'full_accuracy': 1},
                 'base': {'now_count': 131, 'op_accuracy': 72 / 131, 'full_accuracy': 72 / 131},
                 'hard': {'now_count': 206, 'op_accuracy': 114 / 206, 'full_accuracy': 113 / 206},
             })
@@ -188,7 +189,7 @@ class CommandEval(unittest.TestCase):
             self.assertIn('all op accuracy', out.getvalue())
             self.assertIn('now op accuracy', out.getvalue())
             self.assertIn('now full accuracy', out.getvalue())
-            self.assertIn('337', out.getvalue())
+            self.assertIn('355', out.getvalue())
             self.assertEqual(ev.evaluate(ev.load_cases()), reports)
 
     def test_live_metrics_request_and_secret_safe_output(self):

@@ -1,0 +1,211 @@
+{"q": "Dark", "route": ["title"], "tag": "bare-mood-title", "lang": "en"}
+{"q": "dark", "route": ["title"], "tag": "bare-mood-title", "lang": "en"}
+{"q": "Lost", "route": ["title"], "tag": "bare-mood-title", "lang": "en"}
+{"q": "Heat", "route": ["title"], "tag": "bare-mood-title", "lang": "en"}
+{"q": "Euphoria", "route": ["title"], "tag": "bare-mood-title", "lang": "en"}
+{"q": "Shameless", "route": ["title"], "tag": "bare-mood-title", "lang": "en"}
+{"q": "Brave", "route": ["title"], "tag": "bare-mood-title", "lang": "en"}
+{"q": "Frozen", "route": ["title"], "tag": "bare-mood-title", "lang": "en"}
+{"q": "Split", "route": ["title"], "tag": "bare-mood-title", "lang": "en"}
+{"q": "Cozy", "route": ["title", "request"], "tag": "bare-mood-title", "lang": "en"}
+{"q": "Dark series", "route": ["title", "request"], "tag": "bare-mood-title", "lang": "en"}
+{"q": "dark netflix", "route": ["title"], "tag": "bare-mood-title", "lang": "en"}
+{"q": "dark movies", "route": ["request"], "tag": "mood-type", "lang": "en"}
+{"q": "Dark Movies", "route": ["request"], "tag": "mood-type", "lang": "en"}
+{"q": "sad anime", "route": ["request"], "tag": "mood-type", "lang": "en"}
+{"q": "creepy films", "route": ["request"], "tag": "mood-type", "lang": "en"}
+{"q": "feel good movies", "route": ["request"], "tag": "mood-type", "lang": "en"}
+{"q": "cozy winter shows", "route": ["request"], "tag": "mood-type", "lang": "en"}
+{"q": "lost at sea movies", "route": ["request"], "tag": "mood-type", "lang": "en"}
+{"q": "frozen landscapes thrillers", "route": ["request"], "tag": "mood-type", "lang": "en"}
+{"q": "dunkle Filme", "route": ["request"], "tag": "mood-type", "lang": "de"}
+{"q": "lustige Serien", "route": ["request"], "tag": "mood-type", "lang": "de"}
+{"q": "mračni filmovi", "route": ["request"], "tag": "mood-type", "lang": "sr"}
+{"q": "smešne serije", "route": ["request"], "tag": "mood-type", "lang": "sr"}
+{"q": "страшне серије", "route": ["request"], "tag": "mood-type", "lang": "sr"}
+{"q": "heist movies", "route": ["request"], "tag": "mood-type", "lang": "en"}
+{"q": "something light tonight", "route": ["request"], "tag": "mood-type", "lang": "en"}
+{"q": "was lustiges für heute abend", "route": ["request"], "tag": "mood-type", "lang": "de"}
+{"q": "nešto opušteno za veče", "route": ["request"], "tag": "mood-type", "lang": "sr"}
+{"q": "нешто смешно за вечерас", "route": ["request"], "tag": "mood-type", "lang": "sr"}
+{"q": "documentaries about space", "route": ["request"], "tag": "mood-type", "lang": "en"}
+{"q": "Doku über Haie", "route": ["request"], "tag": "mood-type", "lang": "de"}
+{"q": "shows like Severance", "route": ["request"], "tag": "similar", "lang": "en"}
+{"q": "like Dark", "route": ["request"], "tag": "similar", "lang": "en"}
+{"q": "ähnlich wie Dark", "route": ["request"], "tag": "similar", "lang": "de"}
+{"q": "nešto kao Dark", "route": ["request"], "tag": "similar", "lang": "sr"}
+{"q": "something like Dark but funnier", "route": ["request"], "tag": "similar", "lang": "en"}
+{"q": "80s action", "route": ["discover"], "tag": "discover", "lang": "en"}
+{"q": "horror 2023", "route": ["discover"], "tag": "discover", "lang": "en"}
+{"q": "Komödie 1995", "route": ["discover"], "tag": "discover", "lang": "de"}
+{"q": "sci-fi 1970s", "route": ["discover"], "tag": "discover", "lang": "en"}
+{"q": "drama 2010s", "route": ["discover"], "tag": "discover", "lang": "en"}
+{"q": "akcioni filmovi 90-ih", "route": ["discover", "request"], "tag": "discover", "lang": "sr"}
+{"q": "anime I havent watched", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "en"}
+{"q": "Animes I Haven't watched", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "en"}
+{"q": "Animes I  havent watched", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "en"}
+{"q": "movies i havnt seen", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "en"}
+{"q": "shows we never watched", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "en"}
+{"q": "something new to me", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "en"}
+{"q": "films I havent gotten around to", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "en"}
+{"q": "thrillers I missed", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "en"}
+{"q": "unseen horror movies", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "en"}
+{"q": "Filme die ich noch nicht gesehen habe", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "de"}
+{"q": "Serien, die wir nie geschaut haben", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "de"}
+{"q": "filmovi koje nisam gledao", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "sr"}
+{"q": "serije koje nismo gledali", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "sr"}
+{"q": "филмови које нисам гледао", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "sr"}
+{"q": "dark anime i havent watched", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "en"}
+{"q": "shows like Dark I havent seen", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "en"}
+{"q": "shows I already watched", "route": ["request"], "watched": "seen", "tag": "seen", "lang": "en"}
+{"q": "rewatch something cozy", "route": ["request"], "watched": "seen", "tag": "seen", "lang": "en"}
+{"q": "a comedy I've seen before", "route": ["request"], "watched": "seen", "tag": "seen", "lang": "en"}
+{"q": "Filme die ich schon kenne", "route": ["request"], "watched": "seen", "tag": "seen", "lang": "de"}
+{"q": "nešto što smo već gledali", "route": ["request"], "watched": "seen", "tag": "seen", "lang": "sr"}
+{"q": "best anime of all time", "route": ["request"], "list": "best", "tag": "best", "lang": "en"}
+{"q": "bset horror", "route": ["request"], "list": "best", "tag": "best", "lang": "en"}
+{"q": "greatest sci-fi films", "route": ["request"], "list": "best", "tag": "best", "lang": "en"}
+{"q": "beste Filme aller Zeiten", "route": ["request"], "list": "best", "tag": "best", "lang": "de"}
+{"q": "najbolji filmovi", "route": ["request"], "list": "best", "tag": "best", "lang": "sr"}
+{"q": "класици", "route": ["request"], "list": "best", "tag": "best", "lang": "sr"}
+{"q": "must-see documentaries", "route": ["request"], "list": "best", "tag": "best", "lang": "en"}
+{"q": "critically acclaimed dramas", "route": ["request"], "list": "best", "tag": "best", "lang": "en"}
+{"q": "best anime I havent seen", "route": ["request"], "watched": "unseen", "list": "best", "tag": "best+unseen", "lang": "en"}
+{"q": "best horror we haven't seen", "route": ["request"], "watched": "unseen", "list": "best", "tag": "best+unseen", "lang": "en"}
+{"q": "najbolje serije koje nisam gledao", "route": ["request"], "watched": "unseen", "list": "best", "tag": "best+unseen", "lang": "sr"}
+{"q": "Unseen", "route": ["title"], "tag": "lookalike", "lang": "en"}
+{"q": "The Unseen", "route": ["title"], "tag": "lookalike", "lang": "en"}
+{"q": "Never Have I Ever", "route": ["title"], "tag": "lookalike", "lang": "en"}
+{"q": "Best in Show", "route": ["title"], "tag": "lookalike", "lang": "en"}
+{"q": "The Best Offer", "route": ["title"], "tag": "lookalike", "lang": "en"}
+{"q": "Das Beste kommt noch", "route": ["title"], "tag": "lookalike", "lang": "de"}
+{"q": "The Greatest Showman", "route": ["title"], "tag": "lookalike", "lang": "en"}
+{"q": "I Know What You Did Last Summer", "route": ["title"], "tag": "lookalike", "lang": "en"}
+{"q": "a girl who has never seen the sea", "route": ["request"], "tag": "lookalike", "lang": "en"}
+{"q": "Paddington", "route": ["title"], "tag": "title", "lang": "en"}
+{"q": "brekaing bad", "route": ["title"], "tag": "title", "lang": "en"}
+{"q": "Stranger thngs", "route": ["title"], "tag": "title", "lang": "en"}
+{"q": "Haus des Geldes", "route": ["title"], "tag": "title", "lang": "de"}
+{"q": "Kuća od papira", "route": ["title"], "tag": "title", "lang": "sr"}
+{"q": "Игра престола", "route": ["title"], "tag": "title", "lang": "sr"}
+{"q": "Tom Hanks", "route": ["title"], "tag": "title", "lang": "en"}
+{"q": "christopher nolan", "route": ["title"], "tag": "title", "lang": "en"}
+{"q": "dune 2", "route": ["title"], "tag": "title", "lang": "en"}
+{"q": "hide anime for me", "route": ["command"], "tag": "command", "lang": "en"}
+{"q": "no more horror", "route": ["command"], "tag": "command", "lang": "en"}
+{"q": "I loved Dark", "route": ["command"], "tag": "command", "lang": "en"}
+{"q": "I already saw Dune", "route": ["command"], "tag": "command", "lang": "en"}
+{"q": "create a catalog about psychological crime", "route": ["command"], "tag": "command", "lang": "en"}
+{"q": "make a shelf with comedies", "route": ["command"], "tag": "command", "lang": "en"}
+{"q": "neue Reihe mit Horrorfilmen", "route": ["command"], "tag": "command", "lang": "de"}
+{"q": "dodaj policu sa krimi filmovima", "route": ["command"], "tag": "command", "lang": "sr"}
+{"q": "nemoj više horore", "route": ["command"], "tag": "command", "lang": "sr"}
+{"q": "stop focusing on German", "route": ["command"], "tag": "command", "lang": "en"}
+{"q": "less scary stuff for the kids", "route": ["command"], "tag": "command", "lang": "en"}
+{"q": "what do you know about Ana", "route": ["command"], "tag": "command", "lang": "en"}
+{"q": "Dunkel", "route": ["title", "request"], "tag": "bare-mood-title", "lang": "de"}
+{"q": "Das Boot", "route": ["title"], "tag": "title", "lang": "de"}
+{"q": "Babylon Berlin", "route": ["title"], "tag": "title", "lang": "de"}
+{"q": "herr der ringe", "route": ["title"], "tag": "title", "lang": "de"}
+{"q": "gruselige Serien", "route": ["request"], "tag": "mood-type", "lang": "de"}
+{"q": "traurige Animes", "route": ["request"], "tag": "mood-type", "lang": "de"}
+{"q": "etwas Gemütliches für Sonntag", "route": ["request"], "tag": "mood-type", "lang": "de"}
+{"q": "Filme wie Interstellar", "route": ["request"], "tag": "similar", "lang": "de"}
+{"q": "Animes die ich noch nich gesehn hab", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "de"}
+{"q": "was wir schon geschaut haben", "route": ["request"], "watched": "seen", "tag": "seen", "lang": "de"}
+{"q": "die besten Krimiserien", "route": ["request"], "list": "best", "tag": "best", "lang": "de"}
+{"q": "beste Horrorfilme die ich nicht kenne", "route": ["request"], "watched": "unseen", "list": "best", "tag": "best+unseen", "lang": "de"}
+{"q": "keine Horrorfilme mehr", "route": ["command"], "tag": "command", "lang": "de"}
+{"q": "Thriller 2019", "route": ["discover"], "tag": "discover", "lang": "de"}
+{"q": "Oscúro", "route": ["title", "request"], "tag": "bare-mood-title", "lang": "es"}
+{"q": "La casa de papel", "route": ["title"], "tag": "title", "lang": "es"}
+{"q": "Élite", "route": ["title"], "tag": "title", "lang": "es"}
+{"q": "el señor de los anillos", "route": ["title"], "tag": "title", "lang": "es"}
+{"q": "Penélope Cruz", "route": ["title"], "tag": "title", "lang": "es"}
+{"q": "Lo mejor está por llegar", "route": ["title"], "tag": "lookalike", "lang": "es"}
+{"q": "películas oscuras", "route": ["request"], "tag": "mood-type", "lang": "es"}
+{"q": "peliculas de miedo", "route": ["request"], "tag": "mood-type", "lang": "es"}
+{"q": "series graciosas", "route": ["request"], "tag": "mood-type", "lang": "es"}
+{"q": "anime triste", "route": ["request"], "tag": "mood-type", "lang": "es"}
+{"q": "algo tranquilo para esta noche", "route": ["request"], "tag": "mood-type", "lang": "es"}
+{"q": "documentales sobre el océano", "route": ["request"], "tag": "mood-type", "lang": "es"}
+{"q": "series como Dark", "route": ["request"], "tag": "similar", "lang": "es"}
+{"q": "algo parecido a Narcos", "route": ["request"], "tag": "similar", "lang": "es"}
+{"q": "acción de los 80", "route": ["discover"], "tag": "discover", "lang": "es"}
+{"q": "comedia 2015", "route": ["discover"], "tag": "discover", "lang": "es"}
+{"q": "animes que no he visto", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "es"}
+{"q": "pelis que no hemos visto todavia", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "es"}
+{"q": "series que ya vi", "route": ["request"], "watched": "seen", "tag": "seen", "lang": "es"}
+{"q": "volver a ver algo divertido", "route": ["request"], "watched": "seen", "tag": "seen", "lang": "es"}
+{"q": "las mejores películas de la historia", "route": ["request"], "list": "best", "tag": "best", "lang": "es"}
+{"q": "clásicos del cine", "route": ["request"], "list": "best", "tag": "best", "lang": "es"}
+{"q": "mejores series que no he visto", "route": ["request"], "watched": "unseen", "list": "best", "tag": "best+unseen", "lang": "es"}
+{"q": "no más terror", "route": ["command"], "tag": "command", "lang": "es"}
+{"q": "oculta el anime para mí", "route": ["command"], "tag": "command", "lang": "es"}
+{"q": "crea una fila de comedias románticas", "route": ["command"], "tag": "command", "lang": "es"}
+{"q": "me encantó Dark", "route": ["command"], "tag": "command", "lang": "es"}
+{"q": "Escuro", "route": ["title", "request"], "tag": "bare-mood-title", "lang": "pt"}
+{"q": "Cidade de Deus", "route": ["title"], "tag": "title", "lang": "pt"}
+{"q": "Sintonia", "route": ["title"], "tag": "title", "lang": "pt"}
+{"q": "o senhor dos aneis", "route": ["title"], "tag": "title", "lang": "pt"}
+{"q": "Wagner Moura", "route": ["title"], "tag": "title", "lang": "pt"}
+{"q": "Ainda Estou Aqui", "route": ["title"], "tag": "lookalike", "lang": "pt"}
+{"q": "filmes sombrios", "route": ["request"], "tag": "mood-type", "lang": "pt"}
+{"q": "filmes de terror", "route": ["request", "discover"], "tag": "mood-type", "lang": "pt"}
+{"q": "séries engraçadas", "route": ["request"], "tag": "mood-type", "lang": "pt"}
+{"q": "anime triste", "route": ["request"], "tag": "mood-type", "lang": "pt"}
+{"q": "algo leve pra hoje à noite", "route": ["request"], "tag": "mood-type", "lang": "pt"}
+{"q": "documentários sobre o espaço", "route": ["request"], "tag": "mood-type", "lang": "pt"}
+{"q": "séries parecidas com Dark", "route": ["request"], "tag": "similar", "lang": "pt"}
+{"q": "tipo Breaking Bad", "route": ["request"], "tag": "similar", "lang": "pt"}
+{"q": "ação anos 80", "route": ["discover"], "tag": "discover", "lang": "pt"}
+{"q": "drama 2012", "route": ["discover"], "tag": "discover", "lang": "pt"}
+{"q": "animes que eu não assisti", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "pt"}
+{"q": "filmes q ainda nao vi", "route": ["request"], "watched": "unseen", "tag": "unseen", "lang": "pt"}
+{"q": "séries que já assistimos", "route": ["request"], "watched": "seen", "tag": "seen", "lang": "pt"}
+{"q": "rever algo aconchegante", "route": ["request"], "watched": "seen", "tag": "seen", "lang": "pt"}
+{"q": "os melhores filmes de todos os tempos", "route": ["request"], "list": "best", "tag": "best", "lang": "pt"}
+{"q": "clássicos do cinema", "route": ["request"], "list": "best", "tag": "best", "lang": "pt"}
+{"q": "melhores animes que eu não vi", "route": ["request"], "watched": "unseen", "list": "best", "tag": "best+unseen", "lang": "pt"}
+{"q": "chega de terror", "route": ["command"], "tag": "command", "lang": "pt"}
+{"q": "esconder anime pra mim", "route": ["command"], "tag": "command", "lang": "pt"}
+{"q": "cria uma prateleira de comédias", "route": ["command"], "tag": "command", "lang": "pt"}
+{"q": "amei Dark", "route": ["command"], "tag": "command", "lang": "pt"}
+{"q": "more like this", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "also some series", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "but less violent", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "something like this but not quite so slow", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "more like the second one", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "and only ones I havent seen", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "refine", "route": ["request"], "watched": "unseen", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "just the best of these", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "refine", "route": ["request"], "watched": "any", "list": "best", "tag": "followup", "lang": "en"}
+{"q": "newer ones", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "what about from the 70s", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "I like these, save them as my taste", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "act", "route": ["command"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "save this as a row", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "act", "route": ["command"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "hide all of these", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "act", "route": ["command"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "Paddington", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "new", "route": ["title"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "Dark", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "new", "route": ["title"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "cozy shows", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "new", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "anime I havent watched", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "new", "route": ["request"], "watched": "unseen", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "no more horror", "last": "dark movies", "shown": "Se7en, Prisoners, Nightcrawler", "previous": "new", "route": ["command"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "more of that", "last": "sad anime", "shown": "Clannad, Your Lie in April, Anohana", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "but happier", "last": "sad anime", "shown": "Clannad, Your Lie in April, Anohana", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "something in between this and a comedy", "last": "sad anime", "shown": "Clannad, Your Lie in April, Anohana", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "Tom Hanks", "last": "sad anime", "shown": "Clannad, Your Lie in April, Anohana", "previous": "new", "route": ["title"], "watched": "any", "list": "taste", "tag": "followup", "lang": "en"}
+{"q": "noch mehr davon", "last": "dunkle Filme", "shown": "Prisoners, Sicario, Zodiac", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "de"}
+{"q": "aber weniger brutal", "last": "dunkle Filme", "shown": "Prisoners, Sicario, Zodiac", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "de"}
+{"q": "auch Serien", "last": "dunkle Filme", "shown": "Prisoners, Sicario, Zodiac", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "de"}
+{"q": "speichere das als Reihe", "last": "dunkle Filme", "shown": "Prisoners, Sicario, Zodiac", "previous": "act", "route": ["command"], "watched": "any", "list": "taste", "tag": "followup", "lang": "de"}
+{"q": "lustige Serien", "last": "dunkle Filme", "shown": "Prisoners, Sicario, Zodiac", "previous": "new", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "de"}
+{"q": "još ovakvih", "last": "mračni filmovi", "shown": "Se7en, Prisoners, Zodiac", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "sr"}
+{"q": "ali manje krvavo", "last": "mračni filmovi", "shown": "Se7en, Prisoners, Zodiac", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "sr"}
+{"q": "sačuvaj ovo kao policu", "last": "mračni filmovi", "shown": "Se7en, Prisoners, Zodiac", "previous": "act", "route": ["command"], "watched": "any", "list": "taste", "tag": "followup", "lang": "sr"}
+{"q": "Kuća od papira", "last": "mračni filmovi", "shown": "Se7en, Prisoners, Zodiac", "previous": "new", "route": ["title"], "watched": "any", "list": "taste", "tag": "followup", "lang": "sr"}
+{"q": "más como estos", "last": "películas oscuras", "shown": "Se7en, Prisoners, El hoyo", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "es"}
+{"q": "pero menos lentas", "last": "películas oscuras", "shown": "Se7en, Prisoners, El hoyo", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "es"}
+{"q": "me gustan, guárdalos en mi gusto", "last": "películas oscuras", "shown": "Se7en, Prisoners, El hoyo", "previous": "act", "route": ["command"], "watched": "any", "list": "taste", "tag": "followup", "lang": "es"}
+{"q": "series graciosas", "last": "películas oscuras", "shown": "Se7en, Prisoners, El hoyo", "previous": "new", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "es"}
+{"q": "mais desses", "last": "filmes sombrios", "shown": "Se7en, Prisoners, Zodiac", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "pt"}
+{"q": "também séries", "last": "filmes sombrios", "shown": "Se7en, Prisoners, Zodiac", "previous": "refine", "route": ["request"], "watched": "any", "list": "taste", "tag": "followup", "lang": "pt"}
+{"q": "salva isso como prateleira", "last": "filmes sombrios", "shown": "Se7en, Prisoners, Zodiac", "previous": "act", "route": ["command"], "watched": "any", "list": "taste", "tag": "followup", "lang": "pt"}
+{"q": "Cidade de Deus", "last": "filmes sombrios", "shown": "Se7en, Prisoners, Zodiac", "previous": "new", "route": ["title"], "watched": "any", "list": "taste", "tag": "followup", "lang": "pt"}

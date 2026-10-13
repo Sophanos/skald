@@ -66,7 +66,7 @@ class I18nTitles(unittest.TestCase):
         it = {'id': 990001, 'title': 'Το ταξίδι', 'original_title': 'Journey', 'original_language': 'en'}
         en = {'title': 'Journey'}
         with patch.object(s, 'refresh_preferences'), patch.object(s, 'safety_subject', return_value='both'), \
-                patch.object(s, 'kids_age', return_value=None), patch.object(s, 'seen_intent', return_value=(None, None)), \
+                patch.object(s, 'kids_age', return_value=None), \
                 patch.object(s, 'genres', return_value={}), patch.object(s, 'search_both', return_value=([it], {it['id']: en})):
             self.assertEqual(s.search('movie', it['title'], 'el-GR', title_only=True)['metas'][0]['name'], it['title'])
         for convert in (s.to_meta, s.row_meta):

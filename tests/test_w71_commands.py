@@ -29,7 +29,7 @@ class SettingsCommands(unittest.TestCase):
 
     def test_glm_fallback_and_override(self):
         spec = self.s.DECISIONS['parse_command']
-        self.assertEqual(spec['ver'], 9)
+        self.assertEqual(spec['ver'], 10)
         fallback = spec['llm']['fallback']
         self.assertEqual(fallback['timeout'], 6)
         body = fallback['prompt']([{'query': 'hide anime'}])
@@ -330,18 +330,16 @@ class SettingsCommands(unittest.TestCase):
         for query in ('best catalog of crime movies', 'a list of crime movies', 'catalog about crime', 'something about crime tonight'):
             self.assertEqual(c.parse_shelf(query, self.s), c.NONE)
 
-    def test_route_prompt_creation_examples_and_version_cache(self):
+    def test_route_prompt_meaning_and_version_cache(self):
         spec = self.s.DECISIONS['route_query']
-        self.assertEqual(spec['ver'], 2)
+        self.assertEqual(spec['ver'], 6)
         criteria = spec['llm']['prompt']([{'query': 'Create a new catalog about psygoloy crime'}])['questions']['route']['criteria']
-        for text in ('creating', 'adding', 'making', 'catalog', 'row', 'shelf', 'about', 'for', 'with', 'neue Reihe mit', 'erstelle einen Katalog über', 'Create a new catalog about psygoloy crime'):
-            self.assertIn(text, criteria['command'])
-        self.assertIn('one-off', criteria['request'])
-        self.assertIn('best catalog of crime movies', criteria['request'])
+        self.assertIn('change or remember something for later', criteria['command'])
+        self.assertIn('changes nothing saved', criteria['request'])
         query = 'Create a new catalog about psygoloy crime'
         inp = self.s.route_norm({'query': query})
         digest = self.s.hashlib.sha256(json.dumps(inp, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()[:32]
-        self.s._decision_put('route_query|1|'+digest, {**spec, 'ver': 1}, {'choice': 'request', 'confidence': .9}, .9)
+        self.s._decision_put('route_query|4|'+digest, {**spec, 'ver': 4}, {'choice': 'request', 'confidence': .9}, .9)
         with patch.object(self.s, 'openrouter', return_value={'answers': {'route': {'choice': 'command', 'confidence': .99}}}) as request:
             answer = self.s.decide('route_query', {'query': query})
         self.assertEqual(answer['answer']['choice'], 'command')

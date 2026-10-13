@@ -130,6 +130,7 @@ class ApiViewsTests(ApiCase):
                     for i in range(2000):
                         replay.arm({"answers": {"route": {"choice": "title", "confidence": 1.}}, "usage": {"cost": 0}})
                         self.assertEqual(s.decide("route_query", {"query": f"Synthetic memory gate {i}"})["source"], "llm")
+                        replay.bodies.clear()  # Measure the ladder, not retained copies of the model prompt.
                 s.flush_decisions()
             peak = tracemalloc.get_traced_memory()[1]
         finally:

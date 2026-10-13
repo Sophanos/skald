@@ -41,6 +41,8 @@ REGISTRY = {
     'ignore_learning': _op('title', hint='ignore_learning stops one watched title shaping this person\'s taste; history stays: values [title]: "Lerne nichts aus meinem Abspielen von Dune".'),
     'reattribute': _op('title', hint='reattribute moves a watch to the member who really watched it: values [title], person that member: "Arrival je gledao Ben, ne ja" person ben.'),
     'explain': _op('title', kids=True, hint='explain is a why question about one title in the picks and changes nothing: "Why is Dune here?" values [Dune].'),
+    'like_results': _op('results', feedback='love', hint='like_results saves every shown result as the actor\'s taste: "I like these, save them as my taste". Use only with shown results context; kind null values [] person null.'),
+    'shelf_from_results': _op('results', kids=True, hint='shelf_from_results saves the shown results as a row or shelf named from the last search: "save this as a row". Use only with shown results context; kind null values [] person null.'),
 }
 OPS = tuple(REGISTRY)
 BASE = ('op', 'kind', 'values', 'person')
@@ -643,30 +645,37 @@ def register(s):
     effort = getattr(s, 'COMMAND_EFFORT', 'low')
     fallback_model = getattr(s, 'COMMAND_FALLBACK_MODEL', 'z-ai/glm-5.3-flash')
     fallback_effort = getattr(s, 'COMMAND_FALLBACK_EFFORT', 'low')
-    def request(query, model, effort):
+    def request(inp, model, effort):
         return {'model': model, 'messages': [{'role': 'system', 'content': prompt},
-                                           {'role': 'user', 'content': query}],
+                                           {'role': 'user', 'content': command_state(inp)}],
                 'response_format': {'type': 'json_object'}, 'reasoning': {'effort': effort},
                 'max_tokens': 200 if effort == 'none' else 1200}
     def parse(reply):
         return parse_json(reply['choices'][0]['message']['content'])
     def rule(inp, params):
+        if inp.get('last') is not None:
+            return None
         answer = parse_local(inp['query'], s)
         q = inp['query'].strip().casefold()
         return (answer, 1) if answer['op'] or ABOUT.fullmatch(q) or q.startswith('stop ') or q in ('sunday bloody sunday', 'heist', 'yes man', 'reset my taste') or re.fullmatch(r'best (?:catalog|row|shelf|list) (?:of|about|for|with) .+', q) else None
     def fallback_request(batch):
-        body = request(batch[0]['query'], fallback_model, fallback_effort)
+        body = request(batch[0], fallback_model, fallback_effort)
         body['max_tokens'] = 1200
         return body
-    s.decision('parse_command', ver=9, lane='search', cap=None, ttl=30*s.DAY,
-        inp={'query': str}, out=OUT, norm=s.route_norm, rule=rule, params={},
+    s.decision('parse_command', ver=10, lane='search', cap=None, ttl=30*s.DAY,
+        inp={'query': str, 'last': (str, None), 'shown': (str, [str, 30], None)}, out=OUT, norm=s.route_norm, rule=rule, params={},
         llm={'path': '/api/v1/chat/completions', 'model': model, 'batch': 1, 'timeout': 6,
-             'prompt': lambda b: request(b[0]['query'], model, effort),
+             'prompt': lambda b: request(b[0], model, effort),
              'parse': lambda r, b: [(parse(r), 1)],
              'fallback': {'path': '/api/v1/chat/completions', 'model': fallback_model, 'batch': 1, 'timeout': 6,
                           'prompt': fallback_request,
                           'parse': lambda r, b: [(parse(r), 1)]}},
         fallback=lambda i, e: (dict(NONE), 0), requires=('OR_KEY',), serving=False, min_acc=.95)
+def command_state(inp):
+    shown = inp.get('shown') or ''
+    if isinstance(shown, list):
+        shown = ', '.join(shown)
+    return f"Last search: {inp['last']}\nShown titles: {shown}\nTyped now: {inp['query']}" if inp.get('last') is not None else inp['query']
 def pending(s):
     if not hasattr(s, '_commands_pending'):
         s._commands_pending = {}
@@ -763,14 +772,19 @@ def resolve(s, change):
         raise ValueError('Skald cannot resolve this title yet')
     item = next(x for x in choices if x['key'] == pick['key'] and x['kind'] == pick['kind'])
     return {**pick, 'title': item['title'], 'year': str(item['year'] or '')}
-def preview(s, text, viewer=None, bound=None, answer=None, scope=None, prior=None, base=None):
-    local = parse_local(text, s, viewer, bound)
-    if text.strip().casefold().startswith('stop ') and not local['op']:
+def preview(s, text, viewer=None, bound=None, answer=None, scope=None, prior=None, base=None, results=None):
+    local = dict(NONE) if results else parse_local(text, s, viewer, bound)
+    if not results and text.strip().casefold().startswith('stop ') and not local['op']:
         return None
-    change = copy.deepcopy(answer if answer is not None else local if local['op'] else s.decide('parse_command', {'query': text})['answer'])
+    inp = {'query': text}
+    if results:
+        inp.update(last=results['query'], shown=[x['title'] for x in s.shown_titles(results)])
+    change = copy.deepcopy(answer if answer is not None else local if local['op'] else s.decide('parse_command', inp)['answer'])
     change = {**dict.fromkeys(OUT), **change}
     s.check(OUT, change)
     change['values'] = change['values'] or []
+    if change['op'] in ('like_results', 'shelf_from_results'):
+        return results_preview(s, text, change, viewer, bound, results)
     extra = EXTRA.get(REGISTRY.get(change['op'], {}).get('group'))
     if extra:
         return extra(s, text, change, viewer, bound, scope, prior)
@@ -858,6 +872,29 @@ def preview(s, text, viewer=None, bound=None, answer=None, scope=None, prior=Non
         plan['undo_before'] = undo_stamp(journal(s), targets)
     plan['plan'] = hashlib.sha256(json.dumps(plan, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
     return plan
+def results_preview(s, text, change, viewer, bound, results):
+    items = s.shown_titles(results) if results else []
+    if not items or change['kind'] is not None or change['values'] or change['person'] is not None:
+        raise ValueError('Search for titles first; use the shown results for yourself')
+    for item in items:
+        s.check({**s.TITLE, 'title': str, 'year': (str, None)}, item)
+    if change['op'] == 'shelf_from_results':
+        plan = shelf_preview(s, dict(op='shelf_add', kind=None, values=[results['query'][:100], 'always'], person=None), viewer, bound)
+        plan.update(seeds=items, text=text[:200], source='search')
+    else:
+        targets = people(s, viewer=viewer, bound=bound)
+        cfg = config(s)
+        parts = []
+        for item in items:
+            s.validate_feedback({**item, 'year': item.get('year') or '', 'who': targets[0], 'action': 'love'})
+            part = dict(people=targets, change=dict(op='like', kind=item['kind'], values=[item['title']], person=None),
+                        before={p: copy.deepcopy(cfg['taste']['people'].get(p, {}).get('prefs')) for p in targets},
+                        item={**item, 'year': item.get('year') or ''}, name='Like '+item['title']+' for '+', '.join(s.LABELS[p] for p in targets), text=text[:200], source='search')
+            part['plan'] = hashlib.sha256(json.dumps(part, sort_keys=True).encode()).hexdigest()[:16]
+            parts.append(part)
+        plan = dict(people=targets, result_plans=parts, name='Like shown titles for '+', '.join(s.LABELS[p] for p in targets))
+    plan['description'] = '\n'.join(x['title']+(' ('+x['year']+')' if x.get('year') else '') for x in items)
+    return seal(plan)
 def plan_preview(s, text, change, viewer, bound, scope, prior):
     steps = change['steps'] or []
     if len(steps) < 2 or any(REGISTRY.get(x['op'], {}).get('group') not in ('prefs', 'rows') for x in steps):
@@ -1509,6 +1546,11 @@ def apply(s, plan, *, cfg=None):
         from .migrate import ensure
         ensure(s.DATA)
         s.refresh_preferences()
+        if plan.get('result_plans'):
+            # Keep the existing one-event journal format, with one undo per title.
+            for part in plan['result_plans']:
+                apply(s, part)
+            return {'name': 'Done: '+plan['name']+". Search 'undo' once per title to revert."}
         if plan.get('wish'):
             from . import history
             with history.locked(s.DATA), os.fdopen(os.open(Path(s.DATA)/'wishes.jsonl', os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), 'a') as f:
@@ -1544,6 +1586,14 @@ def apply(s, plan, *, cfg=None):
             s.shelf_change(shelf['scope'], shelf['op'], plan=shelf['plan'])
             p = shelf['scope']
             after = {'wishes': [w for w in shelves.read(s)['wishes'] if w['scope'] == p], 'count': shelves.slot_count(s, p)}
+            if plan.get('seeds'):
+                # shortcut: pins use the feed cache; use durable shelf seeds if they must survive cache resets.
+                wish = next(w for w in after['wishes'] if w['slot'] == shelf['slot'])
+                s._feeds[s.rid(f'shelfraw_{p}_{shelf["slot"]}'), s.LANG] = {
+                    'wish': wish['id'], 'window': 'always', 'status': 'pinned',
+                    'candidates': [{'id': x['key'], 'type': 'movie' if x['kind'] == 'movie' else 'series',
+                                    'name': x['title'], 'releaseInfo': x.get('year') or ''} for x in plan['seeds']]}
+                s.save_feeds()
             if plan.get('months'):
                 with shelves.locked(s):
                     added = {w['id'] for w in after['wishes']} - {w['id'] for w in before_shelf['wishes']}
@@ -1868,35 +1918,37 @@ def suggestion_cards(s, scope, viewer, bound, stype, dismiss=None, *, text=''):
             metas.append(meta)
     return {'metas': metas} if metas else card(s, 'No suggestions yet', stype)
 
-def special(s, query, stype, routed=False):
+def special(s, query, stype, routed=False, results=None):
     with _LOCK:
         s.refresh_preferences()
         scope, bound, viewer = context(s)
         q = query.strip().casefold()
         mutate = q in ('undo', 'rückgängig') or bool(re.fullmatch(r'no \d{2}', q)) or (q.startswith('yes ') and len(q) == 6 and q[4:].isdigit())
-        action = lambda: _special(s, query, stype, routed)
+        action = lambda: _special(s, query, stype, routed, results)
         result = once(s, scope, q, action) if q in ('help', '?', 'hilfe') or mutate and bound != s.GUEST and viewer != s.GUEST else action()
         if result is not None and stype != 'movie':
             return {'metas': []}
         for meta in (result or {}).get('metas', []):
             meta['type'] = stype
         return result
-def _special(s, query, stype, routed=False):
+def _special(s, query, stype, routed=False, results=None):
     scope, bound, viewer = context(s)
     q = query.casefold().strip()
     help_q = q in ('help', '?', 'hilfe')
     ideas = q in ('ideas', 'suggest')
-    local = parse_local(query, s, viewer, bound)['op']
-    if q.startswith('stop ') and not local or REGISTRY.get(local, {}).get('group') == 'search':
+    local = None if results else parse_local(query, s, viewer, bound)['op']
+    if not results and (q.startswith('stop ') and not local or REGISTRY.get(local, {}).get('group') == 'search'):
         return None
     dismissing = bool(re.fullmatch(r'no \d{2}', q))
-    named = parse_about(query, s)
-    about = named is not False or q in ('my settings', 'settings')
+    named = False if results else parse_about(query, s)
+    about = not results and (named is not False or q in ('my settings', 'settings'))
     named = named if named is not False else None
-    match = None if about else (re.fullmatch(r'(?:my )?settings(?: for)? (.+)', q) or re.fullmatch(r"(.+?)(?:'s)? (?:my )?settings", q))
+    match = None if about or results else (re.fullmatch(r'(?:my )?settings(?: for)? (.+)', q) or re.fullmatch(r"(.+?)(?:'s)? (?:my )?settings", q))
     if match:
         about, named = True, member_name(s, match[1])
     confirming = q in ('y', 'ye', 'yes', 'ja', 'ok') or (q.startswith('yes ') and q[4:].isdigit())
+    if results and not routed and not (help_q or ideas or dismissing or confirming or q in ('undo', 'rückgängig')):
+        return None
     if not (help_q or ideas or dismissing or local or about or routed or confirming or q in ('undo', 'rückgängig')):
         return None
     try:
@@ -1956,7 +2008,7 @@ def _special(s, query, stype, routed=False):
         prior = get_pending(s, scope)
         pending(s).pop(scope, None)
         getattr(s, '_command_suggestions', {}).pop(scope, None)
-        plan = preview(s, query, viewer, bound, scope=scope, prior=prior)
+        plan = preview(s, query, viewer, bound, scope=scope, prior=prior, results=results)
         if plan is not None and plan.get('search'):
             return None
         if plan is None:

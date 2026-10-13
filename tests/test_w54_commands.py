@@ -28,7 +28,8 @@ class Commands(unittest.TestCase):
     def test_route_command_vs_title_guard(self):
         self.assertIn('command', self.s.ROUTE_Q['route']['criteria'])
         for title in ('No Country for Old Men', 'Never Have I Ever', 'Yes Man'):
-            with patch.object(self.s, 'search_both', return_value=([{'id': 1, 'title': title}], {})), patch.object(self.s, 'genres', return_value={}), patch.object(self.s, 'to_meta', return_value={'id': 'tmdb:1'}), patch.object(self.s, 'OR_KEY', 'stub'), patch.object(self.s, 'looks_like_title', return_value=True):
+            self.s._last_search.clear()
+            with patch.object(self.s, 'search_both', return_value=([{'id': 1, 'title': title}], {})), patch.object(self.s, 'genres', return_value={}), patch.object(self.s, 'to_meta', return_value={'id': 'tmdb:1', 'type': 'movie', 'name': title}), patch.object(self.s, 'OR_KEY', 'stub'), patch.object(self.s, 'looks_like_title', return_value=True):
                 self.assertEqual(self.s.search('movie', title, 'en-US')['metas'][0]['id'], 'tmdb:1')
     def test_command_preview_saves_nothing(self):
         before = {p.name: p.read_bytes() for p in Path(self.temp.name).iterdir() if p.is_file()}
@@ -36,7 +37,7 @@ class Commands(unittest.TestCase):
         self.assertEqual(plan['plan'], self.preview()['plan'])
         from concurrent.futures import Future
         future = Future()
-        future.set_result({'command': True})
+        future.set_result({'choice': 'command', 'picks': None})
         with patch.object(self.s, 'OR_KEY', 'stub'), patch.object(self.s, 'looks_like_title', return_value=False), patch.object(self.s, 'superseded', return_value=False), patch.object(self.s, 'ai_future', return_value=future), patch.object(self.s, 'search_both', return_value=([], {})), patch.object(self.s, 'genres', return_value={}), patch.object(self.s, 'who_watching', return_value=('ana', None)):
             self.assertIn('Nothing changes', self.s.search('movie', 'hide anime', 'en-US')['metas'][0]['description'])
         self.assertEqual(before, {p.name: p.read_bytes() for p in Path(self.temp.name).iterdir() if p.is_file()})

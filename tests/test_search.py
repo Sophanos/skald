@@ -22,6 +22,7 @@ class SearchTests(unittest.TestCase):
     def setUp(self):
         self.s = self.server
         self.s._ai.clear()
+        self.s._last_search.clear()
         self.s._profiles.clear()
         self.model = {"aff": {"x:cozy": 3, "k:detective": 2, "t:hope": 1,
                               "d:1": 5, "a:2": 4, "n:3": 3, "c:4": 2, "s:novel": 1},
@@ -37,46 +38,36 @@ class SearchTests(unittest.TestCase):
             setattr(self, name.rsplit(".", 1)[-1], mock.start())
             self.addCleanup(mock.stop)
 
-    def test_intents(self):
-        canon = ["best all times", "Best of all time", "best all-time films", "top movies ever",
-                 "greatest series", "top 10 movies ever", "classics", "masterpiece", "critically acclaimed",
-                 "must-see movies", "oscar winning films", "award-winning shows", "IMDb top", "highest rated",
-                 "beste filme aller zeiten", "besten Serien", "Klassiker", "Meisterwerk", "Meisterwerke",
-                 "najbolji filmovi", "najbolje serije svih vremena", "klasici", "bset movies", "bets films",
-                 "graetest shows", "clasics", "masterpeice"]
-        taste = ["something cozy", "like Castle", "dark nordic crime", "something cozy for tonight",
-                 "something like Dark", "feel good tonight", "gemütliche Krimis", "nesto kao Castle",
-                 "cozy crime", "crime with a great cast", "films about a classical musician"]
-        for intent, queries in [("canon", canon), ("taste", taste)]:
-            for query in queries:
-                with self.subTest(query=query):
-                    self.assertEqual(self.s.search_intent(query), intent)
+    def route(self, watched="any", listing="taste"):
+        self.openrouter.return_value = {"answers": {"route": {"choice": "request"},
+                                                   "watched": {"choice": watched}, "list": {"choice": listing}}}
 
-    def test_canon_prompt_has_no_household_hint(self):
-        self.s.ai_plan("best all times")
+    def test_consensus_prompt_labels_household_hint(self):
+        self.s.ai_plan("best all times")["picks"].result(timeout=2)
         system, prompt, tokens, *_ = self.llm_text.call_args.args
-        self.assertEqual(prompt, "best all times")
-        self.assertNotIn(self.model["taste_line"], system + prompt)
+        self.assertTrue(prompt.startswith("best all times\nHousehold taste"))
+        self.assertIn("ignored for best-of/consensus lists", prompt)
         self.assertNotIn("Peter Jackson", system + prompt)
         self.assertIn("across decades and countries", system)
-        self.assertIn("including older classics", system)
-        self.assertIn("exactly 20 lines", system)
-        self.assertIn("at least 7 series and 7 movies", system)
-        self.assertIn("then use only that type", system)
+        self.assertIn("across decades and countries", system)
+        self.assertIn("30 lines", system)
+        self.assertIn("at least 12 movies and 12 series", system)
+        self.assertIn("'movies' or 'films' means movies only", system)
         self.assertGreaterEqual(tokens, 600)
 
     def test_taste_prompt_only_has_experiences_and_themes(self):
-        self.s.ai_plan("something cozy for tonight")
+        self.s.ai_plan("something cozy for tonight")["picks"].result(timeout=2)
         system, prompt, *_ = self.llm_text.call_args.args
-        self.assertEqual(prompt, "something cozy for tonight\n(Household taste, only to break ties between equally good "
-                         "matches: experiences: Cozy comfort; themes: Detective, Hope)")
+        self.assertTrue(prompt.startswith("something cozy for tonight\nHousehold taste"))
+        self.assertIn("experiences: Cozy comfort; themes: Detective, Hope", prompt)
+        self.assertIn("personal taste", prompt)
         for text in ("Peter Jackson", "Elijah Wood", "HBO", "Marvel Studios", "novel", "creators:", "actors:"):
             self.assertNotIn(text, system + prompt)
 
     def test_no_model_means_no_hint(self):
         self.s._model["m"] = None
-        self.s.ai_plan("something cozy")
-        self.assertEqual(self.llm_text.call_args.args[1], "something cozy")
+        self.s.ai_plan("something cozy")["picks"].result(timeout=2)
+        self.assertIn("none available", self.llm_text.call_args.args[1])
 
     def test_router_title_still_skips_picks(self):
         from decide_kit import close_server
@@ -84,22 +75,23 @@ class SearchTests(unittest.TestCase):
         self.openrouter.return_value = {"answers": {"route": {"choice": "title", "confidence": 0.9}}}
         with patch.object(self.s, "_pool") as pool:
             picks = pool.submit.return_value
-            self.assertIsNone(self.s.ai_plan("Castle"))
+            self.assertEqual(self.s.ai_plan("Castle")["choice"], "title")
             pool.submit.assert_called_once()
-            picks.cancel.assert_called_once()
+            picks.cancel.assert_not_called()
             picks.result.assert_not_called()
         self.llm_text.assert_not_called()
 
-    def test_shared_pick_call_keeps_20_lines_and_both_types(self):
-        self.llm_text.return_value = "\n".join(f"Title {i}|2000|{'m' if i < 10 else 's'}" for i in range(20))
+    def test_shared_pick_call_keeps_thirty_lines_and_both_types(self):
+        self.llm_text.return_value = "\n".join(f"Title {i}|2000|{'m' if i < 15 else 's'}" for i in range(30))
         first = self.s.ai_future("best all times")
         self.assertIs(first, self.s.ai_future("BEST ALL TIMES"))
-        picks = first.result(timeout=2)
-        self.assertEqual(len(picks), 20)
-        self.assertEqual(sum(p[2] == "series" for p in picks), 10)
+        picks = first.result(timeout=2)["picks"].result(timeout=2)
+        self.assertEqual(len(picks), 30)
+        self.assertEqual(sum(p[2] == "series" for p in picks), 15)
         self.llm_text.assert_called_once()
 
-    def search_results(self, query, stype):
+    def search_results(self, query, stype, watched="any", listing="taste"):
+        self.route(watched, listing)
         self.llm_text.return_value = "\n".join(f"Title {i}|2000|{'m' if i < 6 else 's'}" for i in range(1, 11))
 
         def results(path, **params):
@@ -124,7 +116,7 @@ class SearchTests(unittest.TestCase):
     def test_canon_skips_rerank_and_taste_only_reranks_unseen(self):
         self.s._profiles["household"] = {"seen": {"tmdb:1", "tmdb:4"}, "negative": {"tmdb:3"}}
         with patch.object(self.s, "taste_rerank", side_effect=lambda metas: metas[::-1]) as rerank:
-            self.assertEqual([m["id"] for m in self.search_results("best all times", "movie")],
+            self.assertEqual([m["id"] for m in self.search_results("best all times", "movie", listing="best")],
                              ["tmdb:2", "tmdb:5", "tmdb:1", "tmdb:4"])
             rerank.assert_not_called()
             self.assertEqual([m["id"] for m in self.search_results("something cozy", "movie")],
@@ -132,7 +124,7 @@ class SearchTests(unittest.TestCase):
             self.assertEqual([m["id"] for m in rerank.call_args.args[0]], ["tmdb:2", "tmdb:5"])
 
     def test_no_profile_preserves_order(self):
-        self.assertEqual([m["id"] for m in self.search_results("best all times", "movie")],
+        self.assertEqual([m["id"] for m in self.search_results("best all times", "movie", listing="best")],
                          [f"tmdb:{i}" for i in range(1, 6)])
 
     def test_taste_rerank_uses_twenty_percent(self):
@@ -144,19 +136,6 @@ class SearchTests(unittest.TestCase):
                 patch.object(self.s, "with_match", side_effect=lambda meta, **kw: meta):
             self.assertEqual(self.s.taste_rerank(metas), metas)
 
-    def test_seen_intent_table(self):
-        for phrase in ("I have not watched", "I haven't seen", "I have never seen", "new to me", "unwatched",
-                       "ich habe noch nicht gesehen", "ich habe nie gesehen", "nisam gledao", "nisam gledala",
-                       "which i have not watched", "I haven't watched", "I've never seen"):
-            with self.subTest(phrase=phrase):
-                self.assertEqual(self.s.seen_intent("anime " + phrase), ("unseen", "anime"))
-        for phrase in ("I have watched", "I've seen", "I have already seen", "rewatch", "ich habe schon gesehen",
-                       "gledao sam", "gledala sam", "which i have watched"):
-            with self.subTest(phrase=phrase):
-                self.assertEqual(self.s.seen_intent("anime " + phrase), ("seen", "anime"))
-        for query in ("watchmen", "seen from space", "Castle"):
-            self.assertEqual(self.s.seen_intent(query), (None, query))
-
     def history(self):
         entries = [dict(key=f"tmdb:{i}", id=i, title=f"Title {i}", year="2000", kind="movie",
                         stype="movie", age=i, weight=-1 if i == 3 else 1, signal="watched",
@@ -165,31 +144,9 @@ class SearchTests(unittest.TestCase):
                                          "negative": {"tmdb:3"}}
         return entries
 
-    def test_seen_intent_requires_viewer(self):
-        for query in ("movies about people who have never seen the ocean",
-                      "movies about a woman who has already seen the future",
-                      "filmovi o ljudima koji su gledao more"):
-            with self.subTest(query=query):
-                self.assertEqual(self.s.seen_intent(query), (None, query))
-        self.history()
-        query = "movies about people who have never seen the ocean"
-        metas = self.search_results(query, "movie")
-        self.assertEqual([m["id"] for m in metas], ["tmdb:2", "tmdb:5", "tmdb:1", "tmdb:4"])
-        self.assertIn(query, self.llm_text.call_args.args[1])
-        for phrase in ("we have watched", "watched by me", "our watched", "wir haben gesehen",
-                       "gledao sam", "gledala sam", "unwatched", "not seen yet"):
-            with self.subTest(phrase=phrase):
-                intent = "unseen" if phrase in ("unwatched", "not seen yet") else "seen"
-                self.assertEqual(self.s.seen_intent("anime " + phrase), (intent, "anime"))
-
-    def test_seen_intent_extended_negations(self):
-        for phrase in ("I have not already seen", "nisam nikad gledao", "nisam nikada gledala",
-                       "nismo nikad gledali", "ich habe noch nie gesehen", "we have never watched"):
-            with self.subTest(phrase=phrase):
-                self.assertEqual(self.s.seen_intent("anime " + phrase), ("unseen", "anime"))
-
     def test_seen_history_excludes_watchlist_and_interest(self):
         entries = self.history()
+        self.route("seen")
         entries.extend({**entries[0], "key": f"tmdb:{i}", "id": i, "title": f"Title {i}",
                         "signal": signal, "item": item} for i, signal, item in (
                             (6, "watchlist", {}), (7, "interest", {}), (8, "interest", {"played": True}),
@@ -209,11 +166,12 @@ class SearchTests(unittest.TestCase):
 
     def test_unseen_removes_seen_and_negative(self):
         self.history()
-        self.assertEqual([m["id"] for m in self.search_results("anime which i have not watched", "movie")],
+        self.assertEqual([m["id"] for m in self.search_results("anime which i have not watched", "movie", watched="unseen")],
                          ["tmdb:2", "tmdb:5"])
-        self.assertNotIn("not watched", self.llm_text.call_args.args[1])
+        self.assertIn("not watched", self.llm_text.call_args.args[1])
 
     def seen_results(self, scope=None):
+        self.route("seen", "best")
         self.llm_text.return_value = "Title 4|2000|m|Again\nInvented|2000|m|Oops\nTitle 1|2000|m|Favorite\nTitle 3|2000|m|Bad"
         with patch.object(self.s, "OR_KEY", "offline"), patch.object(self.s, "superseded", return_value=False), \
                 patch.object(self.s, "SCOPES", {"ana": "ana", "ben": "ben", "together": "both"}), \
@@ -232,7 +190,7 @@ class SearchTests(unittest.TestCase):
         self.assertIn("Title 1|2000|m", prompt)
         self.assertIn("Title 4|2000|m", prompt)
         self.assertLess(prompt.index("Title 1"), prompt.index("Title 4"))
-        self.assertNotIn("have watched", prompt)
+        self.assertIn("have watched", prompt)
         self.assertIn("only", system)
 
     def test_scoped_history_and_cache_isolation(self):
@@ -248,21 +206,23 @@ class SearchTests(unittest.TestCase):
         self.history()
         with patch.object(self.s, "SCOPES", {"ana": "ana", "ben": "ben", "together": "both"}), \
                 patch.object(self.s, "PEOPLE", ("ana", "ben")):
-            for scope, ids in [("ana", [2, 4, 5]), ("ben", [1, 2, 3, 5]), ("together", [2, 5])]:
+            for scope, ids, neutral in [("ana", [2, 4, 5], [2, 4, 5, 1]), ("ben", [1, 2, 3, 5], [1, 2, 3, 5, 4]), ("together", [2, 5], [2, 5, 1, 4])]:
                 with self.s.addon_scope(scope):
-                    self.assertEqual([m["id"] for m in self.search_results("anime I have not watched", "movie")],
+                    self.assertEqual([m["id"] for m in self.search_results("anime I have not watched", "movie", watched="unseen")],
                                      [f"tmdb:{i}" for i in ids])
-                    self.assertEqual([m["id"] for m in self.search_results("best all times", "movie")],
-                                     ["tmdb:2", "tmdb:5", "tmdb:1", "tmdb:4"])
+                    self.assertEqual([m["id"] for m in self.search_results("best all times", "movie", listing="best")],
+                                     [f"tmdb:{i}" for i in neutral])
 
     def test_seen_empty_llm_stays_empty(self):
         self.history()
+        self.route("seen")
         self.tmdb.return_value = {"results": [{"id": 9, "title": "Unrelated"}]}
         with patch.object(self.s, "OR_KEY", "offline"), patch.object(self.s, "looks_like_title", return_value=False), \
                 patch.object(self.s, "superseded", return_value=False):
             self.assertEqual(self.s.search("movie", "anime I have already seen", "en-US"), {"metas": []})
 
     def test_seen_history_cap_recency_and_series(self):
+        self.route("seen")
         entries = [dict(key=f"tmdb:{i}", id=i, title=f"Title {i}", year=2000, kind="tv",
                         stype="series", age=305-i, weight=1, signal="watched", by=["ana"], item={})
                    for i in range(1, 306)]
@@ -273,8 +233,8 @@ class SearchTests(unittest.TestCase):
             metas = self.s.search("series", "anime I have already seen", "en-US")["metas"]
         self.assertEqual([m["id"] for m in metas], ["tmdb:305"])
         prompt = self.llm_text.call_args.args[1]
-        self.assertEqual(len(prompt.splitlines()[2:]), 300)
-        self.assertEqual(prompt.splitlines()[2], "Title 305|2000|s")
+        self.assertEqual(len(prompt.splitlines()[3:]), 200)
+        self.assertEqual(prompt.splitlines()[3], "Title 305|2000|s")
         self.assertNotIn("Title 1|", prompt)
 
     def test_seen_plain_fallbacks(self):
@@ -289,6 +249,8 @@ class SearchTests(unittest.TestCase):
                     patch.object(self.s, "decide", return_value={"answer": {"choice": "title", "confidence": .9}}):
                 self.assertEqual(self.s.search("movie", query, "en-US", title_only=mode == "title_only")
                                  ["metas"][0]["id"], "tmdb:1")
+                for _, plan in self.s._ai.values():
+                    plan.result(timeout=2)["picks"].result(timeout=2)
 
     def test_plain_title_search_keeps_seen_and_negative(self):
         self.s._profiles["household"] = {"seen": {"tmdb:1"}, "negative": {"tmdb:1"}}

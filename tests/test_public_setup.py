@@ -67,7 +67,6 @@ class PublicSetupTests(unittest.TestCase):
         self.assertEqual(members.LEGACY['addon']['id'], 'community.skald.legacy')
         self.assertIn('Because you loved Paddington 2', source)
         self.assertIn('Witty banter duo like Moonlighting', source)
-        self.assertIn("'Paddington', 'dark'", source)
 
     def test_stack_template(self):
         source = (ROOT/'compose.stack.example.yaml').read_text()

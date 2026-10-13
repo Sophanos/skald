@@ -58,7 +58,7 @@ from types import SimpleNamespace
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.4.2"
+VERSION = "1.4.4"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -713,26 +713,116 @@ OR_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 AI_MARK = "✨ "
 AI_MIN_LEN = 4
 SEARCH_SETTLE = 0.35  # seconds a non-title query waits for the next keystroke before spending an AI call
-ROUTE_MODEL = "openai/gpt-6-luna-decisions"
+AI_SEARCH_TTL = 24 * 60 * 60
+SEARCH_ORDER = "parallel"
+SEARCH_CHANNELS = {"title": "tmdb", "command": "command", "request": "picker", "discover": "picker"}
+ROUTE_MODEL = os.environ.get("SKALD_ROUTE_MODEL") or "perplexity/pplx-decider-v1.1-27b"
+LUNA_DECIDER_MODEL = "openai/gpt-6-luna-decisions"
 PICK_MODEL = "openai/gpt-6-luna"
 COMMAND_MODEL = os.environ.get("SKALD_COMMAND_MODEL") or "~google/gemini-flash-latest"
 COMMAND_EFFORT = os.environ.get("SKALD_COMMAND_EFFORT") or "low"
 COMMAND_FALLBACK_MODEL = os.environ.get("SKALD_COMMAND_FALLBACK_MODEL") or "z-ai/glm-5.3-flash"
 COMMAND_FALLBACK_EFFORT = os.environ.get("SKALD_COMMAND_FALLBACK_EFFORT") or "low"
-ROUTE_Q = {"route": {"type": "choice",
-    "instructions": "A user typed this into the search box of a movie/TV streaming app. Classify what they want.",
-    "criteria": {
-        "title": "The name (or partial name) of a specific movie, series, person or franchise, e.g. 'Paddington', 'dark', 'Avengers', 'Haus des Geldes', 'Tom Hanks'.",
-        "command": "A persistent instruction to change your own settings or taste: hide anime for me, no more horror, more Korean shows, I loved Dark. Also creating, adding or making a new catalog, row, shelf or list about, for, with or of a theme: Create a new catalog about psygoloy crime, add a row for crime, make a shelf with comedies, neue Reihe mit Horrorfilmen, erstelle einen Katalog über Psychologie und Krimi. Typos in the theme do not change a creation command into a request. One-off wishes like something light tonight are requests.",
-        "discover": "Only a genre and/or year/decade filter, e.g. '80s action', 'Komödie 1995', 'horror 2023', 'Thriller der 90er'.",
-        "request": "A one-off free-text search, wish, mood, theme, similarity or curated list, e.g. 'best of heist', 'best catalog of crime movies', 'like Dark', 'filme über zeitreisen', 'something cozy for sunday', 'playlist sad anime'. Requests do not ask to create, add or make a persistent row, catalog or shelf."}}}
-PICK_SYS = ("You recommend movies and TV series for a streaming search box. Reply with exactly 20 lines, nothing else, "
-            "format: Title|Year|m or s  (m=movie, s=series). Real, well-known titles that best match the request, best first. "
-            "For 'best/greatest' requests, use broad critical consensus, not one person's taste, across decades and countries. "
-            "'All time' means across decades, including older classics. Include at least 7 series and 7 movies unless "
-            "the request clearly asks for only one type (movies/films or series/shows/anime); then use only that type.")
+ROUTE_Q = {
+    "route": {"type": "choice",
+        "instructions": "Someone typed this into the search box of a TV app. Decide what kind of answer they want. The text may be in any language or script, with typos, odd spacing or missing apostrophes. Judge the whole text by meaning; no single word decides.",
+        "criteria": {
+            "title": "The whole text is a name: one movie, series, person or franchise they want to find, possibly misspelled, partial or translated. If any part of the text is not part of that name (a content type, a mood, a comparison, a year, a wish, a verb, a reference to the user), it is not a title. A lone word is a name, even if it could also describe a mood.",
+            "request": "The text asks to be shown titles now by describing them rather than naming one: a mood, theme, subject, feeling, genre with a feeling, similarity to something, a ranking, or the user's own viewing history (titles they have or have not watched, or want to watch again). A descriptive word together with a content type, in any language, is a request unless the whole text is itself a known title. It changes nothing saved.",
+            "discover": "The text is only a genre and/or a year or decade, with no mood, theme or other wish.",
+            "command": "The text asks the app to change or remember something for later: the user's taste, filters, settings, members, or their rows, shelves and catalogs; or it tells the app how they felt about a specific title or that they already saw it; or it asks what the app has learned about a person. Asking to be shown titles from their own history is a request, not a command.",
+        }},
+    "watched": {"type": "choice",
+        "instructions": "Does the user limit results by their own viewing history? Only count wording about the user's (or their household's) own watching. Words that belong to a title name or describe a plot do not count.",
+        "criteria": {
+            "unseen": "They want only titles they have not watched yet.",
+            "seen": "They want only titles they already watched, including wanting to watch something again.",
+            "any": "No limit by their history. This is the answer whenever the text does not clearly say unseen or seen.",
+        }},
+    "list": {"type": "choice",
+        "instructions": "Should results follow what is widely regarded as the best, or this household's taste?",
+        "criteria": {
+            "best": "The user asks for acclaim or rank by broad consensus: the best, greatest, classics, must-see, award-winning, top, in any language or spelling. This holds when combined with other wishes.",
+            "taste": "Everything else, including names of titles that contain such words.",
+        }},
+}
+ROUTE_FOLLOWUP_Q = {**ROUTE_Q, "route": {**ROUTE_Q["route"], "instructions": ROUTE_Q["route"]["instructions"] + " When the text builds on the last search, judge what the combined wish asks for."},
+    "previous": {"type": "choice",
+        "instructions": "The state may show the user's last search and a few of its results, then what they typed now. How does the new text relate to that last search?",
+        "criteria": {
+            "new": "A fresh search or instruction that stands on its own; it would mean the same with no last search.",
+            "refine": "It adjusts the last search: asks for more of it, adds to it, narrows or shifts it, points at one of its results, or keeps it but changes a quality. It only makes sense together with the last search.",
+            "act": "It asks to do something lasting with the shown results themselves: keep them as taste, save them as a row or shelf, or hide them.",
+        }}}
+PICK_SYS = ("You pick movies and series for one household's TV search. Reply with 30 lines and nothing else, one title per line: Title|Year|m or s (m=movie, s=series). No numbering, no commentary. "
+            "Use the title as it is known on TMDB (English or original) and the year of first release. "
+            "Match the request literally first: mood, theme, genre, era, country and type. 'movies' or 'films' means movies only; 'shows' or 'series' means series only; otherwise give at least 12 movies and 12 series. Anime means Japanese animation. "
+            "For best-of or classics requests use broad critical consensus across decades and countries and ignore the household taste. Otherwise use the household taste only to choose between equally good matches. "
+            "Avoid more than one entry per franchise unless asked. Mix famous picks with lesser-known titles a fan of the request would respect. "
+            "Viewing history follows the request: if it wants titles new to the viewer, never pick a history title; if it asks for titles they watched, pick only history titles, copied exactly, and return fewer lines if needed; otherwise history titles are allowed but new ones come first.")
 _ai = {}
 _ai_lock = threading.Lock()
+LAST_SEARCH_TTL = 30 * 60
+_last_search = {}
+_search_turns = {}
+
+
+def search_scope():
+    scope = getattr(_scoping, "scope", None)
+    return scope, None if scope is not None else _viewer.get() or who_watching()[0]
+
+
+def last_search():
+    with _ai_lock:
+        now = time.time()
+        for key, value in list(_last_search.items()):
+            if now - value["at"] >= LAST_SEARCH_TTL:
+                del _last_search[key]
+        for key, (expires, _) in list(_ai.items()):
+            if expires <= now:
+                del _ai[key]
+        return copy.deepcopy(_last_search.get(search_scope()))
+
+
+def search_key(query):
+    return " ".join("".join(c for c in query.casefold() if not unicodedata.category(c).startswith("P")).split())
+
+
+def start_search(query):
+    scope, key = search_scope(), search_key(query)
+    # Turn registration and command previews must use the same lock.
+    with search_commands._LOCK, _ai_lock:
+        previous, turn = _search_turns.get(scope, (None, 0))
+        if previous != key:
+            turn += 1
+        _search_turns[scope] = (key, turn)
+    return scope, turn
+
+
+def shown_titles(context):
+    return list({(x["key"], x["kind"]): x for row in context["rows"].values() for x in row}.values())
+
+
+def search_turn(query):
+    context = last_search()
+    # Movie/series requests and retries for the same text belong to the same turn.
+    if context and search_key(context["query"]) == search_key(query):
+        context = context.get("prior")
+    return {k: v for k, v in context.items() if k != "prior"} if context and time.time() - context["at"] < LAST_SEARCH_TTL else None
+
+
+def remember_search(query, stype, metas, answer, prior, wish, request):
+    titles = [{"key": x["id"], "kind": "movie" if x["type"] == "movie" else "tv",
+               "title": x["name"].removeprefix(AI_MARK), "year": (x.get("releaseInfo") or "")[:4] or None} for x in metas[:15]]
+    with _ai_lock:
+        scope, turn = request
+        if _search_turns.get(scope) != (search_key(query), turn):
+            return {"metas": metas}
+        old = _last_search.get(scope)
+        rows = old["rows"] if old and old["turn"] == turn else {}
+        _last_search[scope] = {"at": time.time(), "query": query, "answers": answer or {"choice": "title", "watched": "any", "list": "taste"},
+                               "rows": {**rows, stype: titles}, "prior": prior, "wish": wish, "turn": turn}
+    return {"metas": metas}
 
 
 class BudgetExceeded(Exception):
@@ -1391,20 +1481,35 @@ def route_norm(inp):
     query = " ".join(inp["query"].split())
     if not query:
         raise ValueError("query")
-    return {"query": query[:200]}
+    return {"query": query[:200], **{k: inp[k] for k in ("last", "shown", "context_key") if inp.get(k) is not None}}
+
+
+def route_state(inp):
+    if "last" not in inp:
+        return inp["query"]
+    shown = inp.get("shown") or []
+    if isinstance(shown, str):
+        shown = shown.split(", ")
+    return f"Last search: {inp['last']}\nSome results shown: {', '.join(shown[:3])}\nTyped now: {inp['query']}"
 
 
 def route_parse(resp, batch):
-    a = resp["answers"]["route"]
-    return [({"choice": a["choice"], "confidence": a.get("confidence")}, a.get("confidence") or 0)]
+    answers = resp["answers"]
+    a = answers["route"]
+    return [({"choice": a["choice"], "confidence": a.get("confidence"),
+              "watched": answers.get("watched", {}).get("choice") or "any",
+              "list": answers.get("list", {}).get("choice") or "taste",
+              **({"previous": answers.get("previous", {}).get("choice") or "new"} if "last" in batch[0] else {})}, a.get("confidence") or 0)]
 
 
-decision("route_query", ver=2, lane="search", cap=None, ttl=30 * DAY,
-    inp={"query": str}, out={"choice": ("title", "discover", "request", "command", None), "confidence": (float, None)},
+decision("route_query", ver=6, lane="search", cap=None, ttl=30 * DAY,
+    inp={"query": str, "last": (str, None), "shown": (str, [str, 30], None), "context_key": (str, None)}, out={"choice": ("title", "discover", "request", "command", None), "confidence": (float, None),
+                           "watched": ("unseen", "seen", "any", None), "list": ("best", "taste", None), "previous": ("new", "refine", "act", None)},
     norm=route_norm, rule=None, params={},
     llm={"path": "/api/alpha/decisions", "model": ROUTE_MODEL, "batch": 1, "timeout": 4,
-         "prompt": lambda b: {"model": ROUTE_MODEL, "state": b[0]["query"], "questions": ROUTE_Q}, "parse": route_parse},
-    fallback=lambda inp, err: ({"choice": None, "confidence": None}, 0), requires=(), serving=False, min_acc=.95)
+         "prompt": lambda b: {"model": ROUTE_MODEL, "state": route_state(b[0]), "questions": ROUTE_FOLLOWUP_Q if "last" in b[0] else ROUTE_Q}, "parse": route_parse},
+    fallback=lambda inp, err: ({"choice": None, "confidence": None, "watched": "any", "list": "taste"}, 0),
+    requires=(), serving=False, min_acc=.95)
 
 
 from skald import commands as search_commands
@@ -1457,7 +1562,7 @@ def resolve_prompt(batch):
         choices["none"] = "None of these titles matches"
         questions[str(i)] = {"type": "choice", "instructions": "Resolve the exported title to exactly one choice, or none.",
                              "criteria": choices}
-    return {"model": ROUTE_MODEL, "state": json.dumps([{k: x.get(k) for k in ("title", "year", "kind")} for x in batch]),
+    return {"model": LUNA_DECIDER_MODEL, "state": json.dumps([{k: x.get(k) for k in ("title", "year", "kind")} for x in batch]),
             "questions": questions, "usage": {"include": True}}
 
 
@@ -1475,37 +1580,9 @@ decision("resolve_title", ver=1, lane="resolve", cap=20, ttl=180 * DAY, max_usd=
     inp={"title": str, "year": (int, None), "kind": (*KIND, None),
          "choices": [{**TITLE, "title": str, "aliases": [str, 5], "year": (int, None), "pop": (float, None)}, 8]},
     out={"pick": (TITLE, None)}, norm=lambda inp: inp, rule=resolve_rule, params={"tau": .88, "margin": .08},
-    llm={"path": "/api/alpha/decisions", "model": ROUTE_MODEL, "batch": 25, "timeout": 20,
+    llm={"path": "/api/alpha/decisions", "model": LUNA_DECIDER_MODEL, "batch": 25, "timeout": 20,
          "prompt": resolve_prompt, "parse": resolve_parse},
     fallback=lambda inp, err: ({"pick": None}, 0), requires=("OR_KEY",), serving=False, min_acc=.95)
-
-
-def search_intent(query):
-    """Consensus lists use canon; moods and similarities use a light household hint."""
-    q = re.sub(r"[-_]+", " ", query.casefold())
-    return "canon" if re.search(r"\b(best(?:e[nmrs]?)?|bset|bets|greatest|graetest|greatset|top|all\s+times?|"
-                                r"classics?|clasics?|masterpieces?|masterpeices?|acclaimed|must\s+see|"
-                                r"oscars?|award\s+winning|highest\s+rated|aller\s+zeiten|klassiker|meisterwerke?|"
-                                r"najbolj\w*|svih\s+vremena|klasici|klasik\w*)\b", q) else "taste"
-
-
-def seen_intent(query):
-    """Explicit viewing wishes, with negation taking precedence over watched phrases."""
-    prefix = (r"(?:(?:which|that)\s+)?(?:i|we|me|us|my|our|ich|wir|mir|uns)(?:\s+|(?=['’]))"
-              r"(?:have\s+|habe\s+|haben\s+|['’]ve\s+)?")
-    verb = r"gled(?:ao|ala|ali|ale)"
-    for intent, words in (
-        ("unseen", prefix + r"(?:(?:not\s+(?:already\s+)?|haven['’]t\s+|never\s+)(?:watched|seen)|"
-                   r"(?:noch\s+)?(?:nicht|nie)\s+gesehen)|(?:nisam|nismo)\s+(?:nikada?\s+)?" + verb +
-                   r"|new\s+to\s+(?:me|us)|unwatched|(?<!have )(?<!has )not\s+seen\s+yet(?=\s*$)"),
-        ("seen", prefix + r"(?:(?:already\s+)?(?:watched|seen)|(?:schon\s+)?gesehen)|"
-                 r"(?:watched|seen)\s+by\s+(?:me|us)|" + verb + r"\s+(?:sam|smo)|rewatch")):
-        pattern = r"(?<!\w)(?:" + words + r")(?!\w)"
-        clean, count = re.subn(pattern, "", query, flags=re.I)
-        clean = " ".join(clean.split()).strip(" ,;:-")
-        if count:
-            return intent, clean
-    return None, query
 
 
 def search_profile():
@@ -1533,34 +1610,40 @@ def seen_history(p):
     return list(history.values())[:300]
 
 
-def ai_plan(query, history=None):
-    """None for title searches, else the LLM's picks as [(title, year, 'movie'|'series', why)]."""
-    intent, clean = seen_intent(query)
+def search_picks(query, history, listing="taste"):
     m = _model["m"]
-    hint = taste_hint(m) if m and search_intent(query) == "taste" else ""
-    taste = f"\n(Household taste, only to break ties between equally good matches: {hint})" if hint else ""
-    system, prompt = PICK_SYS, clean + taste
-    if intent == "unseen":
-        system += " The viewer wants titles new to them."
-    if intent == "seen":
-        system = ("Select only titles from the supplied viewing history that match the request, best first. "
-                  "Reply with up to 20 lines, nothing else, format: Title|Year|m or s|why (m=movie, s=series). "
-                  "Copy title, year and type exactly; return no lines if none match.")
-        prompt = clean + "\nViewing history:\n" + "\n".join(
-            f"{e['title']}|{e.get('year') or ''}|{'m' if e['stype'] == 'movie' else 's'}" for e in history or [])
-    picks = _pool.submit(llm_picks, system, prompt, 700, 6, "search", "picks")  # in parallel with the router
+    hint = taste_hint(m) if m and listing != "best" else "none available"
+    taste = f"\nHousehold taste (use only for personal taste requests; ignored for best-of/consensus lists): {hint}" if listing != "best" else ""
+    prompt = (query + taste +
+              "\nViewing history (if the request wants titles new to the viewer, skip these; "
+              "if it asks for titles they watched, choose only from these):\n" + "\n".join(
+                  f"{e['title']}|{e.get('year') or ''}|{'m' if e['stype'] == 'movie' else 's'}" for e in history[:200]))
+    return _pool.submit(llm_picks, PICK_SYS, prompt, 1400, 6, "search", "picks")
+
+
+def ai_plan(query, history=None, context=None):
+    """Route once; retain a shared picker future for requests and empty title results."""
+    if history is None:
+        history = seen_history(search_profile())
+    picks = search_picks(query, history) if SEARCH_ORDER == "parallel" and context is None else None
+    inp = {"query": query}
+    if context:
+        inp.update(last=context["query"], shown=[x["title"] for x in shown_titles(context)])
+        inp["context_key"] = hashlib.sha256(json.dumps({k: context.get(k) for k in ("query", "answers", "rows", "wish")}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     try:
-        a = decide("route_query", route_norm({"query": query}))["answer"]
-    except ValueError:
+        a = decide("route_query", route_norm(inp))["answer"]
+    except Exception:
+        a = {"choice": None}
+    wish = query
+    if context and a.get("previous") == "refine":
+        wish = (f"Answer the combined wish. Last search: {context.get('wish') or context['query']}\n"
+                f"Shown titles (in display order): {json.dumps(shown_titles(context), ensure_ascii=False)}\nTyped now: {query}")
+    channel = "command" if a.get("previous") == "act" else "picker" if a.get("previous") == "refine" else SEARCH_CHANNELS.get(a["choice"], "picker")
+    if channel == "command" and picks is not None:
         picks.cancel()
-        return None
-    if a["choice"] == "command":
-        picks.cancel()
-        return {"command": True}
-    if a["choice"] is None or (a["choice"] == "title" and (a["confidence"] or 0) >= .5):
-        picks.cancel()
-        return None
-    return picks.result()
+    if channel == "picker" and picks is None:
+        picks = search_picks(wish, history, a.get("list"))
+    return {**a, "picks": picks, "wish": wish, "watched": a.get("watched") or "any", "list": a.get("list") or "taste"}
 
 
 def taste_rerank(metas):
@@ -1614,19 +1697,30 @@ def llm_sections(system, prompt, max_tokens, timeout, label, names, effort="none
 
 
 def ai_future(query, history=None):
-    """One shared AI call per query: the movie and series catalogs are requested together."""
-    key = query.casefold()
-    if history is not None:
-        key = (key, getattr(_scoping, "scope", None),
-               tuple((e["key"], e["title"], e.get("year"), e["stype"]) for e in history))
+    """Share one day's AI answer for equivalent queries within a viewer scope."""
+    context = search_turn(query)
+    key = (search_key(query), search_scope(), json.dumps(context, sort_keys=True, ensure_ascii=False) if context else None)
     with _ai_lock:
         hit = _ai.get(key)
         if hit and hit[0] > time.time():
-            return hit[1]
+            fut = hit[1]
+            if not fut.done():
+                return fut
+            try:
+                answer = fut.result()
+                picks = answer["picks"]
+                if (picks is None or SEARCH_CHANNELS.get(answer["choice"]) == "command" or not picks.done()
+                        or not picks.cancelled() and picks.exception() is None):
+                    return fut
+            except Exception:
+                pass
         if len(_ai) >= CACHE_MAX:
             _ai.clear()
-        fut = _outer.submit(ai_plan, query) if history is None else _outer.submit(ai_plan, query, history)  # ai_plan waits on _pool leaf calls
-        _ai[key] = (time.time() + CACHE_TTL, fut)
+        if history is None:
+            history = seen_history(search_profile())  # Capture the caller's scope before entering the pool.
+        fut = _outer.submit(ai_plan, query, history, context)
+        ttl = min(AI_SEARCH_TTL, context["at"] + LAST_SEARCH_TTL - time.time()) if context else AI_SEARCH_TTL
+        _ai[key] = (time.time() + ttl, fut)
         return fut
 
 
@@ -1794,6 +1888,7 @@ def superseded(query, wait):
 
 
 def search(stype, query, lang, title_only=False):
+    request = start_search(query)
     refresh_preferences()
     kind = "movie" if stype == "movie" else "tv"
     who = safety_subject()
@@ -1802,33 +1897,70 @@ def search(stype, query, lang, title_only=False):
             ensure_facets([(x["id"], kind) for x in metas])
             return [x for x in metas if child_ok(x, who)]
         return metas
-    command = search_commands.special(command_context(), query, stype) if not title_only else None
+    context = search_turn(query) if not title_only else None
+    command = (search_commands.special(command_context(), query, stype, results=context) if context else
+               search_commands.special(command_context(), query, stype)) if not title_only else None
     if command is not None:
         return command
     plan = None
-    intent, _ = seen_intent(query)
-    p = search_profile() if intent else _profiles.get("household")
-    history = seen_history(p) if intent == "seen" else None
-    if not title_only and OR_KEY and len(query) >= AI_MIN_LEN and not looks_like_title(query, lang) \
-            and not superseded(query, SEARCH_SETTLE):
-        plan = ai_future(query, history) if history is not None else ai_future(query)
-    data, art = search_both(kind, query, lang)
-    names = genres(kind, lang)
+    complete = True
+    p = search_profile()
+    history = seen_history(p)
+    if not title_only and OR_KEY and (context is not None or len(query) >= AI_MIN_LEN and not looks_like_title(query, lang)):
+        complete = not superseded(query, SEARCH_SETTLE)
+        if complete:
+            plan = ai_future(query, history)
     q = query.casefold()
 
     def exact(it):
         return q in {(it.get(k) or "").casefold() for k in ("title", "name", "original_title", "original_name")}
 
-    if plan is not None and not any(exact(it) for it in data):
+    data, art = search_both(kind, query, lang) if plan is None or SEARCH_ORDER == "parallel" else ([], {})
+    picks, answer = None, None
+    def served(metas):
+        if not complete:
+            return {"metas": metas}
+        answers = {k: v for k, v in (answer or {}).items() if k not in ("picks", "wish")}
+        return remember_search(query, stype, metas, answers, context, (answer or {}).get("wish", query), request)
+    if plan is not None and (context is not None or not any(exact(it) for it in data)):
+        deadline = time.monotonic() + 7
         try:
-            picks = plan.result(timeout=7)
-        except Exception:
-            picks = None  # router/LLM failed, slow or over budget: plain TMDB results below
-        if isinstance(picks, dict) and picks.get("command"):
-            command = search_commands.special(command_context(), query, stype, routed=True)
+            answer = plan.result(timeout=7)
+            channel = "command" if answer.get("previous") == "act" else "picker" if answer.get("previous") == "refine" else SEARCH_CHANNELS.get(answer["choice"], "picker")
+            if channel == "tmdb" and SEARCH_ORDER == "router_first":
+                data, art = search_both(kind, query, lang)
+            if channel == "tmdb" and not data:
+                channel = "picker"
+            if channel == "picker":
+                with _ai_lock:
+                    if answer["picks"] is None:
+                        answer["picks"] = search_picks(answer.get("wish", query), history, answer["list"])
+                timeout = 6 if SEARCH_ORDER == "router_first" else max(0, deadline - time.monotonic())
+                picks = answer["picks"].result(timeout=timeout)
+        except Exception as error:
+            waiting = answer.get("picks") if answer else plan
+            failed = waiting is not None and (waiting.cancelled() or waiting.done() and waiting.exception() is not None)
+            if isinstance(error, TimeoutError) and not failed:
+                complete = False
+            if not isinstance(error, TimeoutError) or failed:
+                with _ai_lock:
+                    for key, (_, future) in list(_ai.items()):
+                        if future is plan:
+                            del _ai[key]
+        if answer is not None and channel == "command":
+            with search_commands._LOCK:
+                with _ai_lock:
+                    scope, turn = request
+                    if _search_turns.get(scope) != (search_key(query), turn):
+                        return {"metas": []}
+                command = (search_commands.special(command_context(), query, stype, routed=True, results=context)
+                           if answer.get("previous") == "act" else search_commands.special(command_context(), query, stype, routed=True))
             if command is not None:
                 return command
-            picks = None
+            answer = None
+    names = genres(kind, lang)
+    if picks is not None:
+        intent = answer.get("watched", "any") if answer is not None else "any"
         if intent == "seen" and picks is not None:
             allowed = {(e["title"].casefold(), str(e.get("year") or ""), e["stype"]): e for e in history}
             metas, used = [], set()
@@ -1839,20 +1971,51 @@ def search(stype, query, lang, title_only=False):
                     it = {"id": e["id"], "title": e["title"], "name": e["title"],
                           "release_date": str(e.get("year") or ""), "first_air_date": str(e.get("year") or "")}
                     metas.append(to_meta(it, stype, kind, names, {}, AI_MARK, why, lang=lang))
-            return {"metas": filtered(metas)}
+            if answer.get("list", "taste") == "taste":
+                metas = taste_rerank(metas)
+            return served(filtered(metas)[:15])
         if picks or (intent == "unseen" and picks is not None):
             metas = ai_search(stype, kind, picks, lang, names)
             seen = []
             if p:
-                metas = [x for x in metas if x["id"] not in p["negative"]]
-                seen = [x for x in metas if x["id"] in p["seen"]]
-                metas = [x for x in metas if x["id"] not in p["seen"]]
-            if search_intent(query) == "taste":
+                metas = [x for x in metas if x["id"] not in p.get("negative", ())]
+                seen = [x for x in metas if x["id"] in p.get("seen", ())]
+                metas = [x for x in metas if x["id"] not in p.get("seen", ())]
+            if answer.get("list", "taste") == "taste":
                 metas = taste_rerank(metas)
-            return {"metas": filtered(metas if intent == "unseen" else metas + seen)}
+            metas = filtered(metas if intent == "unseen" else metas + seen)
+            if intent == "unseen" and len(metas) < 8:
+                exclude = set(p.get("seen", ())) | set(p.get("negative", ())) | {x["id"] for x in metas}
+                for seed in list(metas):
+                    try:
+                        more, art = with_art(f"{kind}/{seed['id'][5:]}/recommendations", lang, include_adult="false")
+                    except Exception:
+                        continue
+                    more = [it for it in more if f"tmdb:{it['id']}" not in exclude and not it.get("adult")
+                            and it.get("media_type", kind) == kind]
+                    for meta in filtered([to_meta(it, stype, kind, names, art.get(it["id"], {}), AI_MARK, lang=lang)
+                                          for it in more]):
+                        if meta["id"] not in exclude:
+                            exclude.add(meta["id"])
+                            metas.append(meta)
+                            if len(metas) >= 15:
+                                break
+                    if len(metas) >= 15:
+                        break
+            return served(metas[:15])
 
+    if SEARCH_ORDER == "router_first" and plan is not None and not data:
+        data, art = search_both(kind, query, lang)
     ranked = sorted(data, key=lambda it: (exact(it), it.get("popularity") or 0), reverse=True)
-    return {"metas": filtered([to_meta(it, stype, kind, names, art.get(it["id"], {}), lang=lang) for it in ranked])}
+    metas = filtered([to_meta(it, stype, kind, names, art.get(it["id"], {}), lang=lang) for it in ranked])
+    if answer is not None and channel == "picker":
+        if answer["watched"] == "unseen":
+            exclude = set(p.get("seen", ())) | set(p.get("negative", ()))
+            metas = [x for x in metas if x["id"] not in exclude]
+        elif answer["watched"] == "seen":
+            allowed = {e["key"] for e in history if e["stype"] == stype}
+            metas = [x for x in metas if x["id"] in allowed]
+    return served(metas)
 
 
 # ---------------------------------------------------------------------------
@@ -2085,7 +2248,8 @@ def shelf_items(cid, typ, lang, who=None):
     metas = shelf_feed(lang, build=False).get(cid, {}).get('tv', [])
     hidden = deferred_keys(who_watching()[0] if who is None else who)
     metas = [x for x in metas if (typ == 'tv' or x['type'] == typ) and x['id'] not in hidden and preference_ok(x, cid, safety_subject(who))]
-    return metas if len(metas) >= ROW_MIN else []
+    pinned = _feeds.get((rid('shelfraw_'+cid.removeprefix(rid('shelf_'))), LANG), {}).get('status') == 'pinned'
+    return metas if pinned or len(metas) >= ROW_MIN else []
 
 ROW_WINDOW = 12
 ROW_MIN = 6
@@ -8791,8 +8955,8 @@ def mood_parse(resp, batch):
 decision("mood_pick", ver=1, lane="feed", cap=3, ttl=DAY, serving=False, requires=("OR_KEY",), api=False,
     inp={"state": [str, 16]}, out={"scores": {k: (float, None) for k in MOODS}},
     norm=lambda x: x, rule=None, params={}, min_acc=1,
-    llm={"path": "/api/alpha/decisions", "model": ROUTE_MODEL, "batch": 1, "timeout": 20,
-         "prompt": lambda b: {"model": ROUTE_MODEL, "state": "".join(b[0]["state"]), "questions": MOOD_Q,
+    llm={"path": "/api/alpha/decisions", "model": LUNA_DECIDER_MODEL, "batch": 1, "timeout": 20,
+         "prompt": lambda b: {"model": LUNA_DECIDER_MODEL, "state": "".join(b[0]["state"]), "questions": MOOD_Q,
                               "usage": {"include": True}}, "parse": mood_parse},
     fallback=lambda inp, err: ({"scores": {k: None for k in MOODS}}, 0))
 
@@ -14069,7 +14233,7 @@ class Handler(BaseHTTPRequestHandler):
             extras = urllib.parse.parse_qs(parts[4][:-5])
             query = (extras.get("search") or [""])[0].strip()
             if not query or addon_token().lower() in query.lower():
-                return self.send_json(200, {"metas": []}, cors=True)
+                return self.send_json(200, {"metas": []}, cors=True, no_store=True)
             log_search(query)
             try:
                 result = search(parts[2], query, lang)
@@ -14077,10 +14241,9 @@ class Handler(BaseHTTPRequestHandler):
                     if meta.get("poster") == "/command.svg":
                         meta["poster"] = self.headers.get("X-Forwarded-Proto", "http") + "://" + self.headers.get("Host", "localhost") + "/command.svg"
                 search_commands.remember_cards(command_context(), result.get("metas", []), scope)
-                command = any(m.get("id", "").startswith(rid('cmd:')) for m in result.get("metas", []))
-                return self.send_json(200, result, 0 if command else 600, cors=True, no_store=command)
+                return self.send_json(200, result, cors=True, no_store=True)
             except Exception as e:
-                return self.send_json(502, {"metas": [], "error": type(e).__name__}, cors=True)
+                return self.send_json(502, {"metas": [], "error": type(e).__name__}, cors=True, no_store=True)
         return self.send_json(404, {"error": "not found"})
 
 

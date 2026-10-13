@@ -280,7 +280,7 @@ class Members(Household):
 
 
 class SearchIntents(Household):
-    def test_search_intents_are_not_settings(self):
+    def test_search_requests_are_not_settings(self):
         cases = {'Something like Arrival': ('similar', ['Arrival']), 'Mehr wie Dark bitte': ('similar', ['Dark']),
                  'Nešto kao Dune': ('similar', ['Dune']), 'Movies by Kim for tonight': ('people', ['Kim']),
                  'Heute etwas Gemütliches': ('mood', ['Gemütliches']), 'Нешто весело за вечерас, молим': ('mood', ['весело'])}

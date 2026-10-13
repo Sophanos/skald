@@ -154,14 +154,17 @@ def evaluate(cases, models=None, *, transport=None, key='', base='https://openro
                 start = clock() if models is not None else 0
                 answer, error, cost = None, None, 0.0
                 try:
+                    inp = {'query': case['text'], **{k: case[k] for k in ('last', 'shown') if k in case}}
                     if models is None:
-                        result = spec['rule']({'query': case['text']}, {})
-                        if result is None:
+                        result = spec['rule'](inp, {})
+                        if result is None and case.get('recorded'):
+                            answer = parse_json(case['recorded']['choices'][0]['message']['content'])
+                        elif result is None:
                             error = 'no answer'
                         else:
                             answer = result[0]
                     else:
-                        payload = spec['llm']['prompt']([{'query': case['text']}])
+                        payload = spec['llm']['prompt']([inp])
                         payload.update(model=model, reasoning={'effort': effort},
                                        max_tokens=200 if effort == 'none' else 1200, usage={'include': True})
                         payload['messages'][0]['content'] = command_prompt(s)

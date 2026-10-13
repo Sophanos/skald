@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Offline decision replay, scaffolding and generated CLI/API skill documentation."""
+"""Offline decision replay, opt-in live routing checks and generated CLI/API skill documentation."""
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -14,6 +15,54 @@ from decide_kit import close_server, fixture_rows, load_server, reset, run_type,
 
 BEGIN = "<!-- skald:decide-api:begin -->"
 END = "<!-- skald:decide-api:end -->"
+
+
+def live_cases():
+    return [json.loads(line) for line in (ROOT / "eval/fixtures/decisions/route_query_live.jsonl").read_text().splitlines()]
+
+
+def route_input(row):
+    return {"query": row["q"], **{k: row[k] for k in ("last", "shown") if k in row}}
+
+
+def route_score(row, answer):
+    expect = {"route": row["route"], "watched": [row.get("watched", "any")], "list": [row.get("list", "taste")]}
+    if "previous" in row:
+        expect["previous"] = [row["previous"]]
+    return {q: answer.get("choice" if q == "route" else q) in choices for q, choices in expect.items()}
+
+
+def live_report():
+    key = os.environ.get("OR_KEY") or os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        return {"skipped": "OR_KEY not set", "pass": True}
+    with tempfile.TemporaryDirectory() as data:
+        server = load_server(data)
+        try:
+            server.OR_KEY = key
+            rows = live_cases()
+            correct, counts, failed, langs = {}, {}, [], {}
+            for row in rows:
+                inp = route_input(row)
+                answer = server.decide("route_query", inp)["answer"]
+                scores = route_score(row, answer)
+                misses = [q for q, hit in scores.items() if not hit]
+                for q, hit in scores.items():
+                    counts[q] = counts.get(q, 0) + 1
+                    correct[q] = correct.get(q, 0) + hit
+                lang = langs.setdefault(row["lang"], [0, 0])
+                lang[0] += 1
+                lang[1] += not misses
+                if misses:
+                    failed.append({"in": inp, "questions": misses, "answer": answer})
+            accuracy = {q: n / counts[q] for q, n in correct.items()}
+            all_three = 1 - len(failed) / len(rows)
+            return {"n": len(rows), "accuracy": accuracy, "failed": failed,
+                    "all_questions": all_three, "all_three": all_three,
+                    "question_counts": counts, "by_lang": {l: {"n": n, "all_questions": hits / n, "all_three": hits / n} for l, (n, hits) in langs.items()},
+                    "pass": all_three >= .9}
+        finally:
+            close_server(server)
 
 
 def report(kind=None):
@@ -124,9 +173,12 @@ def main(argv=None):
     p.add_argument("--ranker", action="store_true")
     p.add_argument("--write", action="store_true")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--live", action="store_true", help="Check route_query with the real decider; skip without OR_KEY")
     args = p.parse_args(argv)
     if args.ranker and not args.new or args.write and not args.skill:
         p.error("--ranker needs --new; --write needs --skill")
+    if args.live and args.type != "route_query":
+        p.error("--live needs --type route_query")
     if args.skill:
         block = skill_block()
         if args.write:
@@ -141,7 +193,7 @@ def main(argv=None):
             path.write_text(text)
         print(block)
         return 0
-    data = scaffold(args.new, args.ranker) if args.new else report(args.type)
+    data = {"route_query": live_report()} if args.live else scaffold(args.new, args.ranker) if args.new else report(args.type)
     if args.json:
         print(json.dumps(data, sort_keys=True))
     elif args.new:
