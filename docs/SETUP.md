@@ -1,5 +1,7 @@
 # Set up Skald
 
+Choose a ready-to-run [Compose setup](../examples/README.md); the tunnel companion reads `TUNNEL_TOKEN` from its private env file.
+
 Skald may suggest a shelf when it sees a weekly habit; it never creates one by itself.
 Use `skald suggest --person alex` to review your own habits. Children get no suggestions.
 
@@ -191,7 +193,7 @@ The optional `row_prefix` in household config sets catalog ids, for example
 digits, starting with a letter. Existing households keep their prefix in
 `DATA/legacy.json`; stored row ids are not rewritten.
 
-Choose home rows with `skald setup rows episodes,foryou,top10,digital,toprated`. This saves `household.rows`; Skald keeps its usual row order and search still works. Valid keys are episodes, foryou, week, upcoming, catchup, rewatch, because, leap, top10, people (For NAME), moods, lanes, docs, studios, anime, shelves, digital and toprated. The opt-in Latest Digital Releases lists movies released digitally in your country in the last 60 days, most popular first; Top Rated Movies uses TMDB ratings and at least 200 votes. Both respect age and hide settings. Run `skald setup rows all` to restore the default rows, without these two opt-in lists. Changes ask AIOStreams to refresh its rows.
+Choose home rows with `skald setup rows episodes,foryou,top10,digital,toprated`. This saves `household.rows`; Skald keeps its usual row order and search still works. Valid keys are episodes, foryou, week, upcoming, catchup, rewatch, because, leap, top10, people (For NAME), moods, lanes, docs, studios, anime, shelves, digital, toprated and newtoyou. The opt-in Latest Digital Releases lists movies released digitally in your country in the last 60 days, most popular first; Top Rated Movies uses TMDB ratings and at least 200 votes. The opt-in New to You row (newtoyou) rotates through the household, one member or Together each day, and mixes what that person keeps loving with a kind of story they have not tried yet; rejecting a pick there counts only lightly against their taste. All three respect age and hide settings. Run `skald setup rows all` to restore the default rows, without these three opt-in lists. Changes ask AIOStreams to refresh its rows.
 
 Each member can set discovery, years, unwanted genres, hidden categories and focus:
 

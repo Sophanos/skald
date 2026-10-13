@@ -238,6 +238,21 @@ class EmbeddingSwitchTests(unittest.TestCase):
         self.assertEqual(s.emb_status(), {'model': NEW, 'active': 1, 'pending': 0, 'needed': 1})
         self.assertEqual(set(s._emb), {'tmdb:1'})
 
+    def test_unembeddable_title_does_not_stall_switch(self):
+        s = self.s
+        keys = ('tmdb:1', 'tmdb:2', 'tmdb:3', 'tmdb:4')
+        self.old_cache(keys, OLD)
+        self.needed(keys)
+        def title(kind, tid):
+            if tid == '4':
+                raise OSError('synthetic title gone for good')
+            return tid
+        with patch.object(s, 'title_text', title):
+            s.ensure_emb([])
+            self.wait_for_embed()
+        self.assertEqual(s._emb_model, NEW)
+        self.assertEqual(set(s._emb), {'tmdb:1', 'tmdb:2', 'tmdb:3'})
+
     def check_pinned_coverage_after_restart(self, scoped):
         s = self.s
         self.old_cache(('tmdb:1', 'tmdb:2', 'tmdb:3'), OLD)

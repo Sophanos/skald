@@ -32,6 +32,8 @@ def normalize(value):
         return value.strip().casefold()
     if isinstance(value, list):
         return [normalize(v) for v in value]
+    if isinstance(value, dict):
+        return {k: normalize(v) for k, v in value.items()}
     return value
 
 
@@ -48,9 +50,18 @@ def score(expect, answer):
         return False, False
     op_ok = expect['op'] == answer['op']
     full_ok = op_ok
-    for field in ('person', 'kind'):
-        if field in expect:
-            full_ok = full_ok and field in answer and normalize(expect[field]) == normalize(answer[field])
+    for field in expect.keys() - {'op', 'values', 'steps', 'question'}:
+        full_ok = full_ok and field in answer and normalize(expect[field]) == normalize(answer[field])
+    if expect['op'] == 'plan':
+        expected, actual = expect['steps'], answer.get('steps')
+        full_ok = full_ok and isinstance(actual, list) and len(expected) == len(actual) and all(
+            score(e, a)[1] for e, a in zip(expected, actual))
+    if expect['op'] == 'ask':
+        question = answer.get('question')
+        full_ok = full_ok and isinstance(question, str) and bool(question.strip())
+        # A question with a guessed mutation is not a clarification.
+        full_ok = full_ok and not answer.get('steps') and not answer.get('values') and all(
+            field in expect or answer.get(field) is None for field in ('person', 'kind', 'until', 'months'))
     if 'values' in expect:
         expected, actual = expect['values'], answer.get('values')
         values_ok = isinstance(actual, list) and len(expected) == len(actual)
@@ -99,6 +110,7 @@ def percentile(values, fraction):
 def summarize(model, cases, results):
     n = len(results)
     now = [r for r in results if r['contract'] == 'now']
+    next_rows = [r for r in results if r['contract'] == 'next']
     groups, tiers = {}, {}
     for case, result in zip(cases, results):
         group = groups.setdefault(case['group'], {'correct': 0, 'count': 0})
@@ -118,6 +130,9 @@ def summarize(model, cases, results):
                 now_count=len(now),
                 now_op_accuracy=sum(r['op_ok'] for r in now) / len(now) if now else 0,
                 now_full_accuracy=sum(r['full_ok'] for r in now) / len(now) if now else 0,
+                next_count=len(next_rows),
+                next_op_accuracy=sum(r['op_ok'] for r in next_rows) / len(next_rows) if next_rows else 0,
+                next_full_accuracy=sum(r['full_ok'] for r in next_rows) / len(next_rows) if next_rows else 0,
                 by_tier=by_tier, by_group=groups, timeouts=sum(r.get('error') == 'TimeoutError' for r in results),
                 no_answer=sum(r.get('error') == 'no answer' for r in results),
                 errors=dict(Counter(r['error'] for r in results if r.get('error') and r['error'] != 'no answer')),
@@ -176,8 +191,8 @@ def evaluate(cases, models=None, *, transport=None, key='', base='https://openro
 
 def print_report(report, out):
     r = report
-    print('model | all cases | all op accuracy | all full accuracy | now cases | now op accuracy | now full accuracy | no answer | timeouts | p50 ms | p95 ms | total USD | USD/1000', file=out)
-    print(f"{r['model']} | {r['count']} | {r['op_accuracy']:.2%} | {r['full_accuracy']:.2%} | {r['now_count']} | {r['now_op_accuracy']:.2%} | {r['now_full_accuracy']:.2%} | {r['no_answer']} | {r['timeouts']} | {r['p50_ms']:.1f} | {r['p95_ms']:.1f} | {r['total_cost']:.6f} | {r['cost_per_1000']:.6f}", file=out)
+    print('model | all cases | all op accuracy | all full accuracy | now cases | now op accuracy | now full accuracy | next cases | next op accuracy | next full accuracy | no answer | timeouts | p50 ms | p95 ms | total USD | USD/1000', file=out)
+    print(f"{r['model']} | {r['count']} | {r['op_accuracy']:.2%} | {r['full_accuracy']:.2%} | {r['now_count']} | {r['now_op_accuracy']:.2%} | {r['now_full_accuracy']:.2%} | {r['next_count']} | {r['next_op_accuracy']:.2%} | {r['next_full_accuracy']:.2%} | {r['no_answer']} | {r['timeouts']} | {r['p50_ms']:.1f} | {r['p95_ms']:.1f} | {r['total_cost']:.6f} | {r['cost_per_1000']:.6f}", file=out)
     print('by-group full accuracy: ' + '; '.join(f"{g} {v['correct']}/{v['count']} ({v['correct']/v['count']:.2%})" for g, v in r['by_group'].items()), file=out)
     print('by-tier now accuracy: ' + '; '.join(
         f"{tier} {v['now_count']} cases op {v['op_accuracy']:.2%} full {v['full_accuracy']:.2%}"

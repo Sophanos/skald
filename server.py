@@ -50,14 +50,14 @@ import uuid
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, contextmanager
-from functools import lru_cache
+from functools import lru_cache, partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from types import SimpleNamespace
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -179,7 +179,8 @@ def invalid_json(_):
 
 
 ROW_KEYS = ('episodes', 'foryou', 'week', 'upcoming', 'catchup', 'rewatch', 'because', 'leap',
-            'top10', 'people', 'moods', 'lanes', 'docs', 'studios', 'anime', 'shelves', 'digital', 'toprated', 'family')
+            'top10', 'people', 'moods', 'lanes', 'docs', 'studios', 'anime', 'shelves', 'digital', 'toprated', 'family',
+            'newtoyou')
 
 
 def fresh_config(members):
@@ -221,7 +222,7 @@ def validate_history_connectors(cfg, need, data=None, environ=None):
         key = "connectors." + cid
         need(isinstance(c, dict) and set(c) <= {"kind", "enabled", "auth", "options", "accounts", "keep_raw"}, key)
         need("keep_raw" not in c or type(c["keep_raw"]) is bool, key + ".keep_raw")
-        need("accounts" not in c or cid in ("trakt_api", "mdblist", "stremio"), key + ".accounts")
+        need("accounts" not in c or cid in ("trakt_api", "mdblist", "stremio", "pmdb"), key + ".accounts")
         need(c.get("kind") in ("file_drop", "manual_export", "api", "player", "availability"), key + ".kind")
         need(type(c.get("enabled")) is bool, key + ".enabled")
         need(c.get("auth") is None or cid == "nzbhydra" and c.get("auth") == "file:hydra.json" or
@@ -268,7 +269,7 @@ def validate_history_connectors(cfg, need, data=None, environ=None):
                 need(isinstance(opts.get(field), str) and opts[field].strip() and
                      not any(ord(ch) < 32 for ch in opts[field]), key + ".options." + field)
             need(opts.get("profile", "household") in (*cfg["household"]["members"], "household"), key + ".options.profile")
-        elif cid in ("trakt_api", "mdblist", "stremio"):
+        elif cid in ("trakt_api", "mdblist", "stremio", "pmdb"):
             need(c["kind"] == "api", key)
             if "accounts" in c:
                 accounts = c["accounts"]
@@ -569,6 +570,11 @@ def public_config(cfg):
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from skald import migrate, shelves, metrics as row_metrics
+from skald.i18n import t as _translate
+
+# One place for the future player interface language setting.
+t = partial(_translate, lang="en")
+
 try:
     if globals().get("__name__") == "__main__" and (not sys.argv[1:] or migrate.rewrite_needed(DATA)):
         migrate.ensure(DATA)
@@ -1634,7 +1640,7 @@ def genres(kind, lang):
 def manifest(lang, scope=None):
     pin_shown(lang, scope)
     extra = [{"name": "search", "isRequired": True}]
-    suffix = {"movie": " · Movies", "series": " · Series", "tv": ""}
+    suffix = {"movie": t("catalog.movies"), "series": t("catalog.series"), "tv": ""}
     rows = []
     with addon_scope(scope):
         catalogs = feed_rows(lang)
@@ -1667,14 +1673,14 @@ def manifest(lang, scope=None):
             reserved.add(row["name"])
         used.add(row["name"])
     rows += [
-        {"type": "movie", "id": rid('search'), "name": "Search", "extra": extra},
-        {"type": "series", "id": rid('search'), "name": "Search", "extra": extra},
+        {"type": "movie", "id": rid('search'), "name": t("catalog.search"), "extra": extra},
+        {"type": "series", "id": rid('search'), "name": t("catalog.search"), "extra": extra},
     ]
     return {
         "id": CONFIG["addon"]["id"] + (f".{scope}" if scope else ""),
         "version": CONFIG["addon"]["version"],
-        "name": CONFIG["addon"]["name"] + (f" · {("Together" if scope == "together" else LABELS[scope])}" if scope else ""),
-        "description": f"Fast TMDB title search and home rows ({lang})" + (f" · {("Together" if scope == "together" else LABELS[scope])}" if scope else ""),
+        "name": CONFIG["addon"]["name"] + (f" · {(t("label.together") if scope == "together" else LABELS[scope])}" if scope else ""),
+        "description": t("addon.description", language=lang) + (f" · {(t("label.together") if scope == "together" else LABELS[scope])}" if scope else ""),
         "resources": ["catalog", {"name": "meta", "types": ["movie", "series", "tv"], "idPrefixes": [rid('cmd:')]}],
         "types": ["movie", "series", "tv"],
         "idPrefixes": ["tmdb:"],
@@ -1682,22 +1688,27 @@ def manifest(lang, scope=None):
     }
 
 
-def display_name(it, en):
-    # No German translation -> TMDB returns the original script (e.g. Chinese); prefer English then.
+def display_name(it, en, lang=LANG):
     name = it.get("title") or it.get("name") or ""
+    original = it.get("original_title" if it.get("title") else "original_name")
+    original_language = it.get("original_language") or ""
+    if name and ((original and name != original) or
+                 (original_language and original_language.split("-")[0] == lang.split("-")[0])):
+        return name
+    # History cards and offline reconstructions lack provenance; retain the old fallback.
     if not re.search(r"[A-Za-zÀ-ɏ]", name):
         name = en.get("title") or en.get("name") or name
     return name
 
 
-def to_meta(it, stype, kind, names, en, mark="", note=""):
+def to_meta(it, stype, kind, names, en, mark="", note="", lang=LANG):
     date = it.get("release_date") if kind == "movie" else it.get("first_air_date")
     ids = it.get("genre_ids") or [g["id"] for g in it.get("genres") or []]
     overview = it.get("overview") or en.get("overview") or ""
     meta = {
         "id": f"tmdb:{it['id']}",
         "type": stype,
-        "name": mark + display_name(it, en),
+        "name": mark + display_name(it, en, lang),
         "description": " · ".join(x for x in (note, overview) if x) or None,
         "releaseInfo": (date or "")[:4] or None,
         "genres": [names[g] for g in ids if g in names] or None,
@@ -1758,7 +1769,7 @@ def ai_search(stype, kind, picks, lang, names, mark=AI_MARK):
             continue
         if hit and hit[0]["id"] not in seen:
             seen.add(hit[0]["id"])
-            metas.append(to_meta(hit[0], stype, kind, names, hit[1], mark, why))
+            metas.append(to_meta(hit[0], stype, kind, names, hit[1], mark, why, lang=lang))
     return metas
 
 
@@ -1826,7 +1837,7 @@ def search(stype, query, lang, title_only=False):
                     used.add(e["key"])
                     it = {"id": e["id"], "title": e["title"], "name": e["title"],
                           "release_date": str(e.get("year") or ""), "first_air_date": str(e.get("year") or "")}
-                    metas.append(to_meta(it, stype, kind, names, {}, AI_MARK, why))
+                    metas.append(to_meta(it, stype, kind, names, {}, AI_MARK, why, lang=lang))
             return {"metas": filtered(metas)}
         if picks or (intent == "unseen" and picks is not None):
             metas = ai_search(stype, kind, picks, lang, names)
@@ -1840,7 +1851,7 @@ def search(stype, query, lang, title_only=False):
             return {"metas": filtered(metas if intent == "unseen" else metas + seen)}
 
     ranked = sorted(data, key=lambda it: (exact(it), it.get("popularity") or 0), reverse=True)
-    return {"metas": filtered([to_meta(it, stype, kind, names, art.get(it["id"], {})) for it in ranked])}
+    return {"metas": filtered([to_meta(it, stype, kind, names, art.get(it["id"], {}), lang=lang) for it in ranked])}
 
 
 # ---------------------------------------------------------------------------
@@ -1863,8 +1874,8 @@ def search(stype, query, lang, title_only=False):
 # The taste model (fingerprints + facets, see below) orders rows and can add short reasons to cards.
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-WD_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+WD_SHORT = [t("weekday." + str(i)) for i in range(1, 8)]
+MONTHS = [t("month." + str(i)) for i in range(1, 13)]
 ANIME_SEASONS = ["WINTER", "SPRING", "SUMMER", "FALL"]
 SEASON_SUFFIX = re.compile(r"\s*[:\-]?\s*(season\s*\d+.*|\d+(st|nd|rd|th)\s+season.*|part\s*\d+|cour\s*\d+|final season.*|"
                            r"\b(ii|iii|iv)\b|\b\d+$)\s*$", re.I)
@@ -2071,7 +2082,8 @@ def shelf_items(cid, typ, lang, who=None):
     if cid not in {r[0] for r in shelf_rows()}:
         return []
     metas = shelf_feed(lang, build=False).get(cid, {}).get('tv', [])
-    metas = [x for x in metas if (typ == 'tv' or x['type'] == typ) and preference_ok(x, cid, safety_subject(who))]
+    hidden = deferred_keys(who_watching()[0] if who is None else who)
+    metas = [x for x in metas if (typ == 'tv' or x['type'] == typ) and x['id'] not in hidden and preference_ok(x, cid, safety_subject(who))]
     return metas if len(metas) >= ROW_MIN else []
 
 ROW_WINDOW = 12
@@ -2081,7 +2093,7 @@ STUDIO_ROWS = [rid('hbo'), rid('paramount')]
 # Keep the player catalog order in sync (Top 10 has two catalogs).
 DEDUPE_ORDER = ([rid('episodes'), rid('foryou'), rid('week'), rid('because'), rid('catchup'), rid('upcoming'),
                  rid('leap')] + list(ROW_OWNER) + [rid('rewatch'), rid('top10'), rid('digital'), rid('toprated')] + STUDIO_ROWS + MOODS_ROWS + DOCS + LANES
-                + [rid('airing'), rid('nextseason')])
+                + [rid('airing'), rid('nextseason'), rid('newtoyou')])
 GUEST_ROW_POLICY = {
     rid('episodes'): False,  # Resume household plays.
     rid('foryou'): False,  # Household taste shortlist.
@@ -2110,12 +2122,13 @@ GUEST_ROW_POLICY = {
     rid('lane5'): False,  # Household affinity and seeds.
     rid('airing'): False,  # Household history masks.
     rid('nextseason'): False,  # Household history masks.
+    rid('newtoyou'): False,  # Member taste rotation.
 }
 GUEST_ROW_POLICY.update(dict.fromkeys(ROW_OWNER, False))
 GUEST_ROW_POLICY.update({rid('digital'): True, rid('toprated'): True})
 GUEST_ROWS = {cid for cid, allowed in GUEST_ROW_POLICY.items() if allowed}
 MIXED = ({rid('foryou'), rid('upcoming'), rid('catchup'), rid('rewatch'), rid('because'), rid('week'),
-          rid('leap'), rid('family')} | set(ROW_OWNER) | {rid(p) for p in ARCHIVED} | set(LANES) | set(MOODS_ROWS) | set(SHELF_ROWS) | set(DOCS) | set(STUDIO_ROWS))
+          rid('leap'), rid('family'), rid('newtoyou')} | set(ROW_OWNER) | {rid(p) for p in ARCHIVED} | set(LANES) | set(MOODS_ROWS) | set(SHELF_ROWS) | set(DOCS) | set(STUDIO_ROWS))
 MIX = ("tv", "movie", "series")  # tv = both kinds in one row; movie / series = one kind only
 STAMP_V = "17.3"  # bump to rebuild every row once after a format change
 ROW_MAX = 40
@@ -2161,7 +2174,7 @@ def row_groups():
 def row_enabled(cid):
     keys = CONFIG['household'].get('rows')
     if keys is None:
-        return cid not in (rid('digital'), rid('toprated'))
+        return cid not in (rid('digital'), rid('toprated'), rid('newtoyou'))
     groups = row_groups()
     return any(cid in groups.get(key, [rid(key)]) for key in keys)
 
@@ -2178,28 +2191,29 @@ def feed_rows(lang=LANG, profiles=True):
         return title
 
     rows = [
-        (rid('episodes'), ("series",), "Continue Watching & New Episodes"),
-        (rid('foryou'), MIX, "✨ For You"),
-        (rid('week'), MIX, "✨ This Week for " + " & ".join(LABELS[p] for p in adult_people())),
-        (rid('upcoming'), MIX, "Coming Soon for You"),
-        (rid('catchup'), MIX, "Catch Up"),
-        (rid('rewatch'), MIX, "Watch Again"),
-        (rid('because'), MIX, built(rid('because'), "More Like Your Favourites")),
-        (rid('leap'), MIX, built(rid('leap'), "Same Feeling, New World")),
-        (rid('top10'), ("movie", "series"), {"movie": "Top 10 Movies This Week", "series": "Top 10 Series This Week"}),
-    ] + [(cid, MIX, "For " + LABELS[p]) for cid, p in ROW_OWNER.items()] + [(cid, MIX, built(cid, "Tonight's Mood")) for cid in MOODS_ROWS] \
-      + [(cid, MIX, built(cid, "Picked for You")) for cid in LANES] \
+        (rid('episodes'), ("series",), t("row.episodes")),
+        (rid('foryou'), MIX, t("row.foryou")),
+        (rid('week'), MIX, t("row.week", people=" & ".join(LABELS[p] for p in adult_people()))),
+        (rid('upcoming'), MIX, t("row.upcoming")),
+        (rid('catchup'), MIX, t("row.catchup")),
+        (rid('rewatch'), MIX, t("row.rewatch")),
+        (rid('because'), MIX, built(rid('because'), t("row.because"))),
+        (rid('leap'), MIX, built(rid('leap'), t("row.leap"))),
+        (rid('top10'), ("movie", "series"), {"movie": t("row.top10.movie"), "series": t("row.top10.series")}),
+    ] + [(cid, MIX, t("row.member", person=LABELS[p])) for cid, p in ROW_OWNER.items()] + [(cid, MIX, built(cid, t("row.mood"))) for cid in MOODS_ROWS] \
+      + [(cid, MIX, built(cid, t("row.picked"))) for cid in LANES] \
       + [(cid, MIX, DOC_ROWS.get(cid, DOC_TREND)[0]) for cid in DOCS] + [(cid, MIX, STUDIOS[cid][0]) for cid in STUDIO_ROWS] + [
-        (rid('airing'), ("series",), "Anime · New This Week"),
-        (rid('nextseason'), ("series",), f"Anime · Next Season ({nxt.title()} {nyear})"),
-    ] + [(rid(p), MIX, "✨ For " + label) for p, label in ARCHIVED.items()
+        (rid('airing'), ("series",), t("row.anime.week")),
+        (rid('nextseason'), ("series",), t("row.anime.next", season=t("season." + nxt.lower()), year=nyear)),
+    ] + [(rid('newtoyou'), MIX, built(rid('newtoyou'), t("row.newtoyou")))] * row_enabled(rid('newtoyou')) \
+      + [(rid(p), MIX, t("row.archived", person=label)) for p, label in ARCHIVED.items()
          if p in (active_profiles() if profiles else ())]
     rows += shelf_rows() if any(row_enabled(cid) for cid in SHELF_ROWS) else []
     rows += [(rid(key), ('movie',), name) for key, name in
-             (('digital', 'Latest Digital Releases'), ('toprated', 'Top Rated Movies')) if row_enabled(rid(key))]
+             (('digital', t("row.digital")), ('toprated', t("row.toprated"))) if row_enabled(rid(key))]
     scope = getattr(_scoping, "scope", None)
     if any(kids_age(p) is not None for p in PEOPLE) and (scope not in PEOPLE or kids_age(scope) is not None):
-        rows.append((rid('family'), MIX, "Family Picks"))
+        rows.append((rid('family'), MIX, t("row.family")))
     rank = {cid: i for i, cid in enumerate(DEDUPE_ORDER)}
     keys = CONFIG['household'].get('row_order')
     groups = row_groups()
@@ -2297,6 +2311,8 @@ def classify(item, now):
 def real_play(e):
     """Actually watched (not just opened): what may credit a row or count as a play."""
     it = e["item"]
+    if it.get("src") == "sync:pmdb":
+        return bool(it.get("played"))
     rated = e.get("wsrc") == "trakt" and it.get("rating") is not None
     rated = rated or any(opinion.get("wsrc") == "trakt" and (opinion.get("item") or {}).get("rating") is not None
                          for opinion in (e.get("opinions") or {}).values())
@@ -2306,7 +2322,7 @@ def real_play(e):
 
 
 def _taste_accounts():
-    return {p: auth for cid in ("trakt_api", "mdblist", "stremio")
+    return {p: auth for cid in ("trakt_api", "mdblist", "stremio", "pmdb")
             for p, auth in CONFIG["connectors"].get(cid, {}).get("accounts", {}).items()}
 
 
@@ -2317,17 +2333,31 @@ def taste_drop(cid):
     return combine(DATA, name, filter_forgotten(DATA, CONFIG, name, _drop_read(cid), owner))
 
 
+def _taste_rank(value):
+    it = value.get("item", value)
+    weight = value.get("weight", 0)
+    if "item" not in value and it.get("src") == "sync:pmdb":
+        weight *= IMPORT_TRUST["pmdb"]
+    completion = it.get("completion") or 0
+    if it.get("type") == "movie":
+        completion = completion or it.get("progress") or 1
+    return (it.get("rating") is not None, bool(it.get("played")),
+            completion if it.get("played") else 0,
+            it.get("episodes_played") or 0,
+            bool(it.get("dropped") or value.get("signal") == "abandoned"), weight)
+
+
 def read_trakt():
     """Account history, attributed by configured file rather than remote item fields."""
     accounts = CONFIG["connectors"].get("trakt_api", {}).get("accounts")
     items = ([{**it, "person": person} for person in accounts for it in taste_drop("trakt-" + person)]
              if accounts is not None else taste_drop("trakt"))
-    if not any(cid in CONFIG["connectors"] for cid in ("mdblist", "stremio")):
+    if not any(cid in CONFIG["connectors"] for cid in ("mdblist", "stremio", "pmdb")):
         return items
     if accounts is None:
         items = [{**it, "person": TRAKT_PERSON} for it in items]
     positions = {(it["person"], it["type"], it["id"]): n for n, it in enumerate(items)}
-    for source in ("mdblist", "stremio"):
+    for source in ("mdblist", "stremio", "pmdb"):
         for person in CONFIG["connectors"].get(source, {}).get("accounts", {}):
             for it in taste_drop(source + "-" + person):
                 it = {**it, "person": person}
@@ -2342,7 +2372,8 @@ def read_trakt():
                 if source == "stremio" and it.get("rating") is not None and old.get("played"):
                     items[n] = {**old, **{f: it[f] for f in ("rating", "signal", "weight")}}
                     continue
-                if (bool(it.get("played")), it.get("weight", 0)) > (bool(old.get("played")), old.get("weight", 0)):
+                if (_taste_rank(it) > _taste_rank(old) if source == "pmdb" else
+                        (bool(it.get("played")), it.get("weight", 0)) > (bool(old.get("played")), old.get("weight", 0))):
                     items[n] = it
     return items
 
@@ -2378,6 +2409,8 @@ _trakt_accounts = {}
 
 def _drop_path(cid):
     if cid.startswith("trakt-") and cid[6:] in CONFIG["connectors"].get("trakt_api", {}).get("accounts", {}):
+        return os.path.join(DATA, cid + ".history.json")
+    if cid.startswith("pmdb-") and cid[5:] in CONFIG["connectors"].get("pmdb", {}).get("accounts", {}):
         return os.path.join(DATA, cid + ".history.json")
     if cid.startswith("mdblist-") and cid[8:] in CONFIG["connectors"].get("mdblist", {}).get("accounts", {}):
         return os.path.join(DATA, cid + ".history.json")
@@ -2463,7 +2496,7 @@ def connector_seeds(now):
             enabled &= not per_person
         out[cid] = _connector(cid, cfg["kind"], TRAKT_PERSON if cid in ("trakt", "trakt_api") else "both", now,
                               auth=cfg.get("auth"), disabled=not enabled)
-        if cid in ("trakt_api", "mdblist", "stremio") and "accounts" in cfg:
+        if cid in ("trakt_api", "mdblist", "stremio", "pmdb") and "accounts" in cfg:
             out[cid]["person"] = "both"
             out[cid]["accounts"] = {p: _connector(cid + ":" + p, "api", p, now, auth=auth, disabled=not enabled)
                                     for p, auth in cfg["accounts"].items()}
@@ -3216,7 +3249,7 @@ def _trakt_export(history, movies, shows, ratings, now):
 TRAKT_BASE_WEIGHT = {"loved": 3, "watched": 2, "interest": 1, "abandoned": -1.5}
 
 
-def _trakt_validate_export(data):
+def _trakt_validate_export(data, *, unknown_dates=False):
     """Reject malformed history before replacing an existing output file."""
     if not isinstance(data, dict) or not isinstance(data.get("exported_at"), str):
         raise ValueError("export must be an object with an exported_at string")
@@ -3247,7 +3280,7 @@ def _trakt_validate_export(data):
             if not isinstance(plays, list):
                 raise ValueError(f"{where}.{key} must be an array")
             if kind == "movies":
-                if any(type(minute) is not int for minute in plays):
+                if any(type(minute) is not int and not (unknown_dates and minute is None) for minute in plays):
                     raise ValueError(f"{where}.plays must contain integer epoch minutes")
             else:
                 total = row.get("eps_total")
@@ -3256,7 +3289,8 @@ def _trakt_validate_export(data):
                 for episode in plays:
                     if (
                         not isinstance(episode, list) or len(episode) != 4
-                        or any(type(value) is not int for value in episode[:3])
+                        or any(type(value) is not int for value in episode[:2])
+                        or type(episode[2]) is not int and not (unknown_dates and episode[2] is None)
                         or episode[0] < 0 or episode[1] < 0
                     ):
                         raise ValueError(f"{where}.eps needs [season, number, minute, runtime] rows")
@@ -3272,18 +3306,18 @@ def _trakt_max_session_eps(minutes):
     return largest
 
 
-def _trakt_import_history(data, now):
-    _trakt_validate_export(data)
+def _trakt_import_history(data, now, *, unknown_dates=False):
+    _trakt_validate_export(data, unknown_dates=unknown_dates)
     minutes = Counter(minute for movie in data["movies"] for minute in movie["plays"])
     minutes.update(episode[2] for show in data["shows"] for episode in show["eps"])
     # shortcut: same-minute batches of >=5 are backfill; add burst detection if imports spread out.
-    backfill = {minute for minute, count in minutes.items() if count >= 5}
+    backfill = {minute for minute, count in minutes.items() if count >= 5 and minute is not None}
     items = []
     for kind in ("movies", "shows"):
         for row in data[kind]:
             series = kind == "shows"
             plays = [episode[2] for episode in row["eps"]] if series else row["plays"]
-            real = [minute for minute in plays if minute not in backfill]
+            real = [minute for minute in plays if minute not in backfill and minute is not None]
             at = max(real) * 60_000 if real else None
             item = {
                 "profile": "me", "type": "series" if series else "movie",
@@ -3336,7 +3370,7 @@ def _trakt_import_history(data, now):
             genres = {genre.lower() for genre in item["genres"]}
             if "anime" in genres or (item["lang"] == "ja" and "animation" in genres):
                 flags.append("anime")
-            if plays and not real:
+            if plays and all(minute in backfill for minute in plays):
                 flags.append("backfill_only")
             age = (now - at / 1000) / DAY if at is not None else float("inf")
             recency = 1.0 if age <= 30 else 0.7 if age <= 120 else 0.5 if age <= 365 else 0.35
@@ -3356,6 +3390,181 @@ def _trakt_import_history(data, now):
         "items": items,
     }
 
+
+
+class PMDBKeyRejected(ValueError):
+    code = 401
+
+
+class PMDBRateLimited(ValueError):
+    code = 429
+
+    def __init__(self, delay):
+        self.headers = {"Retry-After": str(delay)}
+
+
+class PMDBTimeout(TimeoutError):
+    pass
+
+
+PMDB_ERRORS = {"PMDBKeyRejected": "PublicMetaDB key rejected; reconnect with skald setup --connect pmdb",
+               "PMDBRateLimited": "PublicMetaDB rate limit; sync stopped, try later",
+               "PMDBTimeout": "PublicMetaDB timeout; try later",
+               "SchemaMismatch": "PublicMetaDB malformed response; last good history kept"}
+
+
+def _pmdb_pages(path, key, budget):
+    items, expected = [], None
+    for page in range(1, CONNECTOR_HTTP_PAGES + 1):
+        try:
+            value = _http_get("https://publicmetadb.com/api/external" + path + "?" +
+                              urllib.parse.urlencode({"page": page, "perPage": 500}),
+                              {"Authorization": "Bearer " + key}, budget=budget)
+        except urllib.error.HTTPError as error:
+            if error.code in (401, 403):
+                raise PMDBKeyRejected() from None
+            if error.code == 429:
+                try:
+                    delay = float(error.headers.get("Retry-After", CONNECTOR_MIN))
+                except (TypeError, ValueError):
+                    delay = CONNECTOR_MIN
+                delay = min(CONNECTOR_IDLE_MAX, max(CONNECTOR_MIN, delay)) if math.isfinite(delay) else CONNECTOR_MIN
+                raise PMDBRateLimited(delay) from None
+            raise ValueError("PublicMetaDB request failed") from None
+        except (TimeoutError, urllib.error.URLError) as error:
+            if isinstance(error, TimeoutError) or isinstance(getattr(error, "reason", None), TimeoutError):
+                raise PMDBTimeout() from None
+            raise ValueError("PublicMetaDB request failed") from None
+        except (ByteCapExceeded, PageCapExceeded):
+            raise
+        except Exception:
+            raise SchemaMismatch() from None
+        if not isinstance(value, dict) or any(type(value.get(f)) is not int
+                for f in ("total", "page", "perPage", "totalPages")):
+            raise SchemaMismatch()
+        total, size, pages = value["total"], value["perPage"], value["totalPages"]
+        if pages > CONNECTOR_HTTP_PAGES:
+            raise PageCapExceeded()
+        batch = value.get("items")
+        if total < 0 or not 1 <= size <= 500 or value["page"] != page or not isinstance(batch, list) or \
+                any(not isinstance(row, dict) for row in batch) or \
+                pages != (total + size - 1) // size and not (total == 0 and pages == 1) or \
+                len(batch) != min(size, max(0, total - (page - 1) * size)) or \
+                expected is not None and expected != (total, size, pages):
+            raise SchemaMismatch()
+        expected = total, size, pages
+        items.extend(batch)
+        if page >= pages:
+            return items
+    raise PageCapExceeded()
+
+
+def _pmdb_time(value):
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise SchemaMismatch()
+    at = _connector_time(value)
+    if at is None or not math.isfinite(at):
+        raise SchemaMismatch()
+    return at
+
+
+def _pmdb_items(watched, resume, dropped, watchlist, now, *, readonly=False):
+    grouped, states = {"movies": {}, "shows": {}}, {}
+    recent, latest = 0, 0
+    for source, rows in (("watchlist", watchlist), ("resume", resume), ("watched", watched), ("dropped", dropped)):
+        seen = set()
+        for row in rows:
+            tid, kind, ident = row.get("tmdb_id"), row.get("media_type"), row.get("id")
+            if type(tid) is not int or tid <= 0 or kind not in ("movie", "tv") or \
+                    type(ident) not in (int, str) or not str(ident) or ident in seen:
+                raise SchemaMismatch()
+            seen.add(ident)
+            episode = [row.get("season"), row.get("episode")]
+            if kind == "tv" and source in ("watched", "resume") and any(v is not None for v in episode):
+                if any(type(v) is not int for v in episode) or episode[0] < 0 or episode[1] < 1:
+                    raise SchemaMismatch()
+            elif kind == "tv" and source == "watched":
+                raise SchemaMismatch()
+            at = _pmdb_time(row.get("watched_at") if source == "watched" else
+                            row.get("updated") or row.get("created"))
+            latest = max(latest, at or 0)
+            bucket = "movies" if kind == "movie" else "shows"
+            if tid not in grouped[bucket]:
+                details = None if readonly else tmdb_details({"id": "tmdb:" + str(tid),
+                                                             "type": "movie" if kind == "movie" else "series"})
+                det = details[1] if details else {}
+                grouped[bucket][tid] = {"tmdb": tid, "title": det.get("title") or det.get("name") or "Unknown title",
+                    "year": int((det.get("release_date") or det.get("first_air_date"))[:4]) if
+                            (det.get("release_date") or det.get("first_air_date") or "")[:4].isdigit() else None,
+                    "genres": genre_names([g["name"] for g in det.get("genres") or []]),
+                    "lang": det.get("original_language"), "status": (det.get("status") or "").lower(),
+                    **({"plays": []} if kind == "movie" else {"eps": [], "eps_total": det.get("number_of_episodes")})}
+            title = grouped[bucket][tid]
+            if source == "watched":
+                minute = math.floor(at / 60 + .5) if at is not None else None
+                title["plays" if kind == "movie" else "eps"].append(minute if kind == "movie" else [*episode, minute, 0])
+                recent += at is not None and now - 30 * DAY <= at <= now
+            elif source == "resume":
+                progress = row.get("progress")
+                if type(progress) not in (int, float) or not math.isfinite(progress) or not 0 <= progress <= 100:
+                    raise SchemaMismatch()
+                states[(kind, tid)] = {"progress": progress / 100, "at": at * 1000 if at is not None else None,
+                    **({"resume_episode": episode} if kind == "tv" and episode[0] is not None else {})}
+            elif source == "dropped":
+                states.setdefault((kind, tid), {}).update(dropped=True, at=at * 1000 if at is not None else None)
+    exported = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    doc = _trakt_import_history({"exported_at": exported,
+        **{bucket: list(titles.values()) for bucket, titles in grouped.items()}}, now, unknown_dates=True)
+    doc["source"] = "pmdb"
+    for it in doc["items"]:
+        kind = "movie" if it["type"] == "movie" else "tv"
+        state = states.get((kind, int(it["id"][5:])), {})
+        if it["played"] and not state.get("dropped"):
+            state = {k: v for k, v in state.items() if k != "at"}
+        it.update(src="sync:pmdb", **state)
+        if state.get("dropped"):
+            it.update(signal="abandoned", weight=-1.5)
+        elif not it["played"]:
+            it.update(signal="interest", weight=1)
+    return doc, recent, latest
+
+
+def _connector_pmdb(c, now, budget=None, *, readonly=False):
+    budget = budget if budget is not None else {"bytes": 0, "pages": 0}
+    if "accounts" in c:
+        return _connector_accounts(c, now, budget, _connector_pmdb)
+    key = _resolve_auth(c["auth"])
+    watched, resume, dropped, lists = [_pmdb_pages(path, key, budget)
+                                      for path in ("/watched", "/resume", "/dropped", "/lists")]
+    watchlist = []
+    for row in lists:
+        ident = row.get("id")
+        if type(ident) not in (int, str) or not str(ident) or row.get("type") not in ("watchlist", "custom"):
+            raise SchemaMismatch()
+        if row["type"] == "watchlist":
+            watchlist.extend(_pmdb_pages("/lists/" + urllib.parse.quote(str(ident), safe="") + "/items", key, budget))
+    try:
+        doc, recent, latest = _pmdb_items(watched, resume, dropped, watchlist, now, readonly=readonly)
+    except Exception:
+        raise SchemaMismatch() from None
+    if readonly:
+        return doc, None, {"plays_30d": recent}
+    name = "pmdb-" + c["person"] + ".history"
+    try:
+        with open(os.path.join(DATA, name + ".json")) as fh:
+            old = json.load(fh)
+    except FileNotFoundError:
+        old = {}
+    from skald.history import filter_forgotten
+    doc["items"] = filter_forgotten(DATA, CONFIG, name + ".json", doc["items"], c["person"])
+    previous = {(it["type"], it["id"]): it for it in old.get("items", [])}
+    changed = [it for it in doc["items"] if it != previous.get((it["type"], it["id"]))]
+    if doc["items"] != old.get("items"):
+        _connector_write(name, doc, indent=2, newline=True)
+    events = list(trakt_events(now, [{**it, "person": c["person"]} for it in changed]))
+    return events, [latest, len(doc["items"])], {"events": len(doc["items"]), "error": None}
 
 
 class MDBListKeyRejected(ValueError):
@@ -3645,13 +3854,13 @@ def _connector_accounts(c, now, budget, adapter):
     accounts, events = copy.deepcopy(c["accounts"]), []
     for account in accounts.values():
         if "backoff_until" in budget:
-            account["last_error"] = "RateLimited"
+            account["last_error"] = "PMDBRateLimited" if adapter == _connector_pmdb else "RateLimited"
             continue
         try:
             new_events, cursor, stats = adapter(account, now, budget)
         except Exception as error:
             account["last_error"] = type(error).__name__
-            if adapter in (_connector_mdblist, _connector_stremio):
+            if adapter in (_connector_mdblist, _connector_stremio, _connector_pmdb):
                 account["health"] = {"state": "error", "error": type(error).__name__, "at": now}
             if isinstance(error, MDBListKeyRejected):
                 account["health"]["fixHint"] = "MDBList key rejected; run skald setup --connect mdblist --person " + account["person"]
@@ -3659,6 +3868,8 @@ def _connector_accounts(c, now, budget, adapter):
                 account["health"]["fixHint"] = "MDBList rate limit; sync stopped, try later"
             if isinstance(error, (StremioKeyRejected, StremioRateLimited)):
                 account["health"]["fixHint"] = str(error)
+            if adapter == _connector_pmdb:
+                account["health"]["fixHint"] = PMDB_ERRORS.get(type(error).__name__, "PublicMetaDB probe failed")
             if isinstance(error, TraktLoginRequired):
                 account["health"]["fixHint"] = "re-run skald trakt login --member " + account["person"]
             if getattr(error, "code", None) == 429:
@@ -3756,7 +3967,7 @@ def _connector_async(c, now):
 
 CONNECTOR_POLL = {"history": _connector_history, "trakt": _connector_trakt,
                   "aiostreams_db": _connector_player, "jellyfin": _connector_player, "plex": _connector_player,
-                  "trakt_api": _connector_trakt_api, "mdblist": _connector_mdblist, "stremio": _connector_stremio}
+                  "trakt_api": _connector_trakt_api, "mdblist": _connector_mdblist, "stremio": _connector_stremio, "pmdb": _connector_pmdb}
 
 
 def poll(c, now):
@@ -3956,7 +4167,7 @@ def trakt_entry(it, now):
 # --- events ---
 EVENT_ACTION = {"loved": "love", "liked": "like", "watched": "play", "interest": "interest",
                 "opened": "open", "abandoned": "abandon", "disliked": "not_for_us"}
-EVENT_FAMILY = {"tv": "tv", "trakt": "trakt", "told": "told", "remote": "remote", "interview": "remote"}
+EVENT_FAMILY = {"tv": "tv", "trakt": "trakt", "told": "told", "remote": "remote", "interview": "remote", "sync:pmdb": "trakt"}
 ACTION_W = {}  # populated on first use, after the source tables below are defined.
 OBSERVER = {"self": 1.0, "other": 1.0}
 _event_stats = {"unknown_src": 0}
@@ -3999,7 +4210,10 @@ def event_weight(ev, now):
     family = EVENT_FAMILY.get(src, "import")
     if family == "trakt":
         age = (now - ev["t"]) / DAY if ev["t"] is not None else 999
-        return ev["ctx"]["signal"], float(ev["w0"] or 0), age
+        weight = float(ev["w0"] or 0)
+        if src == "sync:pmdb":
+            weight *= trust(src)
+        return ev["ctx"]["signal"], weight, age
     signal, weight = ACTION_W[(family, ev["action"])]
     if family == "import":
         age = max(0, int((now - ev["t"]) / DAY)) if ev["t"] is not None else 999
@@ -4012,6 +4226,8 @@ def event_weight(ev, now):
             age = max(0, age)
         decay_age = 0 if family == "remote" and ev["action"] == "love" and age <= 90 else age
         decay = 1.0 if decay_age <= 30 else 0.5 if decay_age <= 120 else 0.25
+        if family == "remote" and signal == "disliked" and (ev.get("ctx") or {}).get("row") == rid('newtoyou'):
+            weight *= NEWTOYOU_REJECT  # a deliberate stretch that missed says little about the person
     return signal, weight * ev["conf"] * trust(src) * OBSERVER[observer(ev)] * decay, age
 
 
@@ -4073,7 +4289,7 @@ def trakt_events(now, trakt, _ids=None):
         signal = it.get("signal") or "watched"
         yield _event(it["at"] / 1000 if it.get("at") else None, f"trakt:{kind}:{it['id']}", it["id"], kind,
                      it.get("title") or "", str(it.get("year") or ""), person, [person],
-                     EVENT_ACTION.get(signal, signal), "trakt", {"item": it, "genres": genre_names(it.get("genres") or []),
+                     EVENT_ACTION.get(signal, signal), "sync:pmdb" if it.get("src") == "sync:pmdb" else "trakt", {"item": it, "genres": genre_names(it.get("genres") or []),
                      "flags": it.get("flags") or [], "signal": signal}, w0=it.get("weight"), _ids=ids)
 
 
@@ -4225,9 +4441,9 @@ def _claim_rank(e, now, person=None, newest=False):
         eid = ""
         item = value.get("item", e.get("item", {}))
         day = math.floor(now / DAY - e.get("age", 999))
-        if src in ("tv", "trakt"):
+        if src in ("tv", "trakt", "sync:pmdb"):
             day = math.floor(item["at"] / 1000 / DAY) if item.get("at") else -math.inf
-    explicit = src != "trakt" and (action in EXPLICIT if record or "action" in e else
+    explicit = src not in ("trakt", "sync:pmdb") and (action in EXPLICIT if record or "action" in e else
                action in EXPLICIT if src in ("remote", "interview") else signal in ("loved", "liked", "disliked"))
     if not IMPORT_COMPLETION_FIRST and signal in ("watched", "abandoned"): explicit = True
     inferred = {"opened": 0, "interest": 1, "abandoned": 2, "watched": 3, "loved": 4}.get(signal, 0)
@@ -4450,16 +4666,22 @@ def fold_events(stages, now):
                     by_key[key] = e
                     entries.append(e)
             elif stage == "trakt":
+                by_title = {(e["key"], e["kind"]): e for e in entries}
                 for ev in evts:
                     t = trakt_entry(ev["ctx"]["item"], now)
                     t["signal"], t["weight"], t["age"] = event_weight(ev, now)
-                    t["wsrc"] = "trakt"
-                    e = by_key.get(t["key"])
+                    t["wsrc"] = ev["src"]
+                    e = by_title.get((t["key"], t["kind"]))
                     if not e:
                         by_key[t["key"]] = t
+                        by_title[(t["key"], t["kind"])] = t
                         entries.append(t)
                         continue
                     person = ev["who"]
+                    if ev["src"] == "sync:pmdb" and person in _expand_together(e["by"]):
+                        old = (e.get("opinions") or {}).get(person) or e.get("shared") or e
+                        if _taste_rank(old) >= _taste_rank(t):
+                            continue
                     watch_fields = ("age", "genres", "title", "year") if _taste_accounts() else ()
                     if _taste_accounts() and e["who"] not in ("tv", "both"):
                         old = {k: e[k] for k in ("signal", "weight", "item", "flags") + watch_fields}
@@ -4481,7 +4703,7 @@ def fold_events(stages, now):
                     e["flags"] = list(dict.fromkeys(e["flags"] + t["flags"]))
                     if t["signal"] == "loved" or (e["signal"] != "loved" and t["weight"] > e["weight"]):
                         if t["weight"] >= e["weight"]:
-                            e["wsrc"] = "trakt"
+                            e["wsrc"] = ev["src"]
                         e.update(signal=t["signal"], weight=max(e["weight"], t["weight"]))
                     e["age"] = min(e["age"], t["age"])
                     if t["item"].get("last_episode") and tuple(t["item"]["last_episode"]) > tuple(e["item"].get("last_episode") or ()):
@@ -4629,6 +4851,10 @@ def taste_hash(name, items):
         if CONFIG["connectors"].get("stremio", {}).get("accounts"):
             signal.append(sorted((person, it["id"], it.get("at"), it.get("episodes_played"), it.get("last_episode"))
                 for person in CONFIG["connectors"]["stremio"]["accounts"] for it in _drop_read("stremio-" + person)))
+        if CONFIG["connectors"].get("pmdb", {}).get("accounts"):
+            signal.append(sorted((person, it["type"], it["id"], it.get("at"), it.get("episodes_played"),
+                                  it.get("last_episode"), it.get("resume_episode"), it.get("progress"))
+                for person in CONFIG["connectors"]["pmdb"]["accounts"] for it in _drop_read("pmdb-" + person)))
     signal.append(read_taste().get(name))
     if name == "household":
         signal.append(read_taste().get("people"))
@@ -4646,6 +4872,10 @@ def episodes_hash(items):
     if CONFIG["connectors"].get("stremio", {}).get("accounts"):
         signal.append(sorted((person, it["id"], it.get("at"), it.get("episodes_played"), it.get("last_episode"))
             for person in CONFIG["connectors"]["stremio"]["accounts"] for it in _drop_read("stremio-" + person) if it["type"] == "series"))
+    if CONFIG["connectors"].get("pmdb", {}).get("accounts"):
+        signal.append(sorted((person, it["id"], it.get("at"), it.get("episodes_played"),
+                              it.get("last_episode"), it.get("resume_episode"))
+            for person in CONFIG["connectors"]["pmdb"]["accounts"] for it in _drop_read("pmdb-" + person) if it["type"] == "series"))
     return hashlib.sha1(json.dumps(signal).encode()).hexdigest()[:8]
 
 
@@ -4686,6 +4916,7 @@ def refresh_profiles():
 # A later play on the shared TV credits every row that showed it in the LEARN_WINDOW days before.
 # Titles shown on LEARN_TIRED days without a play sink to the end of their row and leave the AI rows.
 
+NEWTOYOU_REJECT = 0.2  # New to You picks change one axis on purpose; a no there counts a fifth of a normal no
 LEARN_ROWS = {rid('foryou'), rid('upcoming'), rid('catchup'), rid('rewatch'), rid('because'), rid('top10'), rid('week'),
               rid('leap')} | set(ROW_OWNER) | set(DOCS) | set(STUDIO_ROWS)
 LEARN_VISIBLE = 20
@@ -4718,7 +4949,7 @@ def row_name(cid, lang, fallback=None, metas=None, key="title"):
     if cid in SHELF_ROWS and key == "title":
         return label or next((r[2] for r in shelf_rows() if r[0] == cid), fallback)
     if key == "title" and kids_age(safety_subject()) is not None:
-        return "Picked for You"
+        return t("row.picked")
     if label:
         return label
     names = getattr(metas, "names", feed(cid, lang).get("names") or {})
@@ -5373,10 +5604,13 @@ def _refresh_emb(requested):
     try:
         with _emb_lock:
             pairs = sorted(_needed_emb(requested))
-        _embed_pairs(pairs, EMB_MODEL, _emb_next, _emb_next_kinds)
+        failed = _embed_pairs(pairs, EMB_MODEL, _emb_next, _emb_next_kinds)
         with _emb_lock:
             coverage = emb_status(requested)
-            if coverage["pending"] >= coverage["active"]:
+            pending, active = coverage["pending"], coverage["active"]
+            lost = sum(femb(k, kind) is not None for k, kind in failed)
+            # Swap once every title that still has text is embedded, if that keeps at least half the old coverage.
+            if pending >= active or (pending + lost >= active and 2 * pending >= active):
                 _emb.clear()
                 _emb.update(_emb_next)
                 _emb_kinds.clear()
@@ -5393,6 +5627,11 @@ def _refresh_emb(requested):
 
 
 def title_text(kind, tid):
+    rec = frec(f"tmdb:{tid}", kind)
+    if rec.get("title"):  # Stored facets need no TMDB call; their lists keep TMDB's stored order.
+        return (f"{rec['title']} ({rec.get('y') or ''}), {'movie' if kind == 'movie' else 'series'}. "
+                f"Genres: {', '.join(rec.get('g') or [])}. Keywords: {', '.join(k[1] for k in (rec.get('k') or [])[:15])}. "
+                f"{rec.get('o') or ''}")
     det = tmdb(f"{kind}/{tid}", language="en-US", append_to_response="keywords,credits,release_dates" if kind == "movie" else "keywords,credits,content_ratings")  # same URL as facet_record
     kw = det.get("keywords") or {}
     words = [k["name"] for k in (kw.get("keywords") or kw.get("results") or [])][:15]
@@ -5423,12 +5662,12 @@ def _embed_pairs(pairs, model, vectors, kinds):
         missing = list(dict.fromkeys((k, kind) for k, kind in pairs
                                     if _emb_get(k, kind, vectors, kinds) is None))
     texts = [(k, kind, _pool.submit(title_text, kind, k[5:])) for k, kind in missing]
-    ready = []
+    ready, failed = [], []
     for k, kind, job in texts:
         try:
             ready.append((k, kind, job.result()))
         except Exception:
-            continue
+            failed.append((k, kind))
     for i in range(0, len(ready), 96):
         batch = ready[i:i + 96]
         j = openrouter("/api/v1/embeddings", {"model": model, "input": [t for _, _, t in batch], "dimensions": EMB_DIM},
@@ -5450,6 +5689,7 @@ def _embed_pairs(pairs, model, vectors, kinds):
         if vectors is _emb:
             _emb_dirty.set()
             clear_seed_cache()
+    return failed
 
 
 def save_emb():
@@ -5549,50 +5789,51 @@ FACET_SUPPORT = {"k": 2, "d": 2, "a": 3, "n": 2, "c": 3, "g": 3, "t": 2, "s": 3,
 X_PRIOR = 20
 # Experiences: what it feels like to watch a title, not what it is about. One batched LLM call tags 25 titles
 # (once per title, kept in facets.json as "x"); they then count like any other facet. id: (reason, row title).
+# Tagging vocabulary stays English; row titles use the interface language.
 EXPERIENCES = {
-    "cozy_case": ("cozy case of the week", "Cozy Case-of-the-Week"),
-    "banter_duo": ("witty banter duo", "Witty Banter Duos"),
-    "will_they": ("will-they-won't-they", "Will They, Won't They"),
-    "slow_romance": ("slow-burn romance", "Slow-Burn Romance"),
-    "period_society": ("period romance & society", "Ballrooms & Period Romance"),
-    "forbidden_love": ("love against the odds", "Love Against the Odds"),
-    "found_family": ("found family", "Found Family"),
-    "mentor_bond": ("unlikely mentor bond", "Unlikely Mentors"),
-    "second_chance": ("second chances", "Second Chances"),
-    "tearjerker": ("a good cry", "For a Good Cry"),
-    "grief_healing": ("grief & healing", "Grief & Healing"),
-    "heartwarming": ("heartwarming", "Heartwarming Picks"),
-    "coming_of_age": ("coming of age", "Coming of Age"),
-    "underdog": ("underdog rising", "Underdogs Rising"),
-    "rivalry_training": ("rivalry & training arc", "Rivals & Training Arcs"),
-    "epic_quest": ("epic quest", "Epic Quests"),
-    "magic_wonder": ("magic & wonder", "Magic & Wonder"),
-    "team_spectacle": ("team-up spectacle", "Team-Up Spectacle"),
-    "hero_burden": ("the hero's burden", "Heroes with a Burden"),
-    "dynasty_power": ("family dynasty & power", "Dynasties & Power"),
-    "frontier_grit": ("frontier grit", "Frontier Grit"),
-    "political_intrigue": ("political intrigue", "Political Intrigue"),
-    "war_sacrifice": ("war & sacrifice", "War & Sacrifice"),
-    "antihero": ("antihero's descent", "Antiheroes"),
-    "revenge": ("revenge", "Roads to Revenge"),
-    "heist": ("heist & caper", "Heists & Capers"),
-    "whodunit": ("twisty whodunit", "Twisty Whodunits"),
-    "mind_bender": ("mind-bending puzzle", "Mind-Benders"),
-    "dread": ("slow-burn dread", "Slow-Burn Dread"),
-    "survival": ("survival against the odds", "Survival Stories"),
-    "competence": ("experts at work", "Experts at Work"),
-    "courtroom": ("courtroom drama", "Courtroom Drama"),
-    "family_secrets": ("family secrets", "Family Secrets"),
-    "big_ideas": ("big sci-fi ideas", "Big Sci-Fi Ideas"),
-    "time_twist": ("time loops & travel", "Time Twists"),
-    "dystopia": ("rebellion in a dark future", "Dark Futures"),
-    "feel_good": ("feel-good laughs", "Feel-Good Laughs"),
-    "dark_comedy": ("dark comedy", "Dark Comedy"),
-    "slice_of_life": ("slice of life", "Slice of Life"),
-    "true_story": ("inspiring true story", "Inspiring True Stories"),
-    "passion_art": ("passion for the craft", "Passion for the Craft"),
-    "sports_glory": ("sports glory", "Sports Glory"),
-    "nostalgia": ("nostalgic comfort", "Nostalgic Comfort"),
+    "cozy_case": (_translate("experience.cozy_case", lang="en"), t("row.experience.cozy_case")),
+    "banter_duo": (_translate("experience.banter_duo", lang="en"), t("row.experience.banter_duo")),
+    "will_they": (_translate("experience.will_they", lang="en"), t("row.experience.will_they")),
+    "slow_romance": (_translate("experience.slow_romance", lang="en"), t("row.experience.slow_romance")),
+    "period_society": (_translate("experience.period_society", lang="en"), t("row.experience.period_society")),
+    "forbidden_love": (_translate("experience.forbidden_love", lang="en"), t("row.experience.forbidden_love")),
+    "found_family": (_translate("experience.found_family", lang="en"), t("row.experience.found_family")),
+    "mentor_bond": (_translate("experience.mentor_bond", lang="en"), t("row.experience.mentor_bond")),
+    "second_chance": (_translate("experience.second_chance", lang="en"), t("row.experience.second_chance")),
+    "tearjerker": (_translate("experience.tearjerker", lang="en"), t("row.experience.tearjerker")),
+    "grief_healing": (_translate("experience.grief_healing", lang="en"), t("row.experience.grief_healing")),
+    _translate("experience.heartwarming", lang="en"): ("heartwarming", t("row.experience.heartwarming")),
+    "coming_of_age": (_translate("experience.coming_of_age", lang="en"), t("row.experience.coming_of_age")),
+    "underdog": (_translate("experience.underdog", lang="en"), t("row.experience.underdog")),
+    "rivalry_training": (_translate("experience.rivalry_training", lang="en"), t("row.experience.rivalry_training")),
+    "epic_quest": (_translate("experience.epic_quest", lang="en"), t("row.experience.epic_quest")),
+    "magic_wonder": (_translate("experience.magic_wonder", lang="en"), t("row.experience.magic_wonder")),
+    "team_spectacle": (_translate("experience.team_spectacle", lang="en"), t("row.experience.team_spectacle")),
+    "hero_burden": (_translate("experience.hero_burden", lang="en"), t("row.experience.hero_burden")),
+    "dynasty_power": (_translate("experience.dynasty_power", lang="en"), t("row.experience.dynasty_power")),
+    "frontier_grit": (_translate("experience.frontier_grit", lang="en"), t("row.experience.frontier_grit")),
+    "political_intrigue": (_translate("experience.political_intrigue", lang="en"), t("row.experience.political_intrigue")),
+    "war_sacrifice": (_translate("experience.war_sacrifice", lang="en"), t("row.experience.war_sacrifice")),
+    "antihero": (_translate("experience.antihero", lang="en"), t("row.experience.antihero")),
+    _translate("experience.revenge", lang="en"): ("revenge", t("row.experience.revenge")),
+    "heist": (_translate("experience.heist", lang="en"), t("row.experience.heist")),
+    "whodunit": (_translate("experience.whodunit", lang="en"), t("row.experience.whodunit")),
+    "mind_bender": (_translate("experience.mind_bender", lang="en"), t("row.experience.mind_bender")),
+    "dread": (_translate("experience.dread", lang="en"), t("row.experience.dread")),
+    "survival": (_translate("experience.survival", lang="en"), t("row.experience.survival")),
+    "competence": (_translate("experience.competence", lang="en"), t("row.experience.competence")),
+    "courtroom": (_translate("experience.courtroom", lang="en"), t("row.experience.courtroom")),
+    "family_secrets": (_translate("experience.family_secrets", lang="en"), t("row.experience.family_secrets")),
+    "big_ideas": (_translate("experience.big_ideas", lang="en"), t("row.experience.big_ideas")),
+    "time_twist": (_translate("experience.time_twist", lang="en"), t("row.experience.time_twist")),
+    "dystopia": (_translate("experience.dystopia", lang="en"), t("row.experience.dystopia")),
+    "feel_good": (_translate("experience.feel_good", lang="en"), t("row.experience.feel_good")),
+    "dark_comedy": (_translate("experience.dark_comedy", lang="en"), t("row.experience.dark_comedy")),
+    "slice_of_life": (_translate("experience.slice_of_life", lang="en"), t("row.experience.slice_of_life")),
+    "true_story": (_translate("experience.true_story", lang="en"), t("row.experience.true_story")),
+    "passion_art": (_translate("experience.passion_art", lang="en"), t("row.experience.passion_art")),
+    "sports_glory": (_translate("experience.sports_glory", lang="en"), t("row.experience.sports_glory")),
+    "nostalgia": (_translate("experience.nostalgia", lang="en"), t("row.experience.nostalgia")),
 }
 TAG_SYS = ("You tag what it FEELS like to watch movies and TV series (the experience a viewer gets), not their plot topics. "
            "Allowed tags (id: meaning):\n{vocab}\n"
@@ -6008,20 +6249,31 @@ def person_entries(p, person):
     """Their own titles plus what the household watches together on the TV."""
     seeds = {(title.casefold(), year, kind) for who, title, year, kind in person_loves() if who == person}
     overridden = {e["key"] for e in p["entries"] if e.get("who") == "remote" and person in e.get("by", ())}
+    # Title fixes: a moved watch belongs to its new member; an ignored plain watch stays in history with no taste weight.
+    moves = title_moves()
+    ignored = {r["key"] for r in title_fixes() if r.get("op") == "ignore" and r.get("who") == person}
     out = []
     for e in p["entries"]:
         by = e.get("by", ())
+        origin = watch_owners(e, moves).get(person)
+        if origin is None and person in by and person in PEOPLE:
+            continue
+        origin = person if origin is None and person in by else origin
+        mover = origin if origin != person else None
         seed = e["key"] not in overridden and any(title == e["title"].casefold() and kind == e["kind"]
                                                 and (not year or year == e.get("year")) for title, year, kind in seeds)
-        if person not in by and "together" not in by and not seed:
+        if origin is None and "together" not in by and not seed:
             continue
-        own = (e.get("opinions") or {}).get(person)
-        explicit = person in by or bool(own) or seed
+        opinions = e.get("opinions") or {}
+        own = opinions.get(person) or (opinions.get(mover) if mover else None)
+        explicit = person in by or bool(own) or seed or bool(mover)
         value = own or e.get("shared") or {"signal": e["signal"], "weight": e["weight"]}
         if person == "together" and _taste_accounts():
             value = {**value, **{k: e[k] for k in ("age", "genres", "title", "year")}}
         if seed and e.get("who") != "remote":
             value = {"signal": "loved", "weight": max(value["weight"], SEED_WEIGHT), "item": {}, "flags": ["told"]}
+        if e["key"] in ignored and value["signal"] == "watched":
+            value = {**value, "weight": 0}
         # Shared passive plays are weaker than an opinion explicitly attributed to this person.
         out.append({**e, **value, "weight": value["weight"] * (1 if explicit or person == "together" else .35),
                     "explicit": explicit})
@@ -6102,6 +6354,7 @@ def build_model(p, enrich=True):
     behind each facet (for reasons) and a match calibration."""
     global _seed_stats
     house = adult_profile(p)
+    house = {**house, "entries": taste_entries(house["entries"])} if house else house
     pos_entries = [e for e in house["entries"] if e["weight"] > 0]
     try:
         ensure_facets([(e["key"], e["kind"]) for e in p["entries"][:400]])
@@ -6430,7 +6683,7 @@ def reasons(m, key, fids, n=2, person=None, kind=None):
             name = name[:1].upper() + name[1:]
         if a:
             used.add(a[0])
-            out.append(f"{name} like {a[1]}{'' if person else who_label(a[2])}")
+            out.append(t("why.anchor", name=name, title=a[1], person="" if person else who_label(a[2])))
         else:
             out.append(name)
     return out
@@ -6444,8 +6697,8 @@ def confidence(m, key, s, fids, person=None):
         return None, None
     support = len(m["holders"].get(fids[0], [])) if fids else 0
     if pct >= 88 and support >= 2:
-        return "Strong fit", pct
-    return ("Good fit", pct) if pct >= 70 else ("Wildcard", pct)
+        return t("match.strong"), pct
+    return (t("match.good"), pct) if pct >= 70 else (t("match.wildcard"), pct)
 
 
 def explain(key, kind=None):
@@ -6473,7 +6726,8 @@ def explain(key, kind=None):
                            for pp in PEOPLE},
             "facets": [{"id": fid, "name": m["names"].get(fid), "affinity": round(a, 3),
                         "anchors": [m["ent"][k][0] for _, k in m["holders"].get(fid, [])[:4] if k in m["ent"]]}
-                       for a, fid in allf[:12]]}
+                       for a, fid in allf[:12]],
+            "archetypes": {who: archetype_view(who) for who in ("household", *adult_people())}}
 
 
 def match_pct(m, s, person=None):
@@ -6523,7 +6777,7 @@ def get_model(build=True):
     with _model_lock:
         with _memory_lock:
             seq = _memory_read()["seq"]
-        sig = (p.get("hash"), len(_learn["hits"]) if HIT_TASTE else 0, local_now().strftime("%Y-%m-%d"), seq, _emb_model)
+        sig = (p.get("hash"), len(_learn["hits"]) if HIT_TASTE else 0, local_now().strftime("%Y-%m-%d"), seq, _emb_model, title_fix_stamp())
         if len(adult_people()) != len(PEOPLE):
             sig += (adult_people(),)
         if _model["sig"] != sig or _model["m"] is None:
@@ -6937,13 +7191,15 @@ def _memory_curate(evts, m, now, store, stamp, facets):
         rec = facets.get(fkey(ev["key"], ev["kind"])) or {}
         held = {fid for fid, _ in facet_pairs(rec)}
         kind = "like" if ev["action"] in MEMORY_POS else "avoid"
+        # A plain no to a New to You stretch is not evidence for an avoid memory (an explicit reason still is).
+        stretch = kind == "avoid" and (ev.get("ctx") or {}).get("row") == rid('newtoyou')
         family, week = memory_family(src), memory_week(ev["t"]) if ev["t"] is not None else None
         for person in people:
             for fid in held:
-                if fid in candidates[person] and candidates[person][fid][0] == kind:
+                if not stretch and fid in candidates[person] and candidates[person][fid][0] == kind:
                     collect(support, (person, fid, kind), ev, family, week)
                 opposite = live.get((person, fid, "avoid" if kind == "like" else "like"))
-                if opposite and ev["action"] in MEMORY_EXPLICIT and ev["t"] is not None \
+                if opposite and not stretch and ev["action"] in MEMORY_EXPLICIT and ev["t"] is not None \
                         and ev["t"] > (opposite["confirmed"] or opposite["created"]):
                     contrary.setdefault(opposite["id"], {})[ev["id"]] = ev["t"]
             if ev["action"] == "not_for_us":
@@ -7216,9 +7472,9 @@ def memory_why(key, kind, person, now=None):
         if strength < MEMORY_WHY_MIN:
             return None
     label = nice_facet(about, (get_model(False) or {}).get("names", {}).get(about) or about[2:].replace("_", " "))
-    why = (("You both like " if len(PEOPLE) == 2 else "You all like ") if person == "together" else "Because you told me you like " if told else "You like ") + label
+    why = ((t("why.both") if len(PEOPLE) == 2 else t("why.all")) if person == "together" else t("why.told") if told else t("why.like")) + label
     if len(why) > 60 and person != "together":
-        why = "You like " + label
+        why = t("why.like") + label
     return {"why": why[:60], "fact": fid, "rung": "memory", "told": told, "strength": strength}
 
 
@@ -7377,12 +7633,12 @@ def top_seeds(p, n=3):
 
 def seed_phrase(e):
     if e["signal"] == "loved":
-        return f"Because You Love {e['title']}"
+        return t("row.seed.loved", title=e["title"])
     if e["signal"] == "liked":
-        return f"Because You Like {e['title']}"
+        return t("row.seed.liked", title=e["title"])
     if e["signal"] == "watched":
-        return f"Because You {'Watched' if e['stype'] == 'movie' else 'Watch'} {e['title']}"
-    return f"Because {e['title']} Caught Your Eye"
+        return t("row.seed.watched", title=e["title"]) if e["stype"] == "movie" else t("row.seed.watch", title=e["title"])
+    return t("row.seed.interest", title=e["title"])
 
 
 def because_feed(lang):
@@ -7404,7 +7660,7 @@ def because_feed(lang):
         if key in p["seen"] or key in p["negative"] or key in seen:
             continue
         seen.add(key)
-        metas.append(row_meta(it, stype, kind, genre_names, art.get(it["id"], {}), note=f"Like {seed['title']}"))
+        metas.append(row_meta(it, stype, kind, genre_names, art.get(it["id"], {}), note=t("note.like", title=seed["title"]), lang=lang))
     rank_by_taste(get_model(), [(x["id"], kind, x) for x in metas])
     metas = because_rank([x for x in metas if because_ok(x, seed["key"])], seed["key"])
     return {rid('because'): {stype: metas[:30]}, "_names": {rid('because'): {"title": seed_phrase(seed), "seed": seed["key"]}}}
@@ -7447,15 +7703,15 @@ def episodes_feed(lang):
         fresh = la.get("air_date") and (today - datetime.date.fromisoformat(la["air_date"])).days <= 21
         note, rank = None, None
         if resume:
-            note, rank = f"Continue S{resume[0]}E{resume[1]}", 1
+            note, rank = t("note.continue", season=resume[0], episode=resume[1]), 1
         elif nxt and nxt == la_se and fresh:
-            note, rank = f"New: S{nxt[0]}E{nxt[1]} since {day_text(la['air_date'], True)}", 0
+            note, rank = t("note.episode.new", season=nxt[0], episode=nxt[1], date=day_text(la["air_date"], True)), 0
         elif nxt and e["age"] <= 60:
-            note, rank = f"Up next: S{nxt[0]}E{nxt[1]}", 2
+            note, rank = t("note.episode.next", season=nxt[0], episode=nxt[1]), 2
         elif not nxt and na.get("air_date") and 0 <= (datetime.date.fromisoformat(na["air_date"]) - today).days <= 10:
-            note, rank = f"New episode S{na['season_number']}E{na['episode_number']} on {day_text(na['air_date'], True)}", 1
+            note, rank = t("note.episode.on", season=na["season_number"], episode=na["episode_number"], date=day_text(na["air_date"], True)), 1
         if note:
-            ranked.append((rank, e["age"], row_meta(det, "series", "tv", names, en, note=note)))
+            ranked.append((rank, e["age"], row_meta(det, "series", "tv", names, en, note=note, lang=lang)))
     return {"series": [m for _, _, m in sorted(ranked, key=lambda x: (x[0], x[1]))]}
 
 
@@ -7467,7 +7723,7 @@ def top10_feed(lang):
         out[stype] = []
         for i, it in enumerate(data, 1):
             out[stype].append(row_meta(it, stype, kind, names, art.get(it["id"], {}),
-                                      note=" · ".join([f"#{i} this week"] + match_note(f"tmdb:{it['id']}", kind=kind))))
+                                      note=" · ".join([t("note.rank", rank=i)] + match_note(f"tmdb:{it['id']}", kind=kind)), lang=lang))
     return out
 
 
@@ -7486,14 +7742,14 @@ def digital_feed(lang):
         if any(r.get('type') == 4 and (day := date_or_none((r.get('release_date') or '')[:10]))
                and since <= day <= today for country in releases if country.get('iso_3166_1') == country_code
                for r in country.get('release_dates', [])):
-            out.append(row_meta(it, 'movie', 'movie', names, art.get(it['id'], {})))
+            out.append(row_meta(it, 'movie', 'movie', names, art.get(it['id'], {}), lang=lang))
     return {'movie': out}
 
 
 def toprated_feed(lang):
     data, art = with_art('movie/top_rated', lang)
     names = genres('movie', lang)
-    return {'movie': [row_meta(it, 'movie', 'movie', names, art.get(it['id'], {}))
+    return {'movie': [row_meta(it, 'movie', 'movie', names, art.get(it['id'], {}), lang=lang)
                       for it in data if not it.get('adult') and (it.get('vote_count') or 0) >= 200]}
 
 
@@ -7527,11 +7783,11 @@ def rewatch_feed(lang):
         except Exception:
             continue
         months = int(e["age"] // 30)
-        note = f"Last seen {months} months ago" if months < 24 else "Not seen in ages" if e["item"].get("at") \
-            else "Seen before"
+        note = t("note.seen.months", months=months) if months < 24 else t("note.unseen.long") if e["item"].get("at") \
+            else t("note.seen")
         if e.get("who") == "remote":  # taste remote: feedback time is not watch time.
-            note = "Marked seen"
-        out[e["stype"]].append(row_meta(det, e["stype"], e["kind"], genres(e["kind"], lang), en, note=note))
+            note = t("note.seen.marked")
+        out[e["stype"]].append(row_meta(det, e["stype"], e["kind"], genres(e["kind"], lang), en, note=note, lang=lang))
     cols = list((read_taste().get("household") or {}).get("rewatch_collections") or [])
     if cols:
         k = today.toordinal() % len(cols)
@@ -7555,13 +7811,13 @@ def rewatch_feed(lang):
         done = [i for i, x in enumerate(parts) if x["id"] in played and played[x["id"]]["age"] <= 180]
         if done and done[-1] + 1 < len(parts):
             i = done[-1] + 1
-            note = f"Next: part {i + 1} of {len(parts)} · {saga}"
+            note = t("note.collection.next", part=i + 1, count=len(parts), saga=saga)
         else:
             i = 0
-            note = f"{saga} · {len(parts)} films" if len(parts) > 1 else saga
+            note = t("note.collection.films", saga=saga, count=len(parts)) if len(parts) > 1 else saga
         if f"tmdb:{parts[i]['id']}" in recent and not done:
             continue
-        out["movie"].append(row_meta(parts[i], "movie", "movie", names, art.get(parts[i]["id"], {}), note=note, collection=c))
+        out["movie"].append(row_meta(parts[i], "movie", "movie", names, art.get(parts[i]["id"], {}), note=note, collection=c, lang=lang))
     return out
 
 
@@ -7621,16 +7877,16 @@ def anime_feed(lang, upcoming):
         nxt = m.get("nextAiringEpisode")
         if nxt:
             when = local_now(nxt["airingAt"])
-            note = f"Ep {nxt['episode']} · {WD_SHORT[when.weekday()]} {when.day} {MONTHS[when.month - 1]}, {when:%H:%M}"
+            note = t("note.anime.episode", episode=nxt["episode"], weekday=WD_SHORT[when.weekday()], day=when.day, month=MONTHS[when.month - 1], time=f"{when:%H:%M}")
         else:
             sd = m.get("startDate") or {}
-            note = ("Starts " + (day_text(datetime.date(sd["year"], sd["month"], sd["day"])) if sd.get("day") and sd.get("month")
+            note = (t("note.starts") + (day_text(datetime.date(sd["year"], sd["month"], sd["day"])) if sd.get("day") and sd.get("month")
                                  else f"{MONTHS[sd['month'] - 1]} {sd['year']}" if sd.get("month") else str(sd["year"]))
-                    if sd.get("year") else "Coming soon")
+                    if sd.get("year") else t("note.soon"))
         en = dict(hit[1])
-        if not re.search(r"[A-Za-z]{2}", display_name(hit[0], en)):
+        if not re.search(r"[A-Za-z]{2}", display_name(hit[0], en, lang)):
             en["name"] = m["title"].get("english") or m["title"].get("romaji")
-        metas.append(row_meta(hit[0], "series", "tv", names, en, note=note))
+        metas.append(row_meta(hit[0], "series", "tv", names, en, note=note, lang=lang))
     return {"series": taste_order(metas[:30], why=False)}
 
 
@@ -7672,13 +7928,13 @@ def show_upcoming(e, lang, today):
         if not s.get("season_number") or not sd:
             continue
         if today < sd <= today + datetime.timedelta(days=180):
-            return 1, sd, row_meta(det, "series", "tv", genres("tv", lang), en, note=f"Season {s['season_number']} from {day_text(sd)}")
+            return 1, sd, row_meta(det, "series", "tv", genres("tv", lang), en, note=t("note.season.from", season=s["season_number"], date=day_text(sd)), lang=lang)
         if today - datetime.timedelta(days=21) <= sd <= today and s["season_number"] > (e["item"].get("last_episode") or [0])[0]:
-            return 0, sd, row_meta(det, "series", "tv", genres("tv", lang), en, note=f"New season {s['season_number']} since {day_text(sd, True)}")
+            return 0, sd, row_meta(det, "series", "tv", genres("tv", lang), en, note=t("note.season.since", season=s["season_number"], date=day_text(sd, True)), lang=lang)
     if nad and na.get("episode_number") == 1 and today < nad <= today + datetime.timedelta(days=180):
-        return 1, nad, row_meta(det, "series", "tv", genres("tv", lang), en, note=f"Season {na['season_number']} from {day_text(nad)}")
+        return 1, nad, row_meta(det, "series", "tv", genres("tv", lang), en, note=t("note.season.from", season=na["season_number"], date=day_text(nad)), lang=lang)
     if nad and lad and (nad - lad).days > 60 and 0 <= (nad - today).days <= 14:
-        return 1, nad, row_meta(det, "series", "tv", genres("tv", lang), en, note=f"Back on {day_text(nad, True)}")
+        return 1, nad, row_meta(det, "series", "tv", genres("tv", lang), en, note=t("note.back", date=day_text(nad, True)), lang=lang)
     return None
 
 
@@ -7692,9 +7948,9 @@ def saga_upcoming(cid, lang, today, seen):
         if f"tmdb:{x['id']}" in seen or not d:
             continue
         if today < d <= today + datetime.timedelta(days=365):
-            out.append((1, d, row_meta(x, "movie", "movie", names, art.get(x["id"], {}), note=f"In cinemas {day_text(d)} · {saga}", collection=cid)))
+            out.append((1, d, row_meta(x, "movie", "movie", names, art.get(x["id"], {}), note=t("note.collection.cinemas", date=day_text(d), saga=saga), collection=cid, lang=lang)))
         elif today - datetime.timedelta(days=90) <= d <= today:
-            out.append((0, d, row_meta(x, "movie", "movie", names, art.get(x["id"], {}), note=f"Just released · {saga}", collection=cid)))
+            out.append((0, d, row_meta(x, "movie", "movie", names, art.get(x["id"], {}), note=t("note.collection.released", saga=saga), collection=cid, lang=lang)))
     return out
 
 
@@ -7734,26 +7990,26 @@ def anime_upcoming(entries, lang, today):
                     if hit and f"tmdb:{hit[0]['id']}" not in e.get("seen", ()):
                         out.append((0 if start and start <= today else 1, when,
                                     row_meta(hit[0], "movie", "movie", genres("movie", lang), hit[1],
-                                            note=f"Anime film · {'out ' if start and start <= today else ''}{label}"
-                                            if label else "Anime film announced")))
+                                            note=t("note.anime.film.out" if start and start <= today else "note.anime.film", date=label)
+                                            if label else t("note.anime.announced"), lang=lang)))
                 elif m["format"] in ("TV", "TV_SHORT", "ONA") and e["kind"] == "tv":
-                    note = ("New season announced" if not label else
-                            f"New season {'airing since ' if start and start <= today else 'from '}{label}")
+                    note = (t("note.season.announced") if not label else
+                            t("note.anime.season.since" if start and start <= today else "note.anime.season.from", date=label))
                     raw = [t for t in (m["title"].get("english"), m["title"].get("romaji")) if t]
                     if base in {base_title(t) for t in raw}:  # "<their show> Season N": same show
                         det, en = details_pair("tv", e["id"], lang)
                         out.append((0 if start and start <= today else 1, when,
-                                    row_meta(det, "series", "tv", genres("tv", lang), en, note=note)))
+                                    row_meta(det, "series", "tv", genres("tv", lang), en, note=note, lang=lang)))
                         break
                     # A spin-off or remake ("Dragon Ball Super: Beerus", "NARUTO (2026)") is its own show:
                     # show that show, never pin the news onto the one they watched. No confident match, no card.
                     hit = next((h for h in (resolve_pick("tv", base_title(t), sd.get("year"), lang) for t in raw) if h), None)
                     if hit and str(hit[0]['id']) != str(e["id"]):
                         if f"tmdb:{hit[0]['id']}" not in e.get("seen", ()):
-                            note = (f"New series {'airing since ' if start and start <= today else 'from '}{label}"
-                                    if label else "New series announced") + f" · from the {e['title']} world"
+                            note = (t("note.anime.series.since" if start and start <= today else "note.anime.series.from", date=label)
+                                    if label else t("note.series.announced")) + t("note.world", title=e["title"])
                         out.append((0 if start and start <= today else 1, when,
-                                    row_meta(hit[0], "series", "tv", genres("tv", lang), hit[1], note=note)))
+                                    row_meta(hit[0], "series", "tv", genres("tv", lang), hit[1], note=note, lang=lang)))
                 break
     return out
 
@@ -7797,7 +8053,7 @@ def soon_for_taste(p, lang, today, have):
             d = date_or_none(it.get("release_date") if kind == "movie" else it.get("first_air_date"))
             if key in p["seen"] or key in have or not d:
                 continue
-            items.append((key, kind, (d, row_meta(it, stype, kind, names, art.get(it["id"], {})))))
+            items.append((key, kind, (d, row_meta(it, stype, kind, names, art.get(it["id"], {}), lang=lang))))
     for meta in ((_feeds.get((rid('nextseason'), lang)) or {}).get("metas") or {}).get("series", []):
         if meta["id"] not in p["seen"] and meta["id"] not in have:
             items.append((meta["id"], "tv", (None, meta)))
@@ -7807,9 +8063,9 @@ def soon_for_taste(p, lang, today, have):
         if pct is None or pct < 80:
             continue
         original, original_overview = card_parts(meta)
-        original = [x for x in original if x not in ("Strong fit", "Good fit", "Wildcard")]
-        what = (f"Out {day_text(d)}" if kind == "movie" else f"Premieres {day_text(d)}") if d else \
-            (original[0] if original else "Coming soon")
+        original = [x for x in original if x not in (t("match.strong"), t("match.good"), t("match.wildcard"))]
+        what = (t("note.out", date=day_text(d)) if kind == "movie" else t("note.premieres", date=day_text(d))) if d else \
+            (original[0] if original else t("note.soon"))
         note = " · ".join([what] + reasons(m, key, why, kind=kind))
         overview = (meta.get("description") or "") if d else original_overview
         out.append({**meta, "description": " · ".join(x for x in (note, overview) if x)})
@@ -7892,12 +8148,12 @@ def show_catchup(e, lang, today):
     finished_season = not absolute and last[1] >= counts.get(last[0], 0)
     if finished_season and la["season_number"] > last[0]:
         new = list(range(last[0] + 1, la["season_number"] + 1))
-        what = f"Season {new[0]} is out" if len(new) == 1 else f"Seasons {new[0]}–{new[-1]} are out"
-        note = f"{what} · {behind} new episode{'s' if behind > 1 else ''}"
+        what = t("note.season.out", season=new[0]) if len(new) == 1 else t("note.seasons.out", first=new[0], last=new[-1])
+        note = t("note.catchup.new", what=what, count=behind) if behind <= 1 else t("note.catchup.news", what=what, count=behind)
     else:
-        note = f"{behind} episode{'s' if behind > 1 else ''} to go · from {episode_label(en, *nxt)}"
+        note = t("note.catchup.remaining", count=behind, episode=episode_label(en, *nxt)) if behind <= 1 else t("note.catchup.remainings", count=behind, episode=episode_label(en, *nxt))
     return (0 if fresh else 1, -(lad.toordinal() if fresh else e["weight"]),
-            row_meta(det, "series", "tv", genres("tv", lang), en, note=note))
+            row_meta(det, "series", "tv", genres("tv", lang), en, note=note, lang=lang))
 
 
 def saga_catchup(cid, lang, today, p):
@@ -7916,7 +8172,7 @@ def saga_catchup(cid, lang, today, p):
         fresh = (today - d).days <= 365
         out.append((0 if fresh else 1, -d.toordinal() if fresh else i,
                     row_meta(x, "movie", "movie", names, art.get(x["id"], {}),
-                            note=f"You skipped part {i + 1} of {len(parts)} · {saga}", collection=cid)))
+                            note=t("note.collection.skipped", part=i + 1, count=len(parts), saga=saga), collection=cid, lang=lang)))
         break  # the first one they missed; the next shows up once they watched it
     return out
 
@@ -7954,7 +8210,7 @@ def catchup_feed(lang):
 LANE_KINDS = {"x": "feeling", "k": "theme", "d": "person", "a": "person", "n": "brand", "c": "brand"}
 LANE_CAP = {"feeling": 2, "theme": 2, "person": 1, "brand": 1}
 MAKER_NEED = 8
-LANE_TEMPLATE = {"d": "From {}", "a": "Starring {}", "n": "{} Picks for You", "c": "From {}"}
+LANE_TEMPLATE = {"d": "row.lane.from", "a": "row.lane.starring", "n": "row.lane.brand", "c": "row.lane.from"}
 LANE_SYS = ("You name rows on a streaming home screen. The row holds movies and series sharing one TMDB keyword. "
             "Reply with only the row title: 2 to 5 English words that name that theme plainly, Title Case, no quotes, "
             "no emoji. Examples: 'time travel' -> Time Travel Stories; 'based on manga' -> Manga Adaptations; "
@@ -8012,7 +8268,7 @@ def lane_titles(fid, lang, makers_only=False):
             key = f"tmdb:{it['id']}"
             if key not in seen and not NO_TALK & set(it.get("genre_ids") or []):
                 seen.add(key)
-                out.append((key, kind, row_meta(it, "movie" if kind == "movie" else "series", kind, names, art.get(it["id"], {}))))
+                out.append((key, kind, row_meta(it, "movie" if kind == "movie" else "series", kind, names, art.get(it["id"], {}), lang=lang)))
     if t in "da":
         jobs = {l: _pool.submit(tmdb, f"person/{xid}/combined_credits", language=l) for l in {lang, "en-US"}}
         data, en = jobs[lang].result(), jobs["en-US"].result()
@@ -8032,7 +8288,7 @@ def lane_titles(fid, lang, makers_only=False):
                 continue
             seen.add(key)
             out.append((key, kind, row_meta(x, "movie" if kind == "movie" else "series", kind, genres(kind, lang),
-                                           art.get((x.get("media_type"), x["id"]), {}))))
+                                           art.get((x.get("media_type"), x["id"]), {}), lang=lang)))
     return [x for x in out if quality_ok(x[2]) and tone_ok(x[2])]
 
 
@@ -8040,7 +8296,7 @@ def lane_title(fid, name, examples):
     if fid[0] == "x":
         return EXPERIENCES[fid[2:]][1]
     if fid[0] != "k" or not OR_KEY:
-        return LANE_TEMPLATE.get(fid[0], "{}").format(name)
+        return t(LANE_TEMPLATE[fid[0]], name=name) if fid[0] in LANE_TEMPLATE else name
     try:
         raw = llm_text(LANE_SYS, f"Keyword: '{name}'", 30, 20, "feed", "lane-title").strip().strip('"\'').splitlines()[0].strip()
         if 3 <= len(raw) <= 40:
@@ -8170,7 +8426,7 @@ def lanes_feed(lang):
         if len(chosen) < len(LANES) and superhero and hero_lane:
             continue
         fresh = list({x["id"]: x for x in metas if x["id"] not in taken | front}.values())[:ROW_MAX]
-        title = f"More from {makers[fid]}" if fid in makers else \
+        title = t("row.maker", name=makers[fid]) if fid in makers else \
                 (lanes.get(fid) or {}).get("title") or lane_title(fid, m["names"][fid], [x["name"] for x in fresh])
         if len(fresh) < need or not lane_allowed(fresh, title):
             print(f"lane {fid}: {len(fresh)} fresh of {len(metas)}", flush=True)
@@ -8216,18 +8472,18 @@ def lanes_feed(lang):
 # with taste; without Luna, a taste ranking with a weekday lean (Friday epic, Sunday cozy) rotates daily.
 
 MOODS = {
-    "cozy": ("Cozy Case Night", ["cozy_case", "banter_duo", "will_they", "feel_good", "nostalgia"], "0123456"),
-    "edge": ("Edge of Your Seat", ["whodunit", "dread", "mind_bender", "survival", "heist"], "01234"),
-    "epic": ("Epic Saga Night", ["epic_quest", "magic_wonder", "dynasty_power", "war_sacrifice", "team_spectacle"], "4 5"),
-    "heart": ("Feel Everything", ["tearjerker", "grief_healing", "second_chance", "found_family", "heartwarming"], "6"),
-    "romance": ("Date Night Romance", ["slow_romance", "period_society", "will_they", "forbidden_love"], "45"),
-    "laugh": ("Just Laugh Tonight", ["feel_good", "dark_comedy", "slice_of_life", "banter_duo"], "0123"),
-    "grit": ("Grit & Glory", ["frontier_grit", "antihero", "revenge", "underdog", "sports_glory"], "56"),
-    "ideas": ("Big Ideas Night", ["big_ideas", "time_twist", "dystopia", "mind_bender"], "3456"),
-    "power": ("Power & Intrigue", ["political_intrigue", "dynasty_power", "antihero", "family_secrets"], "0123456"),
-    "true": ("True Stories That Inspire", ["true_story", "underdog", "passion_art", "sports_glory", "competence"], "0123456"),
-    "home": ("Growing Up & Found Family", ["coming_of_age", "found_family", "mentor_bond", "slice_of_life", "heartwarming"], "56"),
-    "dark": ("Dark & Twisted", ["antihero", "dark_comedy", "revenge", "dread", "family_secrets"], "45"),
+    "cozy": (t("row.mood.cozy"), ["cozy_case", "banter_duo", "will_they", "feel_good", "nostalgia"], "0123456"),
+    "edge": (t("row.mood.edge"), ["whodunit", "dread", "mind_bender", "survival", "heist"], "01234"),
+    "epic": (t("row.mood.epic"), ["epic_quest", "magic_wonder", "dynasty_power", "war_sacrifice", "team_spectacle"], "4 5"),
+    "heart": (t("row.mood.heart"), ["tearjerker", "grief_healing", "second_chance", "found_family", "heartwarming"], "6"),
+    "romance": (t("row.mood.romance"), ["slow_romance", "period_society", "will_they", "forbidden_love"], "45"),
+    "laugh": (t("row.mood.laugh"), ["feel_good", "dark_comedy", "slice_of_life", "banter_duo"], "0123"),
+    "grit": (t("row.mood.grit"), ["frontier_grit", "antihero", "revenge", "underdog", "sports_glory"], "56"),
+    "ideas": (t("row.mood.ideas"), ["big_ideas", "time_twist", "dystopia", "mind_bender"], "3456"),
+    "power": (t("row.mood.power"), ["political_intrigue", "dynasty_power", "antihero", "family_secrets"], "0123456"),
+    "true": (t("row.mood.true"), ["true_story", "underdog", "passion_art", "sports_glory", "competence"], "0123456"),
+    "home": (t("row.mood.home"), ["coming_of_age", "found_family", "mentor_bond", "slice_of_life", "heartwarming"], "56"),
+    "dark": (t("row.mood.dark"), ["antihero", "dark_comedy", "revenge", "dread", "family_secrets"], "45"),
 }
 MOOD_LEVELS = ["wrong for tonight", "could work", "good fit", "perfect for tonight"]
 
@@ -8265,7 +8521,7 @@ def feeling_pool(m, p, xs, lang, seeds=6, extra=(), seed=None):
                     or (it.get("vote_count") or 0) < (200 if kind == "movie" else 50):
                 continue
             seen.add(key)
-            items.append((key, kind, row_meta(it, "movie" if kind == "movie" else "series", kind, names, art.get(it["id"], {}))))
+            items.append((key, kind, row_meta(it, "movie" if kind == "movie" else "series", kind, names, art.get(it["id"], {}), lang=lang)))
     try:
         ensure_facets([(k, kind) for k, kind, _ in items])
     except Exception as e:
@@ -8310,8 +8566,8 @@ def leap_feed(lang):
         if same < 0.35:
             continue
         shared = [x for x in top if xs.get(x, 0) >= 2][:1]
-        note = (f"{EXPERIENCES[shared[0]][0][:1].upper() + EXPERIENCES[shared[0]][0][1:]} like {a['title']}" if shared
-                else f"Feels like {a['title']}")
+        note = (t("why.feeling", feeling=t("experience." + shared[0])[:1].upper() + t("experience." + shared[0])[1:], title=a["title"]) if shared
+                else t("note.feels", title=a["title"]))
         scored.append((same * (0.4 + world) + 0.004 * pct, {**meta, "description": " · ".join(
             x for x in (note + who_label(a.get("by") or ()), meta.get("description")) if x)}))
     reserve = [x for _, x in sorted(scored, key=lambda t: -t[0])]
@@ -8319,7 +8575,84 @@ def leap_feed(lang):
     print(f"leap: {who} -> {a['title']} {top}, pool {len(pool)}, kept {len(metas)}", flush=True)
     if len(metas) < 8:
         return None
-    return {rid('leap'): {"tv": metas, "pool": reserve}, "_names": {rid('leap'): {"title": f"Same Feeling as {a['title']}", "seed": a["key"]}}}
+    return {rid('leap'): {"tv": metas, "pool": reserve}, "_names": {rid('leap'): {"title": t("row.feeling", title=a["title"]), "seed": a["key"]}}}
+
+
+def newtoyou_plan(m, who):
+    """[(keep, change, origin)]: one experience they clearly love kept, one axis moved toward what a neighbour loves
+    ("neighbour"), toward the rest of a mood family they already enjoy ("group"), or one family over ("blind").
+    Nothing they avoid, nothing they already love. Deterministic for one model."""
+    if not m:
+        return []
+    aff = ((m.get("paff") or {}).get(who) or (m.get("aff") if who == "together" else None)) or {}
+    mine = {f[2:]: a for f, a in aff.items() if f[:2] == "x:" and f[2:] in EXPERIENCES}
+    strong = [x for x, a in sorted(mine.items(), key=lambda r: (-r[1], r[0])) if a > 0][:3]
+    if not strong:
+        return []
+    fresh = lambda x: x in EXPERIENCES and x not in strong and 0 <= mine.get(x, 0) < .25
+    others = [p for p in (*adult_people(), "together") if p != who]
+    near = []
+    for p in others:
+        theirs = (m.get("paff") or {}).get(p) or {}
+        near += [f[2:] for f, a in sorted(theirs.items(), key=lambda r: (-r[1], r[0]))
+                 if f[:2] == "x:" and a > 0 and fresh(f[2:])][:3]
+    plan = []
+    for keep in strong:
+        families = [k for k, (_, xs, _) in MOODS.items() if keep in xs]
+        group = [x for k in families for x in MOODS[k][1] if fresh(x)]
+        blind = [x for k, (_, xs, _) in MOODS.items() if k not in families
+                 and set(xs) & {y for f in families for y in MOODS[f][1]} for x in xs if fresh(x) and not mine.get(x)]
+        for origin, xs in (("neighbour", near), ("group", group), ("blind", blind)):
+            plan += [(keep, x, origin) for x in dict.fromkeys(xs) if x != keep]
+    out, pairs = [], set()
+    for keep, change, origin in plan:
+        if (keep, change) not in pairs:
+            pairs.add((keep, change))
+            out.append((keep, change, origin))
+    return out[:12]
+
+
+def newtoyou_feed(lang):
+    """New to You (opt-in): titles that keep one experience someone loves and change one axis. A plain no from this
+    row counts lightly (NEWTOYOU_REJECT), so trying something new is cheap."""
+    p, m = adult_profile(_profiles.get("household")), get_model()
+    if not p or not m:
+        return None
+    people = adult_people()
+    who = (*people, "together")[day_index() % (len(people) + 1)]
+    plan = newtoyou_plan(m, who)
+    if not plan:
+        return None
+    person = who if who in PEOPLE else None
+    aff = (m.get("paff") or {}).get(who) or m["aff"]
+    avoided = {f[2:] for f, a in aff.items() if f[:2] == "x:" and a < 0}
+    cid = rid('newtoyou')
+    exclude = p["seen"] | p["negative"] | deferred_keys(person) | set(tired_keys({cid}))
+    keeps = list(dict.fromkeys(k for k, _, _ in plan))[:2]
+    scored, taken = [], set()
+    for keep in keeps:
+        for key, kind, meta in feeling_pool(m, p, [keep], lang, seeds=6):
+            if key in taken or key in exclude or not quality_ok(meta) or not tone_ok(meta, person=person):
+                continue
+            tags = frec(key, kind).get("x") or {}
+            if any(tags.get(x, 0) >= 2 for x in avoided):
+                continue
+            pair = next(((k, c) for k, c, _ in plan if k == keep and tags.get(k, 0) >= 2 and tags.get(c, 0) >= 2), None)
+            if pair is None:
+                continue
+            taken.add(key)
+            sc = person_score(m, key, person, kind)[0] if person else score_key(m, key, kind=kind)[0]
+            label = t("experience." + pair[0])
+            note = t("why.newtoyou", keep=label[:1].upper() + label[1:], change=t("experience." + pair[1]))
+            scored.append(((tags[pair[0]] + tags[pair[1]]) * 0.15 + (match_pct(m, sc, person) or 50) / 100, key,
+                           {**meta, "description": " · ".join(x for x in (note, meta.get("description")) if x)}))
+    reserve = [x for _, _, x in sorted(scored, key=lambda r: -r[0])]
+    metas = polish_row(balance_row(reserve))[:30]
+    print(f"newtoyou: {who}, plan {len(plan)}, kept {len(metas)}", flush=True)
+    if len(metas) < 8:
+        return None
+    return {cid: {"tv": metas, "pool": reserve},
+            "_names": {cid: {"title": t("row.newtoyou.named", name=archetype_view(who)["name"]), "who": who}}}
 
 
 def member_feed(lang, person):
@@ -8343,7 +8676,7 @@ def member_feed(lang, person):
                     or (it.get("vote_count") or 0) < (200 if kind == "movie" else 50):
                 continue
             seen.add(key)
-            items.append((key, kind, row_meta(it, "movie" if kind == "movie" else "series", kind, names, art.get(it["id"], {}))))
+            items.append((key, kind, row_meta(it, "movie" if kind == "movie" else "series", kind, names, art.get(it["id"], {}), lang=lang)))
     rank_by_taste(m, items)  # facets, fingerprints and tags for the pool
     animation = not any("Animation" in frec(k, profile_kind(k)).get("g", ()) for k in explicit_seeds(person))
     candidates = [x for k, kind, x in items if frec(k, kind).get("x") and quality_ok(x) and tone_ok(x, animation=animation, person=person)]
@@ -8379,7 +8712,7 @@ def mood_feed(lang):
             tags = frec(key, kind).get("x") or {}
             hit = max(xs, key=lambda x: tags.get(x, 0))
             strength = sum(tags.get(x, 0) for x in xs)
-            label = EXPERIENCES[hit][0]
+            label = t("experience." + hit)
             scored.append((strength * 0.15 + (match_pct(m, sc) or 50) / 100, key,
                            {**meta, "description": " · ".join(y for y in (label[:1].upper() + label[1:], meta.get("description")) if y)}))
         reserve = [x for _, _, x in sorted(scored, key=lambda t: -t[0])]
@@ -8486,6 +8819,205 @@ def pick_moods(m, fitm, rule):
     return rec["picks"]
 
 
+# --- taste archetypes ---
+# A short name and one plain line per adult member and for the household. Written by the command model about once a
+# week from facets only (no titles, no names); without a key or on any failure a deterministic label stands in.
+# Labels are display text only: nothing here feeds a score or a row order.
+ARCHETYPE_DAYS = 7
+_archetype_lock = threading.Lock()
+ARCHETYPE_INP = {"scope": ("member", "household"), "experiences": [tuple(EXPERIENCES), 4], "themes": [str, 4],
+                 "groups": [tuple(MOODS), 3]}
+
+
+def archetype_aff(m, who):
+    return (m.get("aff") if who in ("household", "together") else (m.get("paff") or {}).get(who)) or {}
+
+
+def archetype_groups(aff):
+    """Up to three mood families, strongest first, scored by their loved experiences (MOODS order breaks ties)."""
+    score = {k: sum(max(0.0, aff.get(f"x:{x}", 0)) for x in xs) for k, (_, xs, _) in MOODS.items()}
+    return [k for k in sorted(score, key=lambda k: -score[k]) if score[k] > 0][:3]
+
+
+def archetype_brief(m, who):
+    """Facet-only input for the label: top experiences, a few public themes and the strongest mood families."""
+    aff = archetype_aff(m or {}, who)
+    names = (m or {}).get("names") or {}
+    xs = sorted(((a, f[2:]) for f, a in aff.items() if f[:2] == "x:" and a > 0 and f[2:] in EXPERIENCES),
+                key=lambda r: (-r[0], r[1]))
+    themes = []
+    for a, fid in sorted(((a, f) for f, a in aff.items() if f[:2] in ("k:", "t:") and a > 0), key=lambda r: (-r[0], r[1])):
+        name = names.get(fid)
+        if isinstance(name, str) and 0 < len(name) <= 40 and speaks(fid, name):
+            label = nice_facet(fid, name)
+            if label not in themes:
+                themes.append(label)
+        if len(themes) == 4:
+            break
+    return {"scope": "household" if who in ("household", "together") else "member",
+            "experiences": [x for _, x in xs[:4]], "themes": themes, "groups": archetype_groups(aff)}
+
+
+def _archetype_clip(text, n):
+    return text if len(text) <= n else text[:n].rsplit(" ", 1)[0].rstrip(",;:") + "."
+
+
+def archetype_label(inp):
+    """The deterministic label: lead family plus a streak from the second family, and a line from the top facets."""
+    groups = [g for g in inp.get("groups") or [] if g in MOODS]
+    xs = [x for x in inp.get("experiences") or [] if x in EXPERIENCES]
+    if not groups:
+        return {"name": t("archetype.new"), "line": t("archetype.line.new")}
+    lead = t(f"archetype.lead.{groups[0]}")
+    name = t("archetype.name", lead=lead, streak=t(f"archetype.streak.{groups[1]}")) if len(groups) > 1 else lead
+    themes = [x for x in inp.get("themes") or [] if isinstance(x, str) and x]
+    if len(xs) >= 2 and (themes or len(xs) >= 3):
+        key = "archetype.line.household" if inp.get("scope") == "household" else "archetype.line"
+        line = t(key, first=t(f"experience.{xs[0]}"), second=t(f"experience.{xs[1]}"),
+                 theme=themes[0].lower() if themes else t(f"experience.{xs[2]}"))
+    else:
+        line = t("archetype.line.new")
+    return {"name": _archetype_clip(name, 48), "line": _archetype_clip(line, 140)}
+
+
+def _archetype_text(value):
+    if not isinstance(value, str):
+        raise ValueError("type")
+    value = " ".join(value.replace("\u2014", "-").replace("\u2013", "-").split()).strip(" \"'")
+    if "<" in value or ">" in value or re.search(r"https?:|www\.|://|\.(?:com|net|org|io)\b", value, re.I):
+        raise ValueError("markup")
+    return value
+
+
+def archetype_parse(reply):
+    """{"name", "line"} from a chat reply; ValueError unless both are short plain text."""
+    content = reply["choices"][0]["message"]["content"]
+    data = search_commands.parse_json(content) if isinstance(content, str) else None
+    if not isinstance(data, dict):
+        raise ValueError("json")
+    name, line = _archetype_text(data.get("name")), _archetype_text(data.get("line"))
+    if not name or len(name) > 48 or len(name.split()) > 6:
+        raise ValueError("name")
+    if len(line.split()) < 3 or len(line) > 140:
+        raise ValueError("line")
+    return {"name": name, "line": line}
+
+
+ARCHETYPE_SYS = ("You name the viewing taste of one person or of a household for a home TV app. Input is JSON: "
+                 "experiences they love (ids), a few themes, and mood families, strongest first. Reply with JSON only: "
+                 '{"name": "...", "line": "..."}. name: a warm, playful archetype of 2 to 5 English words, no names of '
+                 "people or titles, no emoji. line: one plain sentence of 6 to 16 words describing the taste mix. "
+                 "For scope household, describe what they share. No links, no markup, no dashes.")
+
+
+def archetype_request(inp, model, effort):
+    return {"model": model, "messages": [{"role": "system", "content": ARCHETYPE_SYS},
+                                         {"role": "user", "content": json.dumps(inp, ensure_ascii=False)}],
+            "response_format": {"type": "json_object"}, "reasoning": {"effort": effort},
+            "max_tokens": 200 if effort == "none" else 600, "usage": {"include": True}}
+
+
+decision("name_archetype", ver=1, lane="feed", cap=4 * (len(PEOPLE) + 1), ttl=ARCHETYPE_DAYS * DAY, serving=False,
+    requires=("OR_KEY",), api=False, inp=ARCHETYPE_INP, out={"name": str, "line": str}, norm=lambda x: x,
+    rule=lambda inp, params: (archetype_label(inp), 1) if not inp["experiences"] and not inp["themes"] else None,
+    params={}, min_acc=.95,
+    llm={"path": "/api/v1/chat/completions", "model": COMMAND_MODEL, "batch": 1, "timeout": 10,
+         "prompt": lambda b: archetype_request(b[0], COMMAND_MODEL, COMMAND_EFFORT),
+         "parse": lambda r, b: [(archetype_parse(r), 1)],
+         "fallback": {"path": "/api/v1/chat/completions", "model": COMMAND_FALLBACK_MODEL, "batch": 1, "timeout": 10,
+                      "prompt": lambda b: archetype_request(b[0], COMMAND_FALLBACK_MODEL, COMMAND_FALLBACK_EFFORT),
+                      "parse": lambda r, b: [(archetype_parse(r), 1)]}},
+    fallback=lambda inp, err: (archetype_label(inp), 0))
+
+
+def archetype_items():
+    """Valid cached labels from archetypes.json; a missing or broken file reads as empty."""
+    try:
+        with open(os.path.join(DATA, "archetypes.json")) as fh:
+            data = json.load(fh)
+        items = data["items"] if isinstance(data, dict) and data.get("v") == 1 and isinstance(data.get("items"), dict) else {}
+    except (OSError, ValueError, TypeError, KeyError):
+        return {}
+    out = {}
+    for who, rec in items.items():
+        try:
+            if who in (*PEOPLE, "household") and rec["source"] in ("llm", "rule") and type(rec["at"]) in (int, float) \
+                    and math.isfinite(rec["at"]):
+                out[who] = {"name": _archetype_text(rec["name"]), "line": _archetype_text(rec["line"]),
+                            "source": rec["source"], "at": int(rec["at"])}
+        except (ValueError, TypeError, KeyError):
+            continue
+    return out
+
+
+def archetype_view(who):
+    """{"name", "line", "source"} for a member or "household"; never calls a model."""
+    who = "household" if who == "together" else who
+    rec = archetype_items().get(who) if who in (*adult_people(), "household") else None
+    if rec and rec["source"] == "llm" and rec["name"] and rec["line"]:
+        return {"name": rec["name"], "line": rec["line"], "source": "llm"}
+    m = get_model(False) if who in (*adult_people(), "household") else None
+    return {**archetype_label(archetype_brief(m, who) if m else {}), "source": "rule"}
+
+
+def _archetype_save(items):
+    path = os.path.join(DATA, "archetypes.json")
+    fd, tmp = tempfile.mkstemp(prefix=".archetypes-", dir=DATA)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            os.fchmod(fh.fileno(), 0o600)
+            json.dump({"v": 1, "items": items}, fh, ensure_ascii=False, allow_nan=False, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def archetypes_due(now):
+    return bool(OR_KEY) and get_model(False) is not None
+
+
+def refresh_archetypes(now=None):
+    """Relabel members whose label is missing or a week old. Failures keep the rule label until the next week."""
+    now = time.time() if now is None else now
+    if not OR_KEY or not _archetype_lock.acquire(blocking=False):
+        return {"calls": 0}
+    try:
+        m = get_model(False)
+        if m is None:
+            return {"calls": 0}
+        before = history_cutoffs(DATA)
+        items = archetype_items()
+        whos = [*adult_people(), "household"]
+        due = [w for w in whos if w not in items or not 0 <= now - items[w]["at"] < ARCHETYPE_DAYS * DAY]
+        calls = 0
+        for who in due:
+            brief = archetype_brief(m, who)
+            result = decide("name_archetype", brief)
+            calls += result["source"] == "llm"
+            items[who] = {**result["answer"], "source": "llm" if result["source"] in ("llm", "cache") else "rule",
+                          "at": int(now)}
+        if due:
+            # A forget that landed during the model calls wins: keep its rewrite, drop labels built from forgotten taste.
+            with history_locked(DATA):
+                after = history_cutoffs(DATA)
+                changed = {p for p in {*before, *after} if before.get(p) != after.get(p)}
+                if changed:
+                    items = {**archetype_items(), **{w: items[w] for w in due if w not in changed and w != "household"}}
+                _archetype_save({w: v for w, v in items.items() if w in whos})
+        return {"calls": calls, "due": len(due)}
+    finally:
+        _archetype_lock.release()
+
+
+def archetypes_job(now):
+    """Daily pass: the weekly relabel runs in the background so serving never waits on a model."""
+    threading.Thread(target=refresh_archetypes, args=(now,), daemon=True, name="archetypes").start()
+    return {"started": 1}
+
+
 WEEK_SYS = (f"You are the personal film friend of {HOUSEHOLD_KIND} sharing one TV. Once a week you pick a few titles for them. "
             "Reply with exactly these sections and nothing else:\n" +
             "".join(f"## FOR {LABELS[p].upper()}\n(3 lines)\n" for p in PEOPLE) +
@@ -8520,10 +9052,10 @@ def week_feed(lang):
         system = system.replace(f"## FOR {LABELS[child].upper()}\n(3 lines)\n", "")
     sec = llm_sections(system, prompt, 4000, 150, "week", [*("FOR " + LABELS[p].upper() for p in adult_people()), "TOGETHER"], effort="medium")
     metas = []
-    for head, who in [("TOGETHER", "For " + LABELS["pair"]), *(("FOR " + LABELS[p].upper(), "For " + LABELS[p]) for p in adult_people())]:
-        for t, y, st, why in sec.get(head, [])[:3]:
+    for head, who in [("TOGETHER", t("row.member", person=LABELS["pair"])), *(("FOR " + LABELS[p].upper(), t("row.member", person=LABELS[p])) for p in adult_people())]:
+        for title, y, st, why in sec.get(head, [])[:3]:
             kind = "movie" if st == "movie" else "tv"
-            got = row_search(st, kind, [(t, y, st, f"{who}: {why}" if why else who)], lang)
+            got = row_search(st, kind, [(title, y, st, f"{who}: {why}" if why else who)], lang)
             metas += [x for x in got if x["id"] not in p["seen"] and x["id"] not in {y_["id"] for y_ in metas}]
     return {rid('week'): {"tv": metas}} if metas else None
 
@@ -8563,7 +9095,7 @@ def candidate_pool(p, n=40, metas=False):
         why = {key: (match_pct(m, sc), reasons(m, key, w, kind=kind)) for sc, w, key, kind, _ in ranked}
         n = 50
     if metas:
-        out = [row_meta(it, "movie" if kind == "movie" else "series", kind, genres(kind, "en-US"), it)
+        out = [row_meta(it, "movie" if kind == "movie" else "series", kind, genres(kind, "en-US"), it, lang="en-US")
                for _, kind, it, _ in cands]
         return [with_match(x) for x in out if quality_ok(x) and tone_ok(x)]
     out = []
@@ -8586,7 +9118,7 @@ def row_search(stype, kind, picks, lang):
             continue
         if hit and hit[0]["id"] not in seen:
             seen.add(hit[0]["id"])
-            metas.append(row_meta(hit[0], stype, kind, names, hit[1], note=clean_note(why)))
+            metas.append(row_meta(hit[0], stype, kind, names, hit[1], note=clean_note(why), lang=lang))
     return metas
 
 
@@ -8683,21 +9215,21 @@ def archived_feed(lang, person):
 # keywords, ranked by rating and taste. Documentaries stay out of every other row (NO_TALK).
 
 DOC_ROWS = {  # cid: (row title, AI section, what the shelf is about, TMDB keyword ids)
-    rid('wonder'): ("Wonder of Our World", "WONDER",
+    rid('wonder'): (t("row.docs.wonder"), "WONDER",
                     "nature, animals, oceans, our living planet and how life evolved: pure awe",
                     [18330, 9902, 361118, 270, 239155, 5647, 4627, 34152, 311]),
-    rid('cosmos'): ("Mind & Cosmos", "MIND & COSMOS",
+    rid('cosmos'): (t("row.docs.cosmos"), "MIND & COSMOS",
                     "space and the universe, physics, time, black holes, the brain and consciousness: how reality works",
                     [9882, 15325, 160330, 41608, 6012, 217034, 8056, 4380, 360221, 234133, 161219]),
-    rid('history'): ("Great Lives & Empires", "GREAT LIVES",
+    rid('history'): (t("row.docs.history"), "GREAT LIVES",
                      "larger-than-life figures and empires of history (Constantine the Great, Alexander, Caesar, "
                      "Cleopatra, Genghis Khan, Napoleon...), ancient worlds and turning points",
                      [5049, 1405, 15012, 355987, 157894, 208596, 2280, 6165, 2163, 383073]),
-    rid('meaning'): ("Big Questions", "BIG QUESTIONS",
+    rid('meaning'): (t("row.docs.meaning"), "BIG QUESTIONS",
                      "spirituality, religions and myths, philosophy, the meaning of life and our place in the world",
                      [10706, 188, 1532, 177146, 2035]),
 }
-DOC_TREND = ("Trending in Documentaries",)
+DOC_TREND = (t("row.docs.trending"),)
 # Their favourite makers: BBC, arte, ZDF/Terra X (networks for series, companies for both). Titles from them rank higher.
 DOC_FAV = {"with_networks": "4|332|100|1155|1628|662|31|308",
            "with_companies": "34333|8090|9050|80893|201|587|4606|11237"}
@@ -8751,7 +9283,7 @@ def _doc_pool(lang, exclude, taken, queries):
                     out[key] = out[key][:4] + (True,)
                 continue
             q = (it.get("vote_average") or 0) * math.log10(max(10, it.get("vote_count") or 0))
-            out[key] = (kind, row_meta(it, "movie" if kind == "movie" else "series", kind, names, art.get(it["id"], {})),
+            out[key] = (kind, row_meta(it, "movie" if kind == "movie" else "series", kind, names, art.get(it["id"], {}), lang=lang),
                         q, it.get("popularity") or 0, fav)
     return {k: v for k, v in out.items() if doc_ok(v[1], rid('doctrend'))}
 
@@ -9006,8 +9538,8 @@ def docs_feed(lang):
 
 # --- studio rows: the brands they choose by, ranked by their taste ----------------------------------------------
 STUDIOS = {  # cid: (row title, TMDB discover filter per kind)
-    rid('hbo'): ("HBO for You", {"tv": {"with_networks": "49|3186"}}),
-    rid('paramount'): ("Paramount+ for You", {"tv": {"with_networks": "4330|2076|67"},
+    rid('hbo'): (t("row.hbo"), {"tv": {"with_networks": "49|3186"}}),
+    rid('paramount'): (t("row.paramount"), {"tv": {"with_networks": "4330|2076|67"},
                                               "movie": {"with_companies": "4", "vote_average.gte": 7}}),
 }
 
@@ -9036,7 +9568,7 @@ def studios_feed(lang):
                 if key in seen or key in exclude or NO_TALK & set(it.get("genre_ids") or []):
                     continue
                 seen.add(key)
-                items.append((key, kind, row_meta(it, "movie" if kind == "movie" else "series", kind, names, art.get(it["id"], {}))))
+                items.append((key, kind, row_meta(it, "movie" if kind == "movie" else "series", kind, names, art.get(it["id"], {}), lang=lang)))
         ranked = [x for *_, x in rank_by_taste(m, items)]
         shows, films = [x for x in ranked if x["type"] != "movie"], [x for x in ranked if x["type"] == "movie"]
         mixed = [x for i in range(30) for x in (shows[2 * i:2 * i + 2] + films[i:i + 1])]  # the series lead: two to one
@@ -9048,7 +9580,8 @@ def studios_feed(lang):
 # --- backups ---
 BACKUP_FILES = ("commands.json", "skald.json", "legacy.json", ".skald-household", ".skald-format", "feedback.jsonl", "imports.jsonl", "sessions.jsonl", "taste.json", "trakt.json",
                 "history.json", "history-summary.json", "history-forgotten.json", "health-settings.json", "learn.json", "online.json", "metrics.json", "decisions.jsonl", "usage.json",
-                "searches.jsonl", "emb.json", "facets.json", "memory.json", "memory.log.jsonl", "memory.prev.json", "interview.json", "shelves.json", "undo.jsonl") + (("connectors.json",) if CONNECTOR_BACKUP else ())
+                "searches.jsonl", "emb.json", "facets.json", "memory.json", "memory.log.jsonl", "memory.prev.json", "interview.json", "shelves.json", "undo.jsonl", "wishes.jsonl", "shelf_rules.json",
+                "title_fixes.json", "archetypes.json") + (("connectors.json",) if CONNECTOR_BACKUP else ())
 BACKUP_SKIP = {"addon.json": "secret, never opened", "remote.json": "secret, never opened", "clients.json": "secret, never opened",
                "credentials": "private credential contents, never read",
                "hydra.json": "secret, never opened", "decide_cache.json": "TTL LLM cache, refilled on demand",
@@ -9300,6 +9833,7 @@ DAILY_JOBS = [("backup", backup_due, backup_state)]
 DAILY_JOBS.append(("memory", memory_due, memory_job))
 DAILY_JOBS.append(("history", history_cleanup_due, cleanup_history))
 DAILY_JOBS.append(("row_metrics", lambda now: True, lambda now: update_row_metrics(now, cleanup=True)))
+DAILY_JOBS.append(("archetypes", archetypes_due, archetypes_job))
 _daily = None
 _daily_lock = threading.Lock()
 
@@ -9414,6 +9948,7 @@ def job_specs(d, hashes):
         ("top10", [rid('top10')], f"{day}/{d.hour // 12}", 0, lambda l: {rid('top10'): top10_feed(l)}),
         ("airing", [rid('airing')], f"{day}/{d.hour // 6}", 0, lambda l: {rid('airing'): anime_feed(l, False)}),
         ("nextseason", [rid('nextseason')], day, 0, lambda l: {rid('nextseason'): anime_feed(l, True)}),
+        ("newtoyou", [rid('newtoyou')], f"{day}/{hh}", 3600, newtoyou_feed),
     ]
     if SHELF_ROWS:
         specs.append(("shelves", SHELF_ROWS, d.strftime("%Y-%m-%d/%H/%M") + hh, 0, shelf_feed))
@@ -9430,7 +9965,8 @@ def job_specs(d, hashes):
         for person in ARCHIVED:
             if person in hashes:
                 specs.append((person, [rid(person)], f"{day}/{hashes[person]}", 3 * 3600, lambda l, p=person: archived_feed(l, p)))
-    shared = {"because", "rewatch", "upcoming", "catchup", "lanes", "leap", "moods", "docs", "studios", "personal", "week", "docsai"}
+    shared = {"because", "rewatch", "upcoming", "catchup", "lanes", "leap", "moods", "docs", "studios", "personal", "week", "docsai",
+              "newtoyou"}
     for key, builder in (('digital', digital_feed), ('toprated', toprated_feed)):
         if row_enabled(rid(key)):
             specs.append((key, [rid(key)], day, 0, lambda l, k=key, b=builder: {rid(k): b(l)}))
@@ -9440,7 +9976,7 @@ def job_specs(d, hashes):
 
 # AIOStreams caches our manifest (with the row names) for hours but fetches rows fresh. Rows whose name changes
 # (because, lanes) are therefore served as they were when the manifest was last fetched, so name and content agree.
-DYNAMIC = [rid('because'), rid('leap')] + MOODS_ROWS + LANE_ROWS + SHELF_ROWS
+DYNAMIC = [rid('because'), rid('leap'), rid('newtoyou')] + MOODS_ROWS + LANE_ROWS + SHELF_ROWS
 _shown = {}
 _shown_scoped = {}
 _scoping = threading.local()
@@ -9457,7 +9993,7 @@ def pin_decision(lang):
         refresh_preferences()
         masks, p, m = remote_masks(), _profiles.get("household"), get_model(False)
         # Each session's served rows apply its own memory veto (W10b); none and both differ there.
-        masks_by = {who: (*masks, veto_keys(who)) for who in ("none", *PEOPLE, "both")}
+        masks_by = {who: row_masks(who) for who in ("none", *PEOPLE, "both")}
         with _feeds_lock:
             generation = tuple((0, k, id(v)) for k, v in sorted(_feeds.items()) if k[1] == lang)
             key = (lang, generation, id(p), p.get("hash") if p else None,
@@ -9835,8 +10371,8 @@ WEEK_TAIL_FLOOR = .45
 WEEK_PENALTY = .25
 
 
-def row_meta(it, stype, kind, names, en, mark="", note="", collection=None):
-    meta = to_meta(it, stype, kind, names, en, mark, note)
+def row_meta(it, stype, kind, names, en, mark="", note="", collection=None, lang=LANG):
+    meta = to_meta(it, stype, kind, names, en, mark, note, lang=lang)
     col = it.get("belongs_to_collection") or en.get("belongs_to_collection") or {}
     meta["_row"] = {"votes": it.get("vote_count"), "rating": it.get("vote_average"),
                     "popularity": it.get("popularity"),
@@ -9992,7 +10528,7 @@ def human_cards(metas, person=None):
             if notes:
                 break
             part = part.strip()
-            if part in ("Strong fit", "Good fit", "Wildcard") or not part:
+            if part in (t("match.strong"), t("match.good"), t("match.wildcard")) or not part:
                 continue
             a = re.search(r"^(.*?)\b(?:like|loved|love)\s+(.+)$", part, re.I)
             if a:
@@ -10162,7 +10698,7 @@ def balance_row(metas, foryou=False, anime=False):
             if source is hers:
                 notes, overview = card_parts(x)
                 if not any("For " in s for s in notes):
-                    x = {**x, "description": " · ".join(s for s in ("For " + LABELS[next(p for p in MEMBER_ROWS if member_pick(x, p))], x.get("description")) if s)}
+                    x = {**x, "description": " · ".join(s for s in (t("row.member", person=LABELS[next(p for p in MEMBER_ROWS if member_pick(x, p))]), x.get("description")) if s)}
             out.append(x)
     return out
 
@@ -10226,7 +10762,7 @@ def rotate_row(metas, cid):
 
 def episode_label(det, season, episode):
     count = next((s.get("episode_count") or 0 for s in det.get("seasons") or [] if s["season_number"] == season), 0)
-    return f"Episode {episode}" if not count or episode > count else f"S{season}E{episode}"
+    return t("note.episode", episode=episode) if not count or episode > count else f"S{season}E{episode}"
 
 
 
@@ -10370,7 +10906,7 @@ def family_feed(lang):
             if key in seen:
                 continue
             seen.add(key)
-            meta = row_meta(it, stype, kind, genres(kind, lang), art.get(it["id"], it))
+            meta = row_meta(it, stype, kind, genres(kind, lang), art.get(it["id"], it), lang=lang)
             if quality_ok(meta) and preference_ok(meta, rid('family'), "both"):
                 metas.append(meta)
     metas.sort(key=lambda x: score_key(m, x["id"], "together", "movie" if x["type"] == "movie" else "tv")[0] or 0, reverse=True)
@@ -10510,7 +11046,7 @@ def row_eligible(meta, cid, lang, p, animation=None):
         return upcoming_ok(meta)
     if cid in DOCS:
         return doc_ok(meta, cid)
-    curated = cid in {rid('foryou'), rid('week'), rid('because'), rid('leap')} | set(ROW_OWNER) | set(MOODS_ROWS + LANE_ROWS + STUDIO_ROWS)
+    curated = cid in {rid('foryou'), rid('week'), rid('because'), rid('leap'), rid('newtoyou')} | set(ROW_OWNER) | set(MOODS_ROWS + LANE_ROWS + STUDIO_ROWS)
     if curated:
         if animation is None:
             animation = row_animation(cid)
@@ -10573,7 +11109,7 @@ def row_related(meta, cid, lang, seeds=None):
 def source_metas(cid, lang, built=False):
     source = _feeds.get((cid, lang)) or {}
     names = (source if built else feed(cid, lang)).get("names") or {}
-    same = all(not names.get(k) or names[k] == (source.get("names") or {}).get(k) for k in ("seed", "lane", "mood"))
+    same = all(not names.get(k) or names[k] == (source.get("names") or {}).get(k) for k in ("seed", "lane", "mood", "who"))
     return [x for typ, xs in (source.get("metas") or {}).items()
             if same and typ in ("movie", "series", "tv", "pool") for x in xs]
 
@@ -10826,15 +11362,15 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
                 if en and re.search(r"[A-Za-z]{2}", en):
                     x = {**x, "name": en}
                 elif x.get("name", "").isdigit() and p:
-                    x = {**x, "name": x["name"] + (" (Movie)" if x["type"] == "movie" else " (Series)")}
+                    x = {**x, "name": x["name"] + (t("item.movie") if x["type"] == "movie" else t("item.series"))}
             if row_member(x, p, "seen") and cid in (rid('airing'), rid('nextseason'), rid('upcoming')):
                 notes, overview = card_parts(x)
-                note = next((n for n in notes if n not in ("Strong fit", "Good fit", "Wildcard")), "")
-                x = {**x, "description": " · ".join(s for s in ("New season: " + note, overview) if s)}
+                note = next((n for n in notes if n not in (t("match.strong"), t("match.good"), t("match.wildcard"))), "")
+                x = {**x, "description": " · ".join(s for s in (t("note.season.new") + note, overview) if s)}
             if cid in (rid('catchup'), rid('episodes')):
                 counts = (x.get("_row") or {}).get("counts") or {}
                 x = {**x, "description": re.sub(r"S(\d+)E(\d+)", lambda m: m[0] if int(m[2]) <= counts.get(m[1], 0)
-                                                else f"Episode {m[2]}", x.get("description") or "")}
+                                                else t("note.episode", episode=m[2]), x.get("description") or "")}
             if x["id"] not in masks[0] and row_eligible(x, cid, lang, p, animation) and (cid not in LANE_ROWS or row_related(x, cid, lang)):
                 corrected.append(x)
         # Chart ranks survive; all other shelves use the actual served rows above.
@@ -10923,7 +11459,7 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
 def _row_metas_uncached(cid, typ, lang, who=None):
     """Reference composition for non-home rows and cache identity checks."""
     who = who_watching()[0] if who is None else who
-    masks = (*remote_masks(), veto_keys(who))
+    masks = row_masks(who)
     p = _profiles.get("household") or {}
     above = set()
     for other in DEDUPE_ORDER:
@@ -11028,7 +11564,7 @@ def _row_metas_current(cid, typ, lang, who=None):
         return _row_metas_uncached(cid, typ, lang, who=who)
     with _home_lock:
         who = who_watching()[0] if who is None else who
-        masks = (*remote_masks(), veto_keys(who))
+        masks = row_masks(who)
         p, m = _profiles.get("household"), get_model(False)
         scope = getattr(_scoping, "scope", None)
         shown = _shown if scope is None else _shown_scoped[scope]
@@ -11084,7 +11620,7 @@ def stats():
 IMPORT_SIGNALS = {"love": ("loved", 3.0), "like": ("liked", 2.0), "seen": ("watched", 1.0),
                   "not_for_us": ("disliked", -3.0), "interest": ("interest", .2),
                   "abandon": ("abandoned", -1.5), "meh": ("watched", .3), "not_tonight": ("interest", 0.0)}
-IMPORT_TRUST = {"trakt": 1.0, "letterboxd": 1.0, "imdb": 1.0, "netflix": .8,
+IMPORT_TRUST = {"pmdb": .8, "trakt": 1.0, "letterboxd": 1.0, "imdb": 1.0, "netflix": .8,
                 "chrome": .4, "youtube": .4, "plain": .8}
 IMPORT_MAX = 20000
 IMPORT_STRENGTH = {"opened": 0, "interest": 1, "watched": 2, "liked": 3, "loved": 4, "abandoned": 4, "disliked": 5}
@@ -11745,7 +12281,7 @@ def interview_answer(body):
 
 REMOTE_PORT = int(os.environ.get("REMOTE_PORT", "8081"))
 REMOTE_ROWS = set(ROW_OWNER) | {rid('foryou'), rid('week'), rid('upcoming'), rid('because'), rid('leap'),
-               rid('rewatch'), rid('interview')} | set(MOODS_ROWS) | set(LANES) | set(STUDIO_ROWS) | set(DOCS)
+               rid('rewatch'), rid('interview'), rid('newtoyou')} | set(MOODS_ROWS) | set(LANES) | set(STUDIO_ROWS) | set(DOCS)
 REMOTE_ACTIONS = {"love", "like", "meh", "not_for_us", "not_tonight", "seen"}
 REMOTE_REASONS = ("too dark", "too slow", "too violent", "too silly", "not my genre", "seen enough of these")
 REMOTE_CSP = ("default-src 'none'; img-src https://image.tmdb.org data:; style-src 'self'; "
@@ -11892,6 +12428,78 @@ def remote_masks():
     return blocked, tonight
 
 
+_title_fixes = (None, ())
+
+
+def title_fixes():
+    """Rows from title_fixes.json (defer, ignore, move); reread only when the file changes."""
+    global _title_fixes
+    path = os.path.join(DATA, "title_fixes.json")
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return ()
+    stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
+    if _title_fixes[0] != stamp:
+        try:
+            with open(path) as f:
+                rows = tuple(r for r in json.load(f)["fixes"] if isinstance(r, dict) and isinstance(r.get("key"), str))
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            print(f"title fixes: {type(e).__name__}: {e}", flush=True)
+            rows = ()
+        _title_fixes = (stamp, rows)
+    return _title_fixes[1]
+
+
+def deferred_keys(who, now=None):
+    """Titles a member put off for now; sessions without one member hide every member's deferrals."""
+    now = time.time() if now is None else now
+    people = (who,) if who in PEOPLE else PEOPLE
+    return frozenset(r["key"] for r in title_fixes() if r.get("op") == "defer" and r.get("who") in people
+                     and isinstance(r.get("until"), (int, float)) and r["until"] > now)
+
+
+def title_moves():
+    """Reattributions per title, oldest first."""
+    moves = {}
+    for r in sorted((r for r in title_fixes() if r.get("op") == "move"), key=lambda r: r.get("t", 0)):
+        moves.setdefault(r["key"], []).append((r.get("who"), r.get("to")))
+    return moves
+
+
+def watch_owners(e, moves=None):
+    """Who a watch belongs to after reattributions, as {member: member who first watched it}."""
+    owners = {b: b for b in e.get("by", ()) if b in PEOPLE}
+    for who, to in (title_moves() if moves is None else moves).get(e["key"], ()):
+        if who in owners and to in PEOPLE and to not in owners:
+            owners[to] = owners.pop(who)
+    return owners
+
+
+def taste_entries(entries):
+    """Household taste evidence; a plain watch loses the share of each member who asked Skald not to learn from it."""
+    ignored = {(r["key"], r.get("who")) for r in title_fixes() if r.get("op") == "ignore"}
+    if not ignored:
+        return entries
+    moves, out = title_moves(), []
+    for e in entries:
+        owners = watch_owners(e, moves)
+        if owners and e.get("signal") == "watched" and any((e["key"], who) in ignored for who in owners):
+            e = {**e, "weight": e["weight"] * sum((e["key"], who) not in ignored for who in owners) / len(owners)}
+        out.append(e)
+    return out
+
+
+def title_fix_stamp():
+    return tuple(sorted((r["op"], r["key"], r.get("who") or "", r.get("to") or "") for r in title_fixes() if r.get("op") in ("ignore", "move")))
+
+
+def row_masks(who):
+    """Row masks for one session: blocked (feedback plus this person's deferrals), tonight, memory veto."""
+    blocked, tonight = remote_masks()
+    return (blocked | deferred_keys(who), tonight, veto_keys(who))
+
+
 def remote_order(metas, masks):
     blocked, tonight = masks[:2]
     metas = [m for m in metas if m["id"] not in blocked]
@@ -11998,7 +12606,7 @@ def remote_rows(lang):
     if person in PEOPLE:
         interview = interview_next(person)
         if not interview["done"]:
-            out.append({"id": rid('interview'), "name": "Find your taste", "metas": [
+            out.append({"id": rid('interview'), "name": t("row.interview"), "metas": [
                 {"id": a["key"], "type": "movie" if a["kind"] == "movie" else "series", "name": a["title"],
                  "releaseInfo": a["year"], "poster": IMG + "w300" + frec(a["key"], a["kind"]).get("poster", "")}
                 for a in interview["anchors"]]})
@@ -12265,7 +12873,7 @@ def rows_view(req):
             items.append({"key": meta["id"], "kind": kind, "title": meta.get("name", ""),
                           "year": meta.get("releaseInfo", ""), "poster": meta.get("poster"), "why": why})
         # Built shelf names can contain household anchor titles.
-        rows.append({"id": cid, "name": "Picked for you" if viewer or kids_age(person) is not None else row_name(cid, lang, name, metas), "items": items})
+        rows.append({"id": cid, "name": t("row.picked.private") if viewer or kids_age(person) is not None else row_name(cid, lang, name, metas), "items": items})
     return {"lang": lang, "person": person, "rows": rows}
 
 
@@ -12282,7 +12890,7 @@ def guest_rows_view(lang, row=None):
                     continue
                 items.append({"key": meta["id"], "kind": kind, "title": meta.get("name", ""),
                               "year": meta.get("releaseInfo", ""), "poster": meta.get("poster"), "why": None})
-        name = 'Latest Digital Releases' if cid == rid('digital') else 'Top Rated Movies' if cid == rid('toprated') else 'Top 10 this week'
+        name = t("row.digital") if cid == rid('digital') else t("row.toprated") if cid == rid('toprated') else t("row.top10.guest")
         rows.append({"id": cid, "name": name, "items": items})
     return {"lang": lang, "person": GUEST, "rows": rows}
 

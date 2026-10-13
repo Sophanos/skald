@@ -1,0 +1,25 @@
+services:
+  skald:
+    build: ../..
+    restart: unless-stopped
+    read_only: true
+    tmpfs: /tmp
+    user: "65534"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - ./data:/data
+    env_file: .env
+    environment:
+      SKALD_INTERNAL_BASE: http://skald:8080
+    networks: [aio]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=4).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+
+networks:
+  aio:
+    external: true
+    name: aio # Change to the existing AIOStreams Docker network name.

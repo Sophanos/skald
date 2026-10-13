@@ -1,0 +1,32 @@
+services:
+  skald:
+    build: ../..
+    restart: unless-stopped
+    read_only: true
+    tmpfs: /tmp
+    user: "65534"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - ./data:/data
+      - aiostreams-data:/aio-data:ro
+    env_file: .env
+    environment:
+      SKALD_INTERNAL_BASE: http://skald:8080
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=4).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+  aiostreams:
+    image: ghcr.io/viren070/aiostreams@sha256:d2698597d588ce96288d8bf177f7ad2c0d237c33bfba8ca658a5929ad727d4f9
+    restart: unless-stopped
+    env_file: .aiostreams.env
+    volumes:
+      - aiostreams-data:/app/data
+    # Odin needs LAN access to the Jellyfin endpoint.
+    ports:
+      - "0.0.0.0:3000:3000"
+
+volumes:
+  aiostreams-data:

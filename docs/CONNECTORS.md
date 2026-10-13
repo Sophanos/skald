@@ -40,6 +40,45 @@ device flow needs configured client id and client secret references and a writab
 Normal polling can renew a configured refresh token; a plain access token must be replaced when it expires.
 Trakt export imports work without an API app.
 
+## PublicMetaDB (PMDB)
+
+**You get:** watched movies and show episodes, watchlist interests, resume interests
+and abandoned titles, separately for each member.
+**You need:** that person's key from https://publicmetadb.com:
+Settings → API → Create. Each person uses their own key.
+
+```sh
+skald setup --connect pmdb --person NAME
+skald connectors test pmdb
+```
+
+Enter the key at the private prompt, or use `--yes --key-stdin` to read one line
+from stdin. Setup stores a separate mode 0600 file under DATA/credentials/.
+Never put a key in arguments. Repeat for another member; earlier accounts stay.
+A failed setup probe rolls back the new configuration and key.
+Restart the engine after setup with `docker compose restart engine`.
+
+Skald uses GET only: `/api/external/watched`, `/resume`, `/dropped`, `/lists`
+and the items of lists whose type is `watchlist`. Custom lists add no signals.
+Ratings routes are ignored because they contain community ratings, not your ratings.
+Resume progress is stored as a fraction and means interest, even near 100%; it is
+never a play. Show ids identify shows, with season and episode kept separately.
+Missing watch dates stay unknown. Rewatches use the same aggregation as Trakt.
+PMDB evidence has provenance `sync:pmdb` and 0.8 trust. Duplicate titles for the
+same person and media type fold with Trakt and player history; ratings and stronger
+completion evidence win without adding duplicate weights or play counts.
+
+All pages must succeed before a person's history replaces its last good cache.
+The shared limits are 100 requests and 20 MiB per poll, with 10-second timeouts.
+A 429 stops the poll and delays the next sync using bounded Retry-After or backoff.
+Normal adaptive scheduling stays the same. Probes save no history or cursors;
+they report plays in the last 30 days for each configured account. Doctor separates
+rejected keys, rate limits, timeouts and malformed responses without showing bodies.
+
+Disconnect with `skald setup --disconnect pmdb --person NAME`, then restart.
+The key is removed; history stays available for backups and explicit forgetting.
+**Limits:** API shapes have been checked with synthetic data only, not a live account.
+
 ## MDBList
 
 **You get:** watched movies, watched shows from episodes, and watchlist interests for each member.

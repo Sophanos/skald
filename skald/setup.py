@@ -84,10 +84,10 @@ def publish(data, cfg, *, replace=False, on_publish=None):
     return cfg
 
 
-def member_data(data, person, cfg):
+def member_data(data, person, cfg, skip=()):
     if cfg.get('taste', {}).get('people', {}).get(person):
         return True
-    if any(person in cfg['connectors'].get(cid, {}).get('accounts', {}) for cid in ('trakt_api', 'mdblist', 'stremio')):
+    if any(person in cfg['connectors'].get(cid, {}).get('accounts', {}) for cid in ('trakt_api', 'mdblist', 'stremio', 'pmdb')):
         return True
     for c in cfg['connectors'].values():
         opts = c.get('options', {})
@@ -100,9 +100,9 @@ def member_data(data, person, cfg):
             return any(contains(v) for v in value)
         return value in (person, 'both')
     for path in data.iterdir():
-        if path.name in ('skald.json', 'setup.json', 'legacy.json', 'addon.json') or path.is_symlink() or not path.is_file():
+        if path.name in ('skald.json', 'setup.json', 'legacy.json', 'addon.json', *skip) or path.is_symlink() or not path.is_file():
             continue
-        if path.name.startswith(('trakt-' + person + '.', 'mdblist-' + person + '.', 'stremio-' + person + '.')):
+        if path.name.startswith(('trakt-' + person + '.', 'mdblist-' + person + '.', 'stremio-' + person + '.', 'pmdb-' + person + '.')):
             return True
         if path.suffix not in ('.json', '.jsonl'):
             continue
@@ -500,7 +500,7 @@ def status(data):
     connections = {cid: {p: bool(config['connectors'].get(cid, {}).get('enabled') and
                                      p in config['connectors'].get(cid, {}).get('accounts', {}))
                          for p in (config['household']['members'] if config else [])}
-                   for cid in ('mdblist', 'stremio')}
+                   for cid in ('mdblist', 'stremio', 'pmdb')}
     missing = [k for k, done in steps.items() if not done]
     commands = {'checks': 'skald setup', 'household': 'skald setup', 'address': 'skald setup --base YOUR_ADDRESS',
                 'watch': 'skald setup --watch stremio', 'taste': 'skald setup --connect files',
@@ -595,21 +595,22 @@ def _configure_connector(s, args, ask, lines, show, stage, published, *, initial
             opts['archived'] = archived
         c = {'kind': 'player', 'enabled': True, 'auth': None, 'options': opts}
     else:
-        instructions = {'stremio': 'Paste your Stremio auth key privately, or leave it blank to sign in with email and password.',
+        instructions = {'pmdb': 'Create a personal PublicMetaDB key at https://publicmetadb.com: Settings → API → Create. Paste it privately.',
+            'stremio': 'Paste your Stremio auth key privately, or leave it blank to sign in with email and password.',
             'mdblist': 'Get a free API key at https://mdblist.com/preferences. Paste it privately.',
             'trakt_api': 'Create a Trakt API app at https://trakt.tv/oauth/applications (may require VIP). Use its client id and an access token from your authorized account.',
             'jellyfin': 'Create an API key in Jellyfin: Dashboard → Advanced → API Keys → Add.',
             'plex': 'Get a Plex token: open a media item in Plex Web → Get Info → View XML; copy X-Plex-Token privately.'}
         lines.append(instructions[cid])
         show()
-        if cid in ('trakt_api', 'mdblist', 'stremio'):
+        if cid in ('trakt_api', 'mdblist', 'stremio', 'pmdb'):
             person = ask(args.person, 'Source member', cfg['household']['trakt_member'], '--person')
             if person not in cfg['household']['members']:
                 raise ValueError('choose a household member with --person')
-        previous_auth = previous.get('accounts', {}).get(person) if cid in ('trakt_api', 'mdblist', 'stremio') and 'accounts' in previous else previous.get('auth')
+        previous_auth = previous.get('accounts', {}).get(person) if cid in ('trakt_api', 'mdblist', 'stremio', 'pmdb') and 'accounts' in previous else previous.get('auth')
         if cid == 'trakt_api' and person != cfg['household']['trakt_member'] and 'accounts' not in previous:
             previous_auth = None
-        if cid in ('mdblist', 'stremio') and args.auth_env:
+        if cid in ('mdblist', 'stremio', 'pmdb') and args.auth_env:
             raise ValueError('Keys use private files; use --key-stdin')
         auth = args.auth_env
         if auth:
@@ -622,8 +623,8 @@ def _configure_connector(s, args, ask, lines, show, stage, published, *, initial
             key = secret(args.secret_stdin, cid + ' secret') if cid != 'stremio' or args.secret_stdin else getpass.getpass('Stremio auth key (blank for email login): ').strip()
             if cid == 'stremio' and not key:
                 key = s._stremio_login(secret(False, 'Stremio email'), secret(False, 'Stremio password'))
-            auth = stage(key, cid.removesuffix('_api') + '-' + person if cid in ('trakt_api', 'mdblist', 'stremio') else cid)
-        if cid in ('mdblist', 'stremio'):
+            auth = stage(key, cid.removesuffix('_api') + '-' + person if cid in ('trakt_api', 'mdblist', 'stremio', 'pmdb') else cid)
+        if cid in ('mdblist', 'stremio', 'pmdb'):
             accounts = dict(previous.get('accounts', {}))
             accounts[person] = auth
             c = {'kind': 'api', 'enabled': True, 'auth': None, 'accounts': accounts, 'options': {}}
@@ -823,8 +824,8 @@ def run(args):
     if args.status:
         return status(data)
     if args.disconnect:
-        if args.disconnect not in ('mdblist', 'stremio'):
-            raise ValueError('--disconnect supports mdblist or stremio')
+        if args.disconnect not in ('mdblist', 'stremio', 'pmdb'):
+            raise ValueError('--disconnect supports mdblist, stremio or pmdb')
         path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
         cfg = members.validate_config(json.loads(path.read_text()), data=str(data))
         person = args.person
@@ -838,7 +839,7 @@ def run(args):
         if reference:
             _, name = members._auth_reference(reference, str(data))
             (data/'credentials'/name).unlink(missing_ok=True)
-        return {'ok': True, 'lines': [{'mdblist': 'MDBList', 'stremio': 'Stremio'}[args.disconnect] + ' ' + person + ': disconnected']}
+        return {'ok': True, 'lines': [{'mdblist': 'MDBList', 'stremio': 'Stremio', 'pmdb': 'PublicMetaDB'}[args.disconnect] + ' ' + person + ': disconnected']}
     config_path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
     if args.setup_action == 'adopt':
         if config_path.exists():
@@ -1041,10 +1042,10 @@ def run(args):
         write_private(data/'setup.json', json.dumps(saved) + '\n')
         lines.extend(recipes.recipe(watch, urls[0], cfg['region']['lang'], s.addon_urls(internal_base)[0].replace(token, '<addon-token>') if internal_base and args.json else s.addon_urls(internal_base)[0] if internal_base else None).splitlines())
         if args.connect or not saved.get('taste') and not cfg['connectors']:
-            args.connect = ask(args.connect, 'Taste source: trakt, mdblist, stremio, jellyfin, plex, aiostreams-db, files', 'files', '--connect')
+            args.connect = ask(args.connect, 'Taste source: trakt, mdblist, stremio, pmdb, jellyfin, plex, aiostreams-db, files', 'files', '--connect')
             if args.connect == 'aiostreams-db':
                 args.connect = 'aiostreams_db'
-            if args.connect not in ('trakt', 'mdblist', 'stremio', 'jellyfin', 'plex', 'aiostreams_db', 'files'):
+            if args.connect not in ('trakt', 'mdblist', 'stremio', 'pmdb', 'jellyfin', 'plex', 'aiostreams_db', 'files'):
                 raise ValueError('choose a supported --connect source')
             result = configure_connector(s, args, ask, lines, show)
             saved['taste'] = args.connect
@@ -1110,8 +1111,8 @@ def add_parser(commands):
         'base': 'the address your watching apps use, e.g. https://skald.example.org',
         'internal-base': 'Skald address inside Docker for AIOStreams, e.g. http://skald:8080',
         'watch': 'watching app: stremio, aiostreams or jellyfin-app',
-        'disconnect': 'remove a member MDBList or Stremio connection and its private key',
-        'connect': 'taste source: files, trakt, mdblist, stremio, jellyfin, plex or aiostreams-db',
+        'disconnect': 'remove a member MDBList, Stremio or PublicMetaDB connection and its private key',
+        'connect': 'taste source: files, trakt, mdblist, stremio, pmdb, jellyfin, plex or aiostreams-db',
         'name': 'name for the laptop token created by link',
         'person': 'household member whose source or laptop token to use',
         'source-url': 'address of the Jellyfin or Plex server',

@@ -1,0 +1,4 @@
+# Replace with your public hostname; keep private URL paths out of logs.
+skald.example.org {
+    reverse_proxy skald:8080
+}

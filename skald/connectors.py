@@ -96,6 +96,24 @@ def test(s, name=None, *, transport=None, now=None, show=False):
                 continue
             row = {'name': cid, 'reachable': False, 'auth_ok': False, 'unmapped': 0,
                    'mapping_complete': False, 'plays_30d': 0, 'ok': False}
+            if cid == 'pmdb':
+                row['accounts'] = []
+                for person, auth in cfg['accounts'].items():
+                    account = {'person': person, 'ok': False, 'plays_30d': 0}
+                    try:
+                        _, _, stats = s._connector_pmdb({'id': 'pmdb:' + person, 'person': person,
+                            'auth': auth, 'cursor': None}, now, readonly=True)
+                        account.update(ok=True, plays_30d=stats['plays_30d'])
+                    except Exception as error:
+                        account['error'] = s.PMDB_ERRORS.get(type(error).__name__, 'PublicMetaDB probe failed')
+                    row['accounts'].append(account)
+                row.update(ok=all(a['ok'] for a in row['accounts']),
+                           plays_30d=sum(a['plays_30d'] for a in row['accounts']))
+                row.update(reachable=row['ok'], auth_ok=row['ok'], mapping_complete=True)
+                if not row['ok']:
+                    row['error'] = '; '.join(a['person'] + ': ' + a['error'] for a in row['accounts'] if not a['ok'])
+                results.append(row)
+                continue
             try:
                 if cid in ('trakt_api', 'mdblist', 'stremio'):
                     refs = cfg.get('accounts', {s.CONFIG['household']['trakt_member']: cfg.get('auth')})
@@ -146,6 +164,8 @@ def text(result):
         yield (f"{r['name']}: reachable {'yes' if r['reachable'] else 'no'}; auth {'OK' if r['auth_ok'] else 'not OK'}; "
                f"{r['unmapped']} unmapped; {r['plays_30d']} plays in the last 30 days" +
                (f"; {r['skipped']} profiles skipped" if 'skipped' in r else ''))
+        for account in r.get('accounts', []):
+            yield f"{r['name']}:{account['person']}: {account['plays_30d']} plays in the last 30 days; " + ('OK' if account['ok'] else account['error'])
         if r.get('unmapped_names'):
             yield 'Unmapped: ' + ', '.join(r['unmapped_names'])
         if r.get('error'):

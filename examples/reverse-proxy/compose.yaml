@@ -1,0 +1,29 @@
+services:
+  skald:
+    build: ../..
+    restart: unless-stopped
+    read_only: true
+    tmpfs: /tmp
+    user: "65534"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - ./data:/data
+    env_file: .env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=4).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+  caddy:
+    image: caddy:2.8.4-alpine # Version pin; digest not verified offline.
+    restart: unless-stopped
+    # Public HTTP/HTTPS is required for clients and automatic certificates.
+    ports: ["0.0.0.0:80:80", "0.0.0.0:443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+volumes:
+  caddy-data:
+  caddy-config:

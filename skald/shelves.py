@@ -20,6 +20,35 @@ def read(s):
 def save(s, doc):
     write_private(Path(s.DATA) / 'shelves.json', json.dumps(doc, ensure_ascii=False) + '\n')
 
+def rules(s):
+    """Optional per-shelf filters and months, keyed by wish id; old versions ignore the file."""
+    path = Path(s.DATA) / 'shelf_rules.json'
+    return json.loads(path.read_text()) if path.exists() else {}
+
+def save_rules(s, doc):
+    write_private(Path(s.DATA) / 'shelf_rules.json', json.dumps(doc, ensure_ascii=False) + '\n')
+
+def rule_ok(s, meta, rule):
+    f = (rule or {}).get('filters') or {}
+    if not f:
+        return True
+    facts, kind = s.row_facts(meta), meta['type']
+    low, high = f.get('years') or [None, None]
+    year = (facts.get('date') or '')[:4]
+    if f.get('kind') and kind != f['kind'] or f.get('runtime') and (not facts.get('runtime') or facts['runtime'] > f['runtime']):
+        return False
+    if (low or high) and (not year.isdigit() or low and int(year) < low or high and int(year) > high):
+        return False
+    if f.get('languages') and facts.get('lang') not in f['languages']:
+        return False
+    if f.get('exclude_genres') or f.get('hide'):
+        names, hide = s.preference_genres(facts, kind), set(f.get('hide') or ())
+        if names & {g.casefold() for g in f.get('exclude_genres') or ()} or 'documentaries' in hide and 'documentary' in names:
+            return False
+        if 'animation' in hide and 'animation' in names or 'anime' in hide and s.is_anime(meta):
+            return False
+    return True
+
 def slot_count(s, scope):
     return s.CONFIG['household'].get('shelves', 2) if scope == 'together' else s.CONFIG['taste'].get('people', {}).get(scope, {}).get('prefs', {}).get('shelves', 4)
 
@@ -50,7 +79,9 @@ def schedule(value):
         raise ValueError('schedule hours must be within the logical day, 05..29')
     return {'days': list(dict.fromkeys(days)), 'hours': hours}
 
-def window(wish, now):
+def window(wish, now, rule=None):
+    if (rule or {}).get('months') and (now - dt.timedelta(hours=5)).month not in rule['months']:
+        return None
     when = wish['when']
     if when == 'always':
         return 'always'
@@ -77,7 +108,7 @@ def listing(s, scope=None):
     for w in doc['wishes']:
         if w['scope'] in scopes:
             raw = s._feeds.get((s.rid(f"shelfraw_{w['scope']}_{w['slot']}"), s.LANG), {})
-            active = window(w, s.local_now())
+            active = window(w, s.local_now(), rules(s).get(w['id']))
             status = raw.get('status', 'unfilled') if (raw.get('wish'), raw.get('window')) == (w['id'], active) else 'unfilled'
             wishes.append({**w, 'status': status if active else 'outside window'})
     return {'counts': {p: slot_count(s, p) for p in scopes}, 'wishes': wishes}
@@ -215,7 +246,7 @@ def discover(s, text, kind):
 def fill(s, lang, now=None, build=True):
     with LOCK:
         now = now or s.local_now()
-        doc = read(s)
+        doc, ruled = read(s), rules(s)
         out = {'_names': {}}
         for scope in (*s.PEOPLE, 'together'):
             for cid, owner, n in slots(s, scope, doc=doc):
@@ -224,7 +255,8 @@ def fill(s, lang, now=None, build=True):
                 wish = next((w for w in doc['wishes'] if (w['scope'], w['slot']) == (scope, n)), None)
                 out[cid] = {'tv': []}
                 out['_names'][cid] = {'title': wish['name'] or wish['text'][:100]}
-                win = window(wish, now) if wish else None
+                rule = ruled.get(wish['id']) if wish else None
+                win = window(wish, now, rule) if wish else None
                 if not win:
                     continue
                 key = (s.rid(f'shelfraw_{scope}_{n}'), s.LANG)
@@ -246,7 +278,7 @@ def fill(s, lang, now=None, build=True):
                                 if filters:
                                     names = s.genres(kind, s.LANG)
                                     items = s.tmdb('discover/' + kind, language=s.LANG, include_adult='false', **filters).get('results', [])
-                                    raw['candidates'] += [s.to_meta(it, typ, kind, names, {}) for it in items]
+                                    raw['candidates'] += [s.to_meta(it, typ, kind, names, {}, lang=s.LANG) for it in items]
                                 else:
                                     raw['status'] = 'needs OpenRouter'
                     except Exception:
@@ -258,7 +290,7 @@ def fill(s, lang, now=None, build=True):
                     with s.addon_scope(scope):
                         profile = s.search_profile()
                     s.ensure_facets([(x['id'], 'movie' if x['type'] == 'movie' else 'tv') for x in raw['candidates']])
-                    metas = list({x['id']: x for x in raw['candidates'] if x['id'] not in profile.get('seen', ()) and x['id'] not in profile.get('negative', ()) and s.preference_ok(x, cid, who)}.values())
+                    metas = list({x['id']: x for x in raw['candidates'] if x['id'] not in profile.get('seen', ()) and x['id'] not in profile.get('negative', ()) and s.preference_ok(x, cid, who) and rule_ok(s, x, rule)}.values())
                     scores = s.member_scores(metas, who) if who in s.PEOPLE else s.week_scores(metas)
                     metas.sort(key=lambda x: scores.get(x['id'], 0), reverse=True)
                     metas = s.preference_order(metas, cid, who)[:s.ROW_MAX]

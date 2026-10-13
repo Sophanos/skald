@@ -15,6 +15,118 @@ from decide_kit import load_server, close_server
 
 
 class CommandEval(unittest.TestCase):
+    def test_plan_scores_every_step_in_order(self):
+        steps = [{'op': 'hide', 'values': ['anime'], 'person': 'ana'},
+                 {'op': 'runtime', 'kind': 'movie', 'values': [90]}]
+        expect = {'op': 'plan', 'steps': steps}
+        self.assertEqual(ev.score(expect, expect), (True, True))
+        for actual in (None, {}, [], steps[:1], steps * 2, steps[::-1],
+                       [steps[0], {'op': 'runtime', 'kind': 'movie', 'values': [120]}],
+                       [steps[0], None]):
+            with self.subTest(steps=actual):
+                self.assertEqual(ev.score(expect, {'op': 'plan', 'steps': actual}), (True, False))
+        self.assertEqual(ev.score(expect, steps[0]), (False, False))
+
+    def test_ask_requires_question_and_correct_slot_without_guessed_change(self):
+        expect = {'op': 'ask', 'slot': 'person'}
+        answer = {**expect, 'question': 'Für wen soll das gelten?'}
+        self.assertEqual(ev.score(expect, answer), (True, True))
+        for extra in ({'question': ''}, {'question': '  '}, {'question': None},
+                      {'slot': 'title'}, {'values': ['anime']}, {'person': 'ana'},
+                      {'kind': 'movie'}, {'steps': [{'op': 'hide'}]}):
+            with self.subTest(extra=extra):
+                self.assertEqual(ev.score(expect, {**answer, **extra}), (True, False))
+        self.assertEqual(ev.score(expect, expect), (True, False))
+        self.assertEqual(ev.score(expect, {'op': 'hide', 'values': ['anime']}), (False, False))
+
+    def test_ask_rejects_guessed_date_and_schedule(self):
+        cases = {c['id']: c for c in ev.load_cases()}
+        for case_id, guessed in (('next-069', {'until': '2027-01-05'}),
+                                 ('next-070', {'months': [12]})):
+            with self.subTest(id=case_id):
+                expect = cases[case_id]['expect']
+                answer = {**expect, 'question': 'Which date or schedule do you mean?'}
+                self.assertEqual(ev.score(expect, answer), (True, True))
+                self.assertEqual(ev.score(expect, {**answer, **guessed}), (True, False))
+
+    def test_future_fields_and_unknown_ops_are_scored_without_runtime_validation(self):
+        expect = {'op': 'shelf_filter', 'filters': {'languages': ['DE'], 'runtime': 90}}
+        self.assertEqual(ev.score(expect, {'op': 'shelf_filter',
+                                         'filters': {'languages': ['de'], 'runtime': 90}}), (True, True))
+        self.assertEqual(ev.score(expect, {'op': 'shelf_filter'}), (True, False))
+        self.assertEqual(ev.score(expect, {'op': 'shelf_filter',
+                                         'filters': {'languages': ['de'], 'runtime': 120}}), (True, False))
+        cases = [{'id': 'future', 'group': 'synthetic', 'text': 'synthetic future instruction',
+                  'expect': {'op': 'unknown_future_op'}, 'contract': 'next'}]
+        report = ev.evaluate(cases)[0]
+        self.assertEqual(report['errors'], {})
+        self.assertEqual(report['next_count'], 1)
+        self.assertEqual(report['next_full_accuracy'], 0)
+
+    def test_case_metadata_languages_and_ids(self):
+        cases = [json.loads(line) for line in (ev.ROOT / 'eval/commands_cases.jsonl').read_text().splitlines()]
+        self.assertEqual(len({c['id'] for c in cases}), len(cases))
+        for case in cases:
+            with self.subTest(id=case.get('id')):
+                self.assertTrue({'id', 'group', 'text', 'expect', 'contract'} <= case.keys())
+                self.assertIn(case['contract'], ('now', 'next'))
+                self.assertIn(case.get('lang', 'en'), ('en', 'de', 'sr'))
+                self.assertTrue(case['id'] and case['group'] and case['text'])
+                self.assertIn('op', case['expect'])
+        for lang in ('de', 'sr'):
+            self.assertTrue(any(c.get('lang') == lang and c['contract'] == 'now' for c in cases))
+        german_ids = {'create-6', 'create-7', 'create-8', 'w75-3', 'w75-4', 'w75-10',
+                      'w75-14', 'w75-15', 'w75-16', 'x-ind-6'}
+        self.assertTrue(all(c.get('lang') == 'de' for c in cases if c['id'] in german_ids))
+        self.assertTrue({'rows', 'schedule', 'filter', 'weights', 'training', 'people', 'meta',
+                         'creation', 'settings history'} <= {
+                             c['group'] for c in cases if c.get('lang') == 'sr' and c['contract'] == 'now'})
+
+    def test_future_model_reply_keeps_nested_plan_and_question(self):
+        cases = [
+            {'id': 'plan', 'group': 'synthetic', 'contract': 'next', 'text': 'plan',
+             'expect': {'op': 'plan', 'steps': [{'op': 'hide', 'values': ['anime']},
+                                             {'op': 'years', 'values': [2000, None]}]}},
+            {'id': 'ask', 'group': 'synthetic', 'contract': 'next', 'text': 'ask',
+             'expect': {'op': 'ask', 'slot': 'person'}},
+            {'id': 'future', 'group': 'synthetic', 'contract': 'next', 'text': 'future',
+             'expect': {'op': 'member_create', 'person': 'kim', 'age': 12}},
+        ]
+        answers = {c['text']: c['expect'] for c in cases}
+        answers['ask'] = {**answers['ask'], 'question': 'Za koga?'}
+        def transport(url, payload, key, timeout):
+            answer = answers[payload['messages'][1]['content']]
+            return {'choices': [{'message': {'content': json.dumps(answer)}}]}
+        r = ev.evaluate(cases, ['synthetic/model'], transport=transport)[0]
+        self.assertEqual(r['errors'], {})
+        self.assertEqual((r['next_count'], r['next_op_accuracy'], r['next_full_accuracy']), (3, 1, 1))
+
+    def test_search_routing_target_has_multilingual_synthetic_cases(self):
+        rows = [json.loads(line) for line in
+                (ev.ROOT / 'eval/fixtures/decisions/route_query.jsonl').read_text().splitlines()]
+        for lang in ('en', 'de', 'sr'):
+            target = [r for r in rows if r['note'].startswith('Synthetic: ' + lang + ' search target')]
+            self.assertGreaterEqual(len(target), 10)
+            self.assertEqual({r['expect']['choice'] for r in target}, {'request', 'title'})
+            for row in target:
+                self.assertEqual(set(row), {'in', 'expect', 'recorded', 'note'})
+                self.assertIn(commands.parse_local(row['in']['query'])['op'], (None, 'search'))
+
+    def test_next_columns_do_not_lower_now_accuracy(self):
+        cases = [
+            {'id': 'now', 'group': 'synthetic', 'contract': 'now', 'text': 'history', 'expect': {'op': 'history'}},
+            {'id': 'next-hit', 'group': 'synthetic', 'contract': 'next', 'text': 'Yes Man', 'expect': {'op': None}},
+            {'id': 'next-miss', 'group': 'synthetic', 'contract': 'next', 'text': 'unknown', 'expect': {'op': 'ask', 'slot': 'person'}},
+        ]
+        r = ev.evaluate(cases)[0]
+        self.assertEqual((r['now_count'], r['now_op_accuracy'], r['now_full_accuracy']), (1, 1, 1))
+        self.assertEqual((r['next_count'], r['next_op_accuracy'], r['next_full_accuracy']), (2, .5, .5))
+        out = io.StringIO()
+        ev.print_report(r, out)
+        self.assertIn('next cases | next op accuracy | next full accuracy', out.getvalue())
+        empty = ev.evaluate(cases[:1])[0]
+        self.assertEqual((empty['next_count'], empty['next_op_accuracy'], empty['next_full_accuracy']), (0, 0, 0))
+
     def test_theme_half_words_and_exact_schedule(self):
         expect = {'op': 'shelf_add', 'values': ['short cozy classic movies', 'sun', '05-12']}
         answer = {'op': 'shelf_add', 'values': [' COZY movies please ', 'SUN', '05-12']}
@@ -53,29 +165,30 @@ class CommandEval(unittest.TestCase):
             self.assertEqual(ev.main(['--fixture', '--json', str(dest)], out=out), 0)
             reports = json.loads(dest.read_text())
             report = reports[0]
-            self.assertEqual(report['count'], 129)
-            self.assertEqual(len(report['results']), 129)
-            self.assertEqual(report['no_answer'], 67)
-            self.assertEqual(sum(r['op_ok'] for r in report['results']), 61)
-            self.assertEqual(sum(r['full_ok'] for r in report['results']), 61)
-            self.assertEqual(report['now_count'], 129)
-            self.assertEqual(report['now_op_accuracy'], 61 / 129)
-            self.assertEqual(report['now_full_accuracy'], 61 / 129)
+            self.assertEqual(report['count'], 326)
+            self.assertEqual(len(report['results']), 326)
+            self.assertEqual(report['no_answer'], 145)
+            self.assertEqual(sum(r['op_ok'] for r in report['results']), 175)
+            self.assertEqual(sum(r['full_ok'] for r in report['results']), 174)
+            self.assertEqual(report['now_count'], 326)
+            self.assertEqual(report['now_op_accuracy'], 175 / 326)
+            self.assertEqual(report['now_full_accuracy'], 174 / 326)
+            self.assertEqual((report['next_count'], report['next_op_accuracy'], report['next_full_accuracy']), (0, 0, 0))
             self.assertEqual(report['by_tier'], {
-                'base': {'now_count': 85, 'op_accuracy': 57 / 85, 'full_accuracy': 57 / 85},
-                'hard': {'now_count': 44, 'op_accuracy': 4 / 44, 'full_accuracy': 4 / 44},
+                'base': {'now_count': 120, 'op_accuracy': 61 / 120, 'full_accuracy': 61 / 120},
+                'hard': {'now_count': 206, 'op_accuracy': 114 / 206, 'full_accuracy': 113 / 206},
             })
             self.assertEqual([r['tier'] for r in report['results']],
                              [c.get('tier', 'base') for c in ev.load_cases()])
             self.assertIn('by-tier now accuracy:', out.getvalue())
-            self.assertIn('base 85 cases op 67.06% full 67.06%', out.getvalue())
-            self.assertIn('hard 44 cases op 9.09% full 9.09%', out.getvalue())
+            self.assertIn('base 120 cases op 50.83% full 50.83%', out.getvalue())
+            self.assertIn('hard 206 cases op 55.34% full 54.85%', out.getvalue())
             self.assertEqual([r['contract'] for r in report['results']],
                              [c['contract'] for c in ev.load_cases()])
             self.assertIn('all op accuracy', out.getvalue())
             self.assertIn('now op accuracy', out.getvalue())
             self.assertIn('now full accuracy', out.getvalue())
-            self.assertIn('129', out.getvalue())
+            self.assertIn('326', out.getvalue())
             self.assertEqual(ev.evaluate(ev.load_cases()), reports)
 
     def test_live_metrics_request_and_secret_safe_output(self):

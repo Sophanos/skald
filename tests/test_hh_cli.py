@@ -45,7 +45,8 @@ class HouseholdCliTests(unittest.TestCase):
                 for member in ('ana', 'ben') for m in metas) + '\n')
             before = {p.name: p.read_bytes() for p in data.iterdir()}
             for build in ('a', 'b'):
-                for source in [ROOT / 'server.py', *sorted((ROOT / 'skald').rglob('*.py'))]:
+                for source in [ROOT / 'server.py', *sorted((ROOT / 'skald').rglob('*.py')),
+                               *sorted((ROOT / 'skald/locales').glob('*.json'))]:
                     target = root / build / source.relative_to(ROOT)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(source, target)

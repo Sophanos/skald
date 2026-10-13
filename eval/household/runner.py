@@ -78,12 +78,13 @@ def _copy(path, dest):
 
 
 def source_hash(source):
-    """Hash all shipped Python dependencies, including names, not private data."""
+    """Hash shipped code and translation dependencies, including names, not private data."""
     source = Path(source)
     if source.is_symlink() or (source / 'skald').is_symlink():
         raise ValueError('INVALID_INPUT')
     source = source.resolve()
-    paths = [source / 'server.py', *sorted((source / 'skald').rglob('*.py'))]
+    paths = [source / 'server.py', *sorted((source / 'skald').rglob('*.py')),
+             *sorted((source / 'skald/locales').glob('*.json'))]
     digest = hashlib.sha256()
     for path in paths:
         if path.is_symlink() or any(p.is_symlink() for p in path.parents):
@@ -146,7 +147,8 @@ def run_pair(source_a, source_b, snapshot, request, *, image='', python_version=
                 staged = root / label
                 versions['build_' + label] = source_hash(source)
                 source = source.resolve()
-                for path in [source / 'server.py', *sorted((source / 'skald').rglob('*.py'))]:
+                for path in [source / 'server.py', *sorted((source / 'skald').rglob('*.py')),
+                             *sorted((source / 'skald/locales').glob('*.json'))]:
                     _copy(path, staged / path.relative_to(source))
                 command = ['docker', 'run', '--rm', '--pull=never', '--network=none',
                            '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',

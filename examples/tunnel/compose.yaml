@@ -1,0 +1,22 @@
+services:
+  skald:
+    build: ../..
+    restart: unless-stopped
+    read_only: true
+    tmpfs: /tmp
+    user: "65534"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - ./data:/data
+    env_file: .env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=4).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+  cloudflared:
+    image: cloudflare/cloudflared:2024.12.2 # Version pin; digest not verified offline.
+    restart: unless-stopped
+    env_file: .tunnel.env
+    command: ["tunnel", "--no-autoupdate", "run"]

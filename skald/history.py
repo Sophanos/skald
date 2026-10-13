@@ -55,7 +55,7 @@ def enabled(config):
 def sources(config, data=None):
     yield 'history.json', config['history']['source'] if config['history']['source'] != 'file' else 'history', None
     yield 'trakt.json', 'trakt', None
-    for source, cid in (('trakt', 'trakt_api'), ('mdblist', 'mdblist'), ('stremio', 'stremio')):
+    for source, cid in (('trakt', 'trakt_api'), ('mdblist', 'mdblist'), ('stremio', 'stremio'), ('pmdb', 'pmdb')):
         people = set(config['connectors'].get(cid, {}).get('accounts', {}))
         if data is not None:
             people.update(match[1] for path in Path(data).glob(source + '-*.history.json')
@@ -101,7 +101,7 @@ def restored(e):
                 't': e['month'] + '-01' if e['month'] else '1970-01-01',
                 'src': e['src'].removeprefix('import:'),
                 'id': e.get('id') or hashlib.sha256(json.dumps(identity(e)).encode()).hexdigest()[:32]}
-    return {**e['item'], 'id': e['key'], 'type': 'movie' if e['kind'] == 'movie' else 'series',
+    return {**e['item'], **({'src': e['src']} if e['src'] == 'sync:pmdb' else {}), 'id': e['key'], 'type': 'movie' if e['kind'] == 'movie' else 'series',
             'at': at * 1000 if at is not None else None, 'title': e['title'], 'year': e['year'],
             'genres': e['genres'], 'signal': e['signal'], 'profile': e['profile'], 'person': e['who'],
             '_summary': e}
@@ -378,6 +378,19 @@ def _forget(data, config, before, person, *, apply):
     if count['summaries'] or summary_doc.get('import_order') != old_order:
         summary_doc['items'] = kept
         changes[SUMMARY] = json.dumps(summary_doc) + '\n'
+    wishes = data / 'wishes.jsonl'
+    if wishes.exists():
+        rows = [json.loads(line) for line in wishes.read_text().splitlines() if line.strip()]
+        kept = [w for w in rows if not (w.get('who') == person and w.get('t', 0) < cutoff)]
+        if len(kept) != len(rows):
+            changes[wishes.name] = ''.join(json.dumps(w, ensure_ascii=False) + '\n' for w in kept)
+    fixes = data / 'title_fixes.json'
+    if fixes.exists():
+        rows = json.loads(fixes.read_text())['fixes']
+        # A moved watch belongs to the member it moved to, so only forgetting that member removes the row.
+        kept = [r for r in rows if not ((r.get('to') if r.get('op') == 'move' else r.get('who')) == person and r.get('t', 0) < cutoff)]
+        if len(kept) != len(rows):
+            changes[fixes.name] = json.dumps({'fixes': kept}, ensure_ascii=False, indent=1) + '\n'
     forgotten_facts = set()
     from .metrics import forget as forget_metrics
     count['metrics'] = forget_metrics(data, config, before, person, apply=apply)
@@ -406,6 +419,16 @@ def _forget(data, config, before, person, *, apply):
         forgotten = cutoffs(data)
         forgotten[person] = max(before, forgotten.get(person, before))
         changes['history-forgotten.json'] = json.dumps(forgotten) + '\n'
+        # Only this member's taste label and the shared one go; other members keep theirs and their weekly limit.
+        labels = data / 'archetypes.json'
+        try:
+            doc = json.loads(labels.read_text())
+            doc['items'] = {k: v for k, v in doc['items'].items() if k not in (person, 'household')}
+            changes[labels.name] = json.dumps(doc, ensure_ascii=False, sort_keys=True) + '\n'
+        except FileNotFoundError:
+            pass
+        except (ValueError, TypeError, KeyError, AttributeError):
+            labels.unlink()
         # Serving and copied profile caches must rebuild from the remaining evidence.
         for name in ('profile.json', 'taste_ring.json', 'learn.json', 'online.json', *SERVING_CACHES,
                      *('health-cache-' + name for name in SERVING_CACHES)):

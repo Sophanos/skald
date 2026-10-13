@@ -27,6 +27,7 @@ class RunnerTests(unittest.TestCase):
             dest = self.source / path.relative_to(ROOT)
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, dest)
+        shutil.copytree(ROOT / 'skald/locales', self.source / 'skald/locales')
         self.inputs = self.root / 'inputs'
         self.inputs.mkdir()
         cfg = {'v': 1, 'household': {'members': ['ana', 'ben']},
@@ -63,6 +64,13 @@ class RunnerTests(unittest.TestCase):
                                '.'.join(map(str, sys.version_info[:3]))],
                               input=json.dumps(self.request), text=True, capture_output=True,
                               env=env, timeout=30)
+
+    def test_source_hash_includes_bundled_translations(self):
+        from eval.household import runner
+        before = runner.source_hash(self.source)
+        strings = self.source / 'skald/locales/en.json'
+        strings.write_text(strings.read_text() + '\n')
+        self.assertNotEqual(runner.source_hash(self.source), before)
 
     def launch_local(self, command, **kwargs):
         mounts = [arg for arg in command if arg.startswith('type=bind,')]

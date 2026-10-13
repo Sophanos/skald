@@ -108,11 +108,14 @@ def me(engine, state, person):
     facts = [{**f, "text": f["text"][:140]} for f in facts]
     proposals = sum(f["status"] == "proposed" for f in s.memory_view(person, viewer=person))
     actions = next_actions(engine, state, person)
+    rec = s.archetype_items().get(person) or {}
+    archetype = ({k: rec[k][:120] for k in ("name", "line")} | {"source": "llm"} if rec.get("source") == "llm" and rec.get("name") and rec.get("line")
+                 else {**s.archetype_label(s.archetype_brief(engine._model, person)), "source": "rule"})
     actions += [{"id": "forget_source", "say": "Forget an export source", "cli": f"skald me --person {person} forget --source NAME"},
                 {"id": "forget_import", "say": "Forget one imported event", "cli": f"skald me --person {person} forget --import ID"}]
     card = {"v": 1, "person": person, "say": f"{person.title()}, Skald has {profile['titles']} titles for you and {proposals} memory proposals."[:140],
             "maturity": maturity, "sources": sources, "top": top, "facts": facts,
-            "pending": {"review": sum(r["person"] in (person, "both") for r in pending), "memory": proposals}, "actions": actions}
+            "pending": {"review": sum(r["person"] in (person, "both") for r in pending), "memory": proposals}, "actions": actions, "archetype": archetype}
     # Bound the card without truncating JSON or omitting source/forget information.
     while len(json.dumps(card, ensure_ascii=False).encode()) > 4096:
         groups = [v for v in top.values() if v]
@@ -236,6 +239,12 @@ def doctor(args, state):
                 reminders = [c["reminder"] for c in rows if c["reminder"]]
                 warning = errors or (reminders and engine._server.CONNECTOR_REMINDER_WARNING)
                 message = f"{errors} connector errors; {len(reminders)} export reminders"
+                pmdb_errors = [c["person"] + ": " + engine._server.PMDB_ERRORS.get(
+                    c.get("last_error") or c["health"].get("error"), "PublicMetaDB probe failed")
+                    for c in rows if c["id"].startswith("pmdb:") and
+                    (c.get("last_error") or c["health"].get("error"))]
+                if pmdb_errors:
+                    message += "; " + "; ".join(pmdb_errors)
                 hint = "; ".join(reminders) if reminders else None
                 if not any(c["kind"] != "availability" and c["health"]["state"] != "disabled" for c in rows):
                     hint = "Connect Trakt, drop a CSV export or paste titles; see docs/CONNECTORS.md"

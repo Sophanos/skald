@@ -1,5 +1,7 @@
 # Where you watch
 
+Choose a ready-to-run [Compose setup](../examples/README.md).
+
 ## Recommended: the setup we run
 
 Tested by us. OpenRouter adds natural-language AI search to this setup.

@@ -29,7 +29,7 @@ class SettingsCommands(unittest.TestCase):
 
     def test_glm_fallback_and_override(self):
         spec = self.s.DECISIONS['parse_command']
-        self.assertEqual(spec['ver'], 6)
+        self.assertEqual(spec['ver'], 9)
         fallback = spec['llm']['fallback']
         self.assertEqual(fallback['timeout'], 6)
         body = fallback['prompt']([{'query': 'hide anime'}])
@@ -46,7 +46,7 @@ class SettingsCommands(unittest.TestCase):
         parse = self.s.DECISIONS['parse_command']['llm']['parse']
         for content in ('```json\n{"op":null}\n```', 'Here: {"op":null} done', 'prefix {"op":"like","values":["A {Title} \\\"B\\\""]} suffix'):
             answer = parse({'choices': [{'message': {'content': content}}]}, [])[0][0]
-            self.assertEqual(set(answer), set(c.OUT))
+            self.assertEqual(set(answer), set(c.BASE))
             self.assertIsNone(answer['person'])
             self.assertIsNone(answer['kind'])
         self.assertIsNone(parse({'choices': [{'message': {'content': '{"op":null}'}}]}, [])[0][0]['values'])

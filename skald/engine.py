@@ -18,12 +18,12 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_FILES = (".skald-format", "skald.json", "legacy.json", "profile.json", "emb.json", "facets.json", "learn.json", "taste.json", "trakt.json",
-              "feeds.json", "shown.json", "history.json", "history-summary.json", "history-forgotten.json", "feedback.jsonl", "imports.jsonl", "online.json", "metrics.json", "memory.json", "interview.json", "taste_ring.json", "connectors.json", "shelves.json", "undo.jsonl")
+              "feeds.json", "shown.json", "history.json", "history-summary.json", "history-forgotten.json", "feedback.jsonl", "imports.jsonl", "online.json", "metrics.json", "memory.json", "interview.json", "taste_ring.json", "connectors.json", "shelves.json", "undo.jsonl", "archetypes.json")
 
 
 def data_files(config):
     return DATA_FILES + tuple(source + "-" + person + ".history.json"
-        for source, cid in (("trakt", "trakt_api"), ("mdblist", "mdblist"), ("stremio", "stremio"))
+        for source, cid in (("trakt", "trakt_api"), ("mdblist", "mdblist"), ("stremio", "stremio"), ("pmdb", "pmdb"))
         for person in config["connectors"].get(cid, {}).get("accounts", {}))
 
 
@@ -629,12 +629,14 @@ def suggestions(data, person, config, dismiss=None):
     searches = [json.loads(line) for line in (data / "searches.jsonl").read_text().splitlines() if line.strip()] if (data / "searches.jsonl").exists() else []
     cache = read("facets.json", {}).get("items", {})
     sources = [("history.json", None)] + [(source + "-" + person + ".history.json", person)
-        for source, cid in (("trakt", "trakt_api"), ("mdblist", "mdblist"), ("stremio", "stremio"))
+        for source, cid in (("trakt", "trakt_api"), ("mdblist", "mdblist"), ("stremio", "stremio"), ("pmdb", "pmdb"))
         if person in config["connectors"].get(cid, {}).get("accounts", {})]
     plays = []
     for filename, owner in sources:
         for item in read(filename, {}).get("items", []):
             if (owner or item.get("person") or item.get("profile")) != person or not item.get("at"):
+                continue
+            if item.get("src") == "sync:pmdb" and not item.get("played"):
                 continue
             if not (item.get("played") or (item.get("progress") or 0) >= .25 or (item.get("episodes_played") or 0) >= 1):
                 continue

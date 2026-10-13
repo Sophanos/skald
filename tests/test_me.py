@@ -49,7 +49,7 @@ class MeTests(FrontDoorCase):
 
     def test_card_shape_read_only_and_future_maturity(self):
         card, _ = self.cli('me', '--person', 'ana')
-        self.assertEqual(set(card), {'v', 'person', 'say', 'maturity', 'sources', 'top', 'facts', 'pending', 'actions'})
+        self.assertEqual(set(card), {'v', 'person', 'say', 'maturity', 'sources', 'top', 'facts', 'pending', 'actions', 'archetype'})
         self.assertEqual(card['maturity']['state'], 'too_new')  # W19 maturity now present
         self.assertLessEqual(len(card['say']), 140)
         self.assertLessEqual(len(json.dumps(card, ensure_ascii=False).encode()), 4096)

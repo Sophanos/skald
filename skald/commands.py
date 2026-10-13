@@ -7,9 +7,50 @@ import re
 from pathlib import Path
 import tempfile
 import threading
-OPS = ('hide', 'show', 'exclude_genre', 'include_genre', 'focus', 'unfocus', 'discovery', 'years', 'like', 'dislike', 'seen', 'less', 'more', 'runtime', 'kids_age', 'settings', 'history', 'undo', 'redo', 'reset', 'shelf_list', 'shelf_add', 'shelf_stop', 'shelf_count', 'row_rename', 'row_hide', 'row_show', 'row_move')
-OUT = {'op': (*OPS, None), 'kind': ('movie', 'tv', 'series', 'genre', 'people', 'languages', 'countries', None),
-       'values': ([(str, int, None), 10], None), 'person': (str, None)}
+import uuid
+def _op(group, verb=None, inverse=None, *, feedback=None, kids=False, removes=False, hint=''):
+    return dict(group=group, verb=verb, inverse=inverse, feedback=feedback, kids=kids, removes=removes, hint=hint)
+# One table per op: parsing, prompt, preview, apply and undo read it instead of their own lists.
+REGISTRY = {
+    'hide': _op('prefs', inverse='show'), 'show': _op('prefs', inverse='hide', removes=True),
+    'exclude_genre': _op('prefs', 'No more', 'include_genre'), 'include_genre': _op('prefs', 'More', 'exclude_genre', removes=True),
+    'focus': _op('prefs', 'More', 'unfocus'), 'unfocus': _op('prefs', 'Less', 'focus', removes=True),
+    'discovery': _op('prefs', 'Discovery:'), 'years': _op('prefs'),
+    'like': _op('feedback', feedback='love'), 'dislike': _op('feedback', feedback='not_for_us'), 'seen': _op('feedback', feedback='seen'),
+    'less': _op('prefs'), 'more': _op('prefs'), 'runtime': _op('prefs'), 'kids_age': _op('actor'),
+    'settings': _op('read', kids=True), 'history': _op('read', kids=True), 'undo': _op('history', kids=True),
+    'redo': _op('history', kids=True), 'reset': _op('reset', kids=True), 'shelf_list': _op('read', kids=True),
+    'shelf_add': _op('shelf', kids=True), 'shelf_stop': _op('shelf', kids=True), 'shelf_count': _op('shelf', kids=True),
+    'row_rename': _op('rows'), 'row_hide': _op('rows'), 'row_show': _op('rows'), 'row_move': _op('rows'),
+    'plan': _op('plan', hint='plan is one sentence with several changes, kind null values [] steps [{op,kind,values,person}] in spoken order; steps use the change ops above.'),
+    'correct': _op('correct', hint='correct fixes the change just made: "no, I meant Ben" person ben values []; "not horror, thriller" values [horror,thriller]. Defer, reject, already seen and why questions are not correct.'),
+    'ask': _op('ask', kids=True, hint='ask is a requested change with an unclear detail, kind null values [] person null, slot change/person/title/scope/date/schedule, question one short question: "Mach es für sie weniger gruselig" slot person; "Maybe hide some of those?" slot change.'),
+    'wish': _op('wish', kids=True, hint='wish is a hope (I wish, ich wünschte, volela bih, it would be nice), values [X], person only if named: "I wish there were more gentle mysteries" values [gentle mysteries]. Direct requests like more comedy are changes.'),
+    'shelf_filter': _op('rule', kids=True, hint='shelf_filter values [shelf name], filters {kind,runtime,years,languages,exclude_genres,hide} with only stated keys.'),
+    'shelf_schedule': _op('rule', kids=True, hint='shelf_schedule is a shelf in some months only, values [theme], months [1..12].'),
+    'member_create': _op('member', hint='member_create adds a household member: "Add a household member named Kim, age 12" person kim age 12.'),
+    'member_update': _op('member', hint='member_update person existing member, age or label: "Update Ben to age 13" person ben age 13; "Ändere Anas Anzeigenamen zu Kim" person ana label Kim. Titles like New Member are op null.'),
+    'search': _op('search', kids=True, hint='search changes nothing: kind similar for something like X, people for movies by X, mood for something cozy tonight; values [X]. '
+                  'kind title for a title name that reads like a mood, setting or command: "More Like Home" values [More Like Home]; "Film Mirno" values [Mirno]. '
+                  'Fix plain title typos: somthing like Arrivl is similar [Arrival]. Other searches stay op null.'),
+    'defer': _op('title', hint='defer hides one title from one person\'s picks for a while, never forever: values [title], until tonight or YYYY-MM-DD as stated: '
+                 '"Not tonight for Dune" until tonight; "Arrival bitte nicht vor dem 2026-12-24 zeigen" until 2026-12-24. No clear date is ask slot date.'),
+    'reject': _op('title', hint='reject is "not for me" about one title: values [title], reason the stated reason text or null: "Dune nije za mene, previše je spor" reason previše je spor. '
+                  '"X is already seen" or "X habe ich schon gesehen" is seen, not reject.'),
+    'ignore_learning': _op('title', hint='ignore_learning stops one watched title shaping this person\'s taste; history stays: values [title]: "Lerne nichts aus meinem Abspielen von Dune".'),
+    'reattribute': _op('title', hint='reattribute moves a watch to the member who really watched it: values [title], person that member: "Arrival je gledao Ben, ne ja" person ben.'),
+    'explain': _op('title', kids=True, hint='explain is a why question about one title in the picks and changes nothing: "Why is Dune here?" values [Dune].'),
+}
+OPS = tuple(REGISTRY)
+BASE = ('op', 'kind', 'values', 'person')
+STEP = {'op': (*OPS, None), 'kind': ('movie', 'tv', 'series', 'genre', 'people', 'languages', 'countries', 'similar', 'mood', 'title', None),
+        'values': ([(str, int, None), 10], None), 'person': (str, None)}
+SLOTS = {'change': 'Which change do you mean?', 'person': 'Who should this apply to?', 'title': 'Which title do you mean?',
+         'scope': 'Should this apply to you or to everyone?', 'date': 'Until which date?', 'schedule': 'Which days and hours should this shelf show?'}
+FILTERS = {'kind': ('movie', 'series', None), 'runtime': (int, None), 'years': ([(int, None), 2], None),
+           'languages': ([str, 10], None), 'exclude_genres': ([str, 10], None), 'hide': ([str, 5], None)}
+OUT = {**STEP, 'steps': ([STEP, 6], None), 'slot': (*SLOTS, None), 'question': (str, None), 'age': (int, None),
+       'label': (str, None), 'months': ([int, 12], None), 'filters': (FILTERS, None), 'until': (str, None), 'reason': (str, None)}
 NONE = dict(op=None, kind=None, values=[], person=None)
 
 def parse_json(content):
@@ -35,22 +76,59 @@ def parse_json(content):
             depth -= 1
             if depth == 0:
                 answer = json.loads(content[start:i+1])
-                return {**dict.fromkeys(OUT), **answer}
+                return {**dict.fromkeys(BASE), **answer}
     raise json.JSONDecodeError('No balanced JSON object', content, max(start, 0))
 
-def parse_local(text, s=None, viewer=None, bound=None):
-    answer = parse_shelf(text, s, viewer, bound)
-    if answer['op']:
-        return answer
-    raw = text.strip()
-    q = raw.casefold()
-    person = None
-    match = re.fullmatch(r'(.+?) (?:for|für) (\w+)', raw, re.I)
-    if match and match[2].casefold() != 'you':
-        raw, person = match.groups()
-        q = raw.casefold()
-        person = None if person.casefold() == 'me' else 'together' if person.casefold() in ('us', 'together', 'uns', 'zusammen') else member_name(s, person) if s else person.casefold()
+# Small phrase tables for local rules; the model covers everything else.
+LOOKUP = re.compile(r'(?:find|search for|look for|suche|such|finde|pronađi|nađi|tražim|traži|пронађи|нађи|тражим)\s+(?:me\s+|mir\s+)?'
+                    r'(?:the\s+|a\s+|den\s+|die\s+|das\s+|einen\s+)?(?:film|movie|series|serie|show|serija|serije|филм|серију)\b.*', re.I)
+HIDES = {'anime': 'anime', 'аниме': 'anime', 'documentaries': 'documentaries', 'dokus': 'documentaries', 'animation': 'animation',
+         'movies': 'movies', 'series': 'series'}
+GENRES = {'horror': 'Horror', 'horor': 'Horror', 'хорор': 'Horror', 'comedies': 'Comedy', 'komödien': 'Comedy', 'komedija': 'Comedy',
+          'комедија': 'Comedy', 'documentaries': 'Documentary', 'dokus': 'Documentary', 'reality-tv': 'Reality',
+          'thriller': 'Thriller', 'thrillers': 'Thriller', 'triler': 'Thriller', 'trilera': 'Thriller'}
+TYPES = {'movies': 'movie', 'filme': 'movie', 'filmova': 'movie', 'филмова': 'movie',
+         'series': 'series', 'serien': 'series', 'serija': 'series', 'серија': 'series'}
+LANGS = {'german': 'de', 'deutsch': 'de', 'nemačkom': 'de', 'nemački': 'de', 'english': 'en', 'englisch': 'en', 'engleskom': 'en',
+         'french': 'fr', 'französisch': 'fr', 'francuskom': 'fr', 'serbian': 'sr', 'serbisch': 'sr', 'srpskom': 'sr'}
+MONTHS = [m.split() for m in (
+    'january januar januara јануар јануара', 'february februar februara фебруар фебруара', 'march märz mart marta март марта',
+    'april aprila април априла', 'may mai maj maja мај маја', 'june juni jun juna јун јуна', 'july juli jul jula јул јула',
+    'august avgust avgusta август августа', 'september septembar septembra септембар септембра',
+    'october oktober oktobar oktobra октобар октобра', 'november novembar novembra новембар новембра',
+    'december dezember decembar decembra децембар децембра')]
+MONTH = {name: i for i, names in enumerate(MONTHS, 1) for name in names}
+WHO = {'me': None, 'mich': None, 'mene': None, 'мене': None, 'us': 'together', 'uns': 'together', 'nas': 'together',
+       'нас': 'together', 'together': 'together', 'zusammen': 'together', 'everyone': 'together'}
+ASKS = (('scope', r'.*\b(?:for|für|za)\b.*\b(?:or maybe|oder vielleicht|ili možda)\s+(?:for|für|za)\b.*'),
+        ('change', r'(?:maybe |vielleicht |možda )?(?:hide|show|remove|sakrij|blende)\s+(?:some of |a few of |einige von )?(?:those|these|them|that|it|die|das|to)\??'),
+        ('person', r'.*\b(?:für (?:sie|ihn)|for (?:her|him)|za nju|za njega)\b.*'),
+        ('title', r'.*\b(?:maybe|vielleicht|možda|можда)\b.*\b(?:watched|seen|gesehen|gledal[ao]|гледал[ао])\b.*'),
+        ('date', r'.*\b(?:until|bis|do|до)\s+(?:sometime|someday|irgendwann|nekad|некад)\b.*'),
+        ('schedule', r".*\b(?:not sure|don't know|weiß nicht|ne znam|не знам)\b.*\b(?:days|tage|dane|дане)\b.*"))
+
+def who_word(s, word):
+    """A person word maps to a member, together or me; False when it is not one."""
+    key = word.casefold()
+    if key in WHO:
+        return WHO[key]
+    hit = member_name(s, word) if s is not None else None
+    return hit if s is not None and hit in s.PEOPLE else False
+
+def split_person(raw, s):
+    match = re.fullmatch(r'(?:for|für|za|за)\s+(\w+)[,:]?\s+(.+)', raw, re.I)
+    if match and who_word(s, match[1]) is not False:
+        return match[2], who_word(s, match[1])
+    match = re.fullmatch(r'(.+?),?\s+(?:for|für|za|за)\s+(\w+)[.!]?', raw, re.I)
+    if match and who_word(s, match[2]) is not False:
+        return match[1], who_word(s, match[2])
+    return raw, None
+
+def parse_one(raw, s, steps=False):
+    """One change without a person: the old local rules, plus short phrases inside a plan."""
+    q = raw.casefold().rstrip('.!')
     op, kind, values = None, None, []
+    hides = {**HIDES, **{h: h for h in getattr(s, 'HIDE_CHOICES', ())}}
     if match := re.fullmatch(r'rename (.+?) to (.+)', raw, re.I):
         op, values = 'row_rename', [row_id(match[1]), match[2]]
     elif match := re.fullmatch(r'call (.+?) row (.+)', raw, re.I):
@@ -64,12 +142,12 @@ def parse_local(text, s=None, viewer=None, bound=None):
         key = row_id(match[1])
         if key and match[1] != 'anime':
             op, values = 'row_show', [key]
+    elif (match := re.fullmatch(r'add (?:the )?(.+?) (?:row|reihe)', q)) and row_id(match[1]) not in (None, 'anime'):
+        op, values = 'row_show', [row_id(match[1])]
     elif match := re.fullmatch(r'(?:put|move) (.+?) (?:above|before) (.+)', q):
         op, values = 'row_move', [row_id(match[1]), row_id(match[2])]
     if op:
-        if any(v is None for v in values):
-            return dict(NONE)
-        return dict(op=op, kind=None, values=values, person=person)
+        return dict(NONE) if any(v is None for v in values) else dict(op=op, kind=None, values=values, person=None)
     if q in ('undo', 'rückgängig'):
         op = 'undo'
     elif match := re.fullmatch(r'(undo|rückgängig|bring back|redo|do again|wiederholen|nochmal) (.+)', q):
@@ -96,13 +174,247 @@ def parse_local(text, s=None, viewer=None, bound=None):
         op, kind = 'less', 'series'
     elif match := re.fullmatch(r'I already watched (.+)', raw, re.I):
         op, values = 'seen', [match[1]]
-    return dict(op=op, kind=kind, values=values, person=person) if op else dict(NONE)
+    if op or not steps:
+        pass
+    elif match := re.fullmatch(r'(hide|sakrij|сакриј|show|zeige) (\S+)|(\S+) (wieder anzeigen|ausblenden)', q):
+        verb, name = (match[1], match[2]) if match[1] else (match[4], match[3])
+        if name in hides:
+            op, values = 'show' if verb in ('show', 'zeige', 'wieder anzeigen') else 'hide', [hides[name]]
+    elif match := re.fullmatch(r'(?:cap|limit) (movies|series|filme|serien) (?:at|to|auf) (\d+) (?:minutes|minuten|min)', q):
+        op, kind, values = 'runtime', TYPES[match[1]], [int(match[2])]
+    elif match := re.fullmatch(r'(?:keinen?|kein|bez) (\S+)', q):
+        if match[1] in GENRES:
+            op, values = 'exclude_genre', [GENRES[match[1]]]
+    elif match := re.fullmatch(r'(?:only|nur) (?:movies|filme) (?:from|since|after|ab|seit) (\d{4})(?: on)?', q):
+        op, values = 'years', [int(match[1]), None]
+    elif match := re.fullmatch(r'(less|fewer|more|weniger|mehr|manje|više|мање|више) (\S+)', q):
+        word = 'less' if match[1] in ('less', 'fewer', 'weniger', 'manje', 'мање') else 'more'
+        if match[2] in GENRES:
+            op, kind, values = word, 'genre', [GENRES[match[2]]]
+        elif match[2] in TYPES:
+            op, kind = word, TYPES[match[2]]
+    elif match := re.fullmatch(r'(?:den )?fokus auf (\w+) entfernen|(?:remove the focus on|stop focusing on) (\w+)', q):
+        if (match[1] or match[2]) in LANGS:
+            op, kind, values = 'unfocus', 'languages', [LANGS[match[1] or match[2]]]
+    elif re.search(r'(?:mix|mischung|mešavin|мешавин)', q) and re.search(r'(?:popular|populär|popularn|популарн)', q):
+        op, values = 'discovery', ['balanced']
+    return dict(op=op, kind=kind, values=values, person=None) if op else dict(NONE)
+
+def parse_plan(raw, s):
+    """Split on and/und/i/и only when every part is a change on its own."""
+    def change(text):
+        answer = parse_one(text, s, steps=True)
+        return answer if REGISTRY.get(answer['op'], {}).get('group') in ('prefs', 'rows') else None
+    for match in re.finditer(r',?\s+(?:and|und|i|и)\s+', raw, re.I):
+        first = change(raw[:match.start()])
+        rest = raw[match.end():]
+        tail = parse_plan(rest, s) or ([change(rest)] if change(rest) else None) if first else None
+        if tail:
+            return [first, *tail]
+    return None
+
+def parse_ask(q):
+    slot = next((slot for slot, pattern in ASKS if re.fullmatch(pattern, q)), None)
+    return dict(op='ask', slot=slot, question=SLOTS[slot]) if slot else None
+
+def parse_search(raw):
+    # A title after film/movie starts with a capital, so "film noir tonight" stays a mood search for the model.
+    if match := re.fullmatch(r'(?:(?i:the|der|den|das|a)\s+)?(?i:film|movie|филм)\s+["„“]?([A-ZÀ-ÖØ-ÞА-ЯЂЈЉЊЋЏČĆŠŽĐ0-9][^"„“”]*?)["“”]?[.!?]?', raw):
+        return dict(op='search', kind='title', values=[match[1]])
+    if match := re.fullmatch(r'(?:something|anything|movies?|films?|shows?|series|mehr|etwas|nešto|нешто|filmove)\s+(?:like|wie|kao|као|poput)\s+(?!(?:that|this|it|das|dies|to|ovo|то|ово)\W*$)(.+?)(?:,?\s+(?:bitte|please|molim))?[.!?]?', raw, re.I):
+        return dict(op='search', kind='similar', values=[match[1]])
+    if match := re.fullmatch(r'(?:movies|films|shows|series|filme|serien|filmovi)\s+(?:by|from|von|od)\s+(.+?)(?:\s+(?:for tonight|tonight|für heute|heute|za večeras|večeras))?', raw, re.I):
+        return dict(op='search', kind='people', values=[match[1]])
+    if match := re.fullmatch(r'(?:(?:heute|tonight|večeras|вечерас)\s+)?(?:etwas|was|something|nešto|нешто)\s+(\w+)(\s+(?:for tonight|tonight|heute|za večeras|за вечерас))?(?:,?\s+(?:bitte|please|molim|молим))?[.!?]?', raw, re.I):
+        if match[2] or re.match(r'heute|tonight|večeras|вечерас', raw, re.I):
+            return dict(op='search', kind='mood', values=[match[1]])
+    return None
+
+# Title fixes: one title, one person. Each pattern names the title group; dates are ISO or DD.MM.YYYY.
+DATE = r'(\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}\.\d{4})'
+TONIGHT = r'(?:not tonight|nicht heute abend|heute abend nicht|heute nicht|ne večeras|ne veceras|не вечерас)'
+DEFERS = (TONIGHT + r'\s*(?:for|für|za|за|:|,|-)?\s*(.+)', r'(.+?),?\s+' + TONIGHT,
+          r'(?:hide|skip|snooze)\s+(.+?)\s+(?:until|till|through)\s+' + DATE,
+          r"(?:don't|do not)\s+show\s+(?:me\s+)?(.+?)\s+(?:before|until)\s+" + DATE,
+          r'(?:blende|verstecke)\s+(.+?)\s+bis\s+(?:zum\s+)?' + DATE + r'(?:\s+aus)?',
+          r'(.+?)\s+(?:bitte\s+)?(?:erst\s+)?nicht\s+vor\s+(?:dem\s+)?' + DATE + r'(?:\s+(?:zeigen|anzeigen))?',
+          r'(?:ne prikazuj|не приказуј|sakrij|сакриј)\s+(.+?)\s+(?:pre|пре|do|до)\s+' + DATE)
+REJECT = (r"(.+?)\s+(?:is not for me|isn't for me|is not my thing|ist nichts für mich|ist nicht für mich|nije za mene|није за мене)"
+          r'(?:(?:\s*[,:;-]\s*|\s+(?:because|weil|jer|јер)\s+)(.+))?')
+SEEN = (r'(.+?)\s+(?:is already seen|was already seen|habe ich (?:schon|bereits) gesehen|hab ich (?:schon|bereits) gesehen|'
+        r'kenne ich schon|sam već gledala|sam već gledao|сам већ гледала|сам већ гледао)',
+        r"(?:i(?:'ve| have)? already (?:watched|seen|saw)|već sam (?:gledala|gledao)|vec sam (?:gledala|gledao)|већ сам (?:гледала|гледао))\s+(.+)",
+        r'(?:ich habe|hab)\s+(.+?)\s+(?:schon|bereits)\s+gesehen')
+IGNORES = (r"(?:don't|do not|please don't)\s+learn\s+(?:anything\s+)?from\s+(?:my|me)\s+(?:watching|viewing|playing|plays?|watch)\s+(?:of\s+)?(.+)",
+           r"(?:don't|do not)\s+let\s+(.+?)\s+(?:shape|change|affect)\s+my\s+taste",
+           r'(?:lerne?|lernt)\s+(?:bitte\s+)?nichts\s+(?:aus|von)\s+(?:meinem|meinen)\s+\w+\s+(?:von\s+)?(.+)',
+           r'(?:ne uči|nemoj (?:da )?učiš|не учи)\s+(?:ništa\s+|ништа\s+)?(?:iz|od|из|од)\s+(?:mog|mojeg|мог)\s+\w+\s+(.+)')
+MOVES = (r'(\w+)\s+(?:watched|saw)\s+(.+?),?\s+not\s+(?:me|i)', r'(.+?)\s+(?:je gledao|je gledala|је гледао|је гледала)\s+(.+?),?\s+(?:ne ja|не ја)',
+         r'(\w+)\s+hat\s+(.+?)\s+(?:geschaut|gesehen|angeschaut),?\s+nicht ich', r'(.+?)\s+hat\s+(\w+)\s+(?:geschaut|gesehen|angeschaut),?\s+nicht ich')
+EXPLAINS = (r'why (?:is|was) (.+?) (?:here|there|in (?:my|our|the) \w+|recommended|suggested|showing|shown)\b.*',
+            r'why (?:do|did) you (?:recommend|suggest|show) (?:me )?(.+?)(?: to me| for me)?',
+            r'warum (?:wird|wurde) mir (.+?) (?:empfohlen|vorgeschlagen|gezeigt)', r'warum (?:ist|steht) (.+?) (?:hier|da|in meinen \w+)\b.*',
+            r'warum empfiehlst du (?:mir )?(.+)', r'zašto je (.+?) (?:ovde|ovdje|tu|u mojim \w+|preporučen\w*)\b.*',
+            r'zašto mi (?:preporučuješ|predlažeš) (.+)', r'зашто је (.+?) (?:овде|ту)\b.*')
+NOT_TITLES = {'it', 'this', 'that', 'this one', 'that one', 'them', 'es', 'das', 'den', 'ihn', 'to', 'ovo', 'taj', 'то', 'ово', 'me', 'mich', 'ja', 'i'}
+
+def fix_title(text, s):
+    """A title, never a pronoun, a member name, a genre or a whole type."""
+    title = text.strip().strip('"\'„“”«»').strip()
+    key = title.casefold()
+    if not title or len(title) > 100 or key in NOT_TITLES or key in GENRES or key in TYPES or key in HIDES:
+        return None
+    if s is not None and who_word(s, title) is not False:
+        return None
+    return title
+
+def parse_fix(raw, s):
+    head = raw.split(';')[0].strip().rstrip('.!?').strip()
+    rest, person = split_person(head, s) if s is not None else (head, None)
+    if person not in getattr(s, 'PEOPLE', ()):
+        return parse_title_fix(head, s)
+    found = parse_title_fix(rest, s)
+    return {**found, 'person': person} if found and person is not None and found['op'] != 'reattribute' else found
+
+def parse_title_fix(head, s):
+    for pattern in DEFERS:
+        if match := re.fullmatch(pattern, head, re.I):
+            title, when = match[1], match[2] if match.lastindex == 2 else 'tonight'
+            if (day := re.fullmatch(r'(\d{1,2})\.(\d{1,2})\.(\d{4})', when)):
+                when = f'{day[3]}-{int(day[2]):02d}-{int(day[1]):02d}'
+            title = fix_title(title, s)
+            return dict(op='defer', values=[title], until=when) if title else None
+    if match := re.fullmatch(REJECT, head, re.I):
+        title = fix_title(match[1], s)
+        return dict(op='reject', values=[title], reason=(match[2] or '').strip()[:200] or None) if title else None
+    for op, patterns in (('seen', SEEN), ('ignore_learning', IGNORES), ('explain', EXPLAINS)):
+        for pattern in patterns:
+            if match := re.fullmatch(pattern, head, re.I):
+                title = fix_title(match[1], s)
+                return dict(op=op, values=[title]) if title else None
+    for pattern in MOVES:
+        if match := re.fullmatch(pattern, head, re.I):
+            first, second = match[1], match[2]
+            for who, title in ((first, second), (second, first)):
+                person = who_word(s, who) if s is not None else False
+                if person and person != 'together' and fix_title(title, s):
+                    return dict(op='reattribute', values=[fix_title(title, s)], person=person)
+            return None
+    return None
+
+def parse_wish(raw, s):
+    patterns = (r'i wish (?:there (?:were|was) |i had |we had )?(.+)', r'it would be nice if (\w+) had (.+)', r'it would be nice to have (.+)',
+                r'ich wünschte,? es gäbe (.+)', r'ich wünsche mir (.+)', r'schön wäre (.+)', r'(?:volela|voleo|волела|волео) (?:bih|бих) (.+)')
+    for pattern in patterns:
+        match = re.fullmatch(pattern, raw.rstrip('.!'), re.I)
+        if match:
+            break
+    else:
+        return None
+    text, person = split_person(match[match.lastindex], s)
+    if match.lastindex == 2:
+        person = who_word(s, match[1]) or None
+    text = re.sub(r'\s+(?:in|on) (?:my|our) rows$|\s+in meinen reihen$', '', text, flags=re.I)
+    text = re.sub(r'^(?:more|mehr|više|више|some|eine größere auswahl(?: an)?|a bigger choice of)\s+', '', text, flags=re.I)
+    return dict(op='wish', values=[text], person=person)
+
+def parse_member(raw, s):
+    q = raw.casefold().rstrip('.!')
+    create = (r'add (?:a )?(?:new )?(?:household )?member(?: named| called)? (\w+)(?:,? (?:age|aged) (\d+)|,? (\d+) years old)?',
+              r'neues mitglied (\w+)(?:,? (\d+) jahre alt)?(?:,? bitte anlegen|,? anlegen)?',
+              r'dodaj (?:novog )?člana (\w+)(?:,? ima (\d+) godin[ae])?')
+    for pattern in create:
+        if match := re.fullmatch(pattern, q):
+            age = next((int(v) for v in match.groups()[1:] if v), None)
+            return dict(op='member_create', person=match[1], age=age)
+    if match := re.fullmatch(r'update (\w+) to age (\d+)|(\w+) is now (\d+)(?: years old)?|(\w+) sada ima (\d+) godin\w*(?:,.*)?', q):
+        name, age = [v for v in match.groups() if v]
+        return dict(op='member_update', person=member_name(s, name).casefold() if s else name, age=int(age))
+    if match := re.fullmatch(r"ändere (\w+) anzeigenamen (?:zu|in|auf) (\S+)|change (\w+)'s (?:display )?name to (\S+)", raw.rstrip('.!'), re.I):
+        name, label = [v for v in match.groups() if v]
+        return dict(op='member_update', person=member_name(s, name).casefold() if s else name.casefold(), label=label)
+    return None
+
+def parse_correct(raw, s):
+    if match := re.fullmatch(r'(?:(?:no|nein|ne),?\s+)?(?:i meant|i ment|ich meinte|mislio sam|mislila sam)(?:\s+(?:na|for|für|za))?\s+(?!to\s)(.+?)[.!]?', raw, re.I):
+        who = who_word(s, match[1]) if s is not None else match[1].casefold()
+        return dict(op='correct', person=who) if who else dict(op='correct', values=[match[1]])
+    if match := re.fullmatch(r'(?:not|nicht|ne)\s+([^,;]+?)(?:,\s*(?:but\s+|sondern\s+|nego\s+|već\s+)?|\s+(?:but|sondern|nego|već)\s+)([^,;]+?)[.!]?', raw, re.I):
+        return dict(op='correct', values=[match[1], match[2]])
+    return None
+
+def shelf_filters(text):
+    q = text.casefold()
+    filters = {}
+    if re.search(r'\b(?:movies?|films?|filme|filmovi|filmove|филмови)\b', q):
+        filters['kind'] = 'movie'
+    elif re.search(r'\b(?:series|serien\w*|serij\w*|episodes|серије)\b', q):
+        filters['kind'] = 'series'
+    if match := re.search(r'\b(?:under|unter|bis|up to|do|ispod)\s+(\d+)\s*(?:minutes|minuten|min|minuta)\b', q):
+        filters['runtime'] = int(match[1])
+    if match := re.search(r'\b(?:from|von|od)\s+(\d{4})\s+(?:to|bis|do)\s+(\d{4})\b', q):
+        filters['years'] = [int(match[1]), int(match[2])]
+    if match := re.search(r'\b(?:in|auf|na)\s+(\w+)$', q):
+        if match[1] in LANGS:
+            filters['languages'] = [LANGS[match[1]]]
+    if match := re.search(r'\b(?:exclude|without|no|ohne|keine?n?|isključi|bez)\s+(\S+)', q):
+        if re.fullmatch(r'movies?|films?|filme|filmov[ia]|series|serien|serij\w*', match[1]):  # A whole type keeps the other.
+            filters['kind'] = 'movie' if re.match(r'ser', match[1]) else 'series'
+        elif match[1] in HIDES:
+            filters['hide'] = [HIDES[match[1]]]
+        elif match[1] in GENRES:
+            filters['exclude_genres'] = [GENRES[match[1]]]
+    return filters
+
+def parse_shelf_rule(raw, s):
+    text, person = split_person(raw.rstrip('.!'), s)
+    patterns = (r'limit (?:my |the |our )?(.+?) shelf to (.+)', r'(?:in|on) (?:my |the |our )?(.+?) shelf,? (.+)',
+                r'(exclude .+?) from (?:my |the |our )?(.+?) shelf', r'im regal (\S+),? (.+)', r'(?:na|u) polici (\S+),? (.+)',
+                r'(?:на|у) полици (\S+),? (.+)')
+    for i, pattern in enumerate(patterns):
+        if match := re.fullmatch(pattern, text, re.I):
+            name, rest = (match[2], match[1]) if i == 2 else (match[1], match[2])
+            filters = shelf_filters(rest)
+            if filters:
+                return dict(op='shelf_filter', values=[name], person=person, filters=filters)
+    names = '|'.join(sorted(MONTH, key=len, reverse=True))
+    months = r'((?:' + names + r')(?:(?:\s*,\s*|\s+(?:and|und|i|и)\s+)(?:' + names + r'))*)'
+    patterns = (r'(.+?) every ' + months, r'every ' + months + r' (.+)', r'(?:jeden|jedes jahr im|im) ' + months + r' (.+)',
+                r'(.+?) jeden ' + months, r'(.+?) (?:svakog|сваког) ' + months, r'(?:svakog|сваког) ' + months + r' (.+)')
+    for pattern in patterns:
+        if match := re.fullmatch(pattern, text, re.I):
+            theme, when = (match[2], match[1]) if match[1].casefold().split()[0] in MONTH else (match[1], match[2])
+            found = [MONTH[m] for m in re.split(r'\s*,\s*|\s+(?:and|und|i|и)\s+', when.casefold())]
+            return dict(op='shelf_schedule', values=[theme], person=person, months=sorted(set(found)))
+    return None
+
+def parse_local(text, s=None, viewer=None, bound=None):
+    raw = text.strip()
+    if LOOKUP.fullmatch(raw):
+        return dict(NONE)
+    found = parse_ask(raw.casefold()) or parse_search(raw) or parse_fix(raw, s) or parse_wish(raw, s) or parse_member(raw, s) or parse_correct(raw, s) or parse_shelf_rule(raw, s)
+    if found:
+        return {**NONE, **found}
+    answer = parse_shelf(text, s, viewer, bound)
+    if answer['op']:
+        return answer
+    person = None
+    match = re.fullmatch(r'(.+?) (?:for|für) (\w+)', raw, re.I)
+    if match and match[2].casefold() != 'you':
+        raw, person = match.groups()
+        person = None if person.casefold() == 'me' else 'together' if person.casefold() in ('us', 'together', 'uns', 'zusammen') else member_name(s, person) if s else person.casefold()
+    head, who = split_person(raw, s) if s is not None and person is None else (raw, person)
+    steps = parse_plan(head, s)
+    if steps:
+        return dict(op='plan', kind=None, values=[], person=None, steps=[{**x, 'person': who} for x in steps])
+    answer = parse_one(raw, s)
+    return {**answer, 'person': person} if answer['op'] else dict(NONE)
 
 def row_id(name):
     from .members import ROW_KEYS
     name = re.sub(r'^(?:the )| (?:row|reihe)$', '', name.strip().casefold()).strip()
     aliases = {'top 10': 'top10', 'top rated': 'toprated', 'top rated movies': 'toprated',
-               'latest digital releases': 'digital', 'for you': 'foryou',
+               'latest digital releases': 'digital', 'for you': 'foryou', 'new to you': 'newtoyou',
                'continue watching': 'episodes', 'continue watching & new episodes': 'episodes'}
     return aliases.get(name, name if name in ROW_KEYS else None)
 
@@ -115,7 +427,7 @@ def edit_rows(cfg, change, s):
     count = 2 if op in ('row_rename', 'row_move') else 1
     if kind is not None or len(values) != count or values[0] not in ROW_KEYS:
         raise ValueError('row id or values')
-    rows = list(cfg['household'].get('rows', [key for key in ROW_KEYS if key not in ('digital', 'toprated')]))
+    rows = list(cfg['household'].get('rows', [key for key in ROW_KEYS if key not in ('digital', 'toprated', 'newtoyou')]))
     if op == 'row_rename':
         label = values[1]
         if not isinstance(label, str) or not label.strip() or len(label) > 100 or any(ord(c) < 32 for c in label):
@@ -141,7 +453,10 @@ def edit_rows(cfg, change, s):
         return
     cfg['household']['rows'] = rows
 def member_name(s, name):
-    return next((p for p in s.PEOPLE if name.casefold() in (p.casefold(), s.LABELS[p].casefold())), name)
+    """Also accept Serbian accusative (Anu, Bena) and German genitive (Anas)."""
+    key = name.casefold()
+    keys = [key] + ([key[:-1], key[:-1]+'a'] if key[-1:] == 'u' else [key[:-1]] if key[-1:] in ('a', 's') else []) * (len(key) >= 3)
+    return next((p for k in keys for p in s.PEOPLE if k in (p.casefold(), s.LABELS[p].casefold())), name)
 
 def shelf_hits(s, name, scope):
     from . import shelves
@@ -280,7 +595,7 @@ def shelf_preview(s, change, viewer, bound):
     return dict(people=[scope], shelf=shelf, plan=shelf['plan'], name=title+' for '+label+'; '+timing)
 
 def command_prompt(s):
-    return ('Return JSON with every key always present: op, kind, values, person; null when unknown. Exactly one persistent personal change or op null. '
+    return ('Return JSON with every key always present: op, kind, values, person; null when unknown. Exactly one persistent personal change, one extra op below or op null. '
               'Do not guess person, kind, days or hours unless clearly stated. Title names, questions and ordinary one-off searches return op null, except explicit settings/list requests. '
               'Never choose hide/show for a genre: hide horror movies means exclude_genre Horror kind movie. '
               'Genre exclusion or inclusion without a type uses kind null and applies to movies and series. '
@@ -297,15 +612,16 @@ def command_prompt(s):
               'reset kind null values [filters], [shelves] or [everything]; reset everything to default and alles auf Standard zurücksetzen are reset [everything]. '
               'reset my taste is unsupported, op null. Never reset learned taste, ratings or viewing history. '
               'Row commands affect the household: row_rename values [row id,new label], row_hide/row_show [row id], row_move [row id,before row id]. '
-              'Row ids: episodes,foryou,week,upcoming,catchup,rewatch,because,leap,top10,people,moods,lanes,docs,studios,anime,shelves,digital,toprated. '
-              'Top 10 maps to top10, top rated to toprated, Latest Digital Releases to digital, For You to foryou. '
+              'Row ids: episodes,foryou,week,upcoming,catchup,rewatch,because,leap,top10,people,moods,lanes,docs,studios,anime,shelves,digital,toprated,newtoyou. '
+              'Top 10 maps to top10, top rated to toprated, Latest Digital Releases to digital, For You to foryou, New to You to newtoyou. '
               'shelf_add kind null, values [theme, always] or [theme, days, hours] (comma-separated mon,tue,wed,thu,fri,sat,sun or weekdays/weekend/daily; clock hour window 05-12 or 18-24). '
               'Creating, adding or making a catalog, row, shelf or list about/for/with/of a theme is shelf_add [theme,always]. '
               'German examples: neue Reihe mit, erstelle einen Katalog über. Preserve theme text and typos. Best catalog of crime movies is a one-off search, op null. '
               'German days include montags, freitags, wochentags, am Wochenende; morgens means 05-12, abends means 18-24. '
               'shelf_stop kind null, values [shelf name]; shelf_count kind null, values [count 0..10] or [fewer]. '
               'Shelf person: member name, together for us, or null for me. Title names are not commands. '
-              'Unsupported settings return op null. Do not invent an operation.')
+              'Extra ops add only their own keys: ' + ' '.join(v['hint'] for v in REGISTRY.values() if v['hint']) + ' '
+              'When in doubt whether text is a command at all (a title, chat, a one-off search), return op null. Unsupported settings return op null. Do not invent an operation.')
 def register(s):
     prompt = command_prompt(s)
     model = getattr(s, 'COMMAND_MODEL', s.PICK_MODEL)
@@ -327,7 +643,7 @@ def register(s):
         body = request(batch[0]['query'], fallback_model, fallback_effort)
         body['max_tokens'] = 1200
         return body
-    s.decision('parse_command', ver=6, lane='search', cap=None, ttl=30*s.DAY,
+    s.decision('parse_command', ver=9, lane='search', cap=None, ttl=30*s.DAY,
         inp={'query': str}, out=OUT, norm=s.route_norm, rule=rule, params={},
         llm={'path': '/api/v1/chat/completions', 'model': model, 'batch': 1, 'timeout': 6,
              'prompt': lambda b: request(b[0]['query'], model, effort),
@@ -432,7 +748,7 @@ def resolve(s, change):
         raise ValueError('Skald cannot resolve this title yet')
     item = next(x for x in choices if x['key'] == pick['key'] and x['kind'] == pick['kind'])
     return {**pick, 'title': item['title'], 'year': str(item['year'] or '')}
-def preview(s, text, viewer=None, bound=None, answer=None):
+def preview(s, text, viewer=None, bound=None, answer=None, scope=None, prior=None, base=None):
     local = parse_local(text, s, viewer, bound)
     if text.strip().casefold().startswith('stop ') and not local['op']:
         return None
@@ -440,6 +756,9 @@ def preview(s, text, viewer=None, bound=None, answer=None):
     change = {**dict.fromkeys(OUT), **change}
     s.check(OUT, change)
     change['values'] = change['values'] or []
+    extra = EXTRA.get(REGISTRY.get(change['op'], {}).get('group'))
+    if extra:
+        return extra(s, text, change, viewer, bound, scope, prior)
     if change['op'] == 'reset':
         return reset_preview(s, text, change, viewer, bound)
     if change['op'] == 'redo' or change['op'] == 'undo' and change['values']:
@@ -466,7 +785,7 @@ def preview(s, text, viewer=None, bound=None, answer=None):
     if change['op'] is None:
         return None
     targets = [shelf_scope(s, change['person'], viewer, bound)] if change['op'] in ('undo', 'kids_age') else people(s, change['person'], viewer, bound)
-    cfg = config(s)
+    cfg = copy.deepcopy(base) if base is not None else config(s)
     before = {p: copy.deepcopy(cfg['taste']['people'].get(p, {}).get('prefs')) for p in targets}
     item = None
     if change['op'] in ('like', 'dislike', 'seen'):
@@ -482,7 +801,7 @@ def preview(s, text, viewer=None, bound=None, answer=None):
         if not change['values'] and change['op'] not in ('less', 'more'):
             raise ValueError('values')
         probe = copy.deepcopy(change)
-        probe['op'] = {'show': 'hide', 'include_genre': 'exclude_genre', 'unfocus': 'focus'}.get(change['op'], change['op'])
+        probe['op'] = REGISTRY[change['op']]['inverse'] if REGISTRY[change['op']]['removes'] else change['op']
         for p in targets:
             trial = copy.deepcopy(cfg)
             edit(trial, p, probe)
@@ -503,7 +822,7 @@ def preview(s, text, viewer=None, bound=None, answer=None):
         display = kind
     if op == 'runtime':
         display = kind+' up to '+display+' minutes'
-    verb = {'exclude_genre': 'No more', 'include_genre': 'More', 'focus': 'More', 'unfocus': 'Less', 'discovery': 'Discovery:'}.get(op, op.capitalize())
+    verb = REGISTRY[op]['verb'] or op.capitalize()
     name = verb+' '+display+' for '+', '.join(s.LABELS[p] for p in targets)
     if op.startswith('row_'):
         if op == 'row_rename':
@@ -524,6 +843,338 @@ def preview(s, text, viewer=None, bound=None, answer=None):
         plan['undo_before'] = undo_stamp(journal(s), targets)
     plan['plan'] = hashlib.sha256(json.dumps(plan, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
     return plan
+def plan_preview(s, text, change, viewer, bound, scope, prior):
+    steps = change['steps'] or []
+    if len(steps) < 2 or any(REGISTRY.get(x['op'], {}).get('group') not in ('prefs', 'rows') for x in steps):
+        raise ValueError('A plan needs two or more setting changes')
+    cfg, running, parts = config(s), config(s), []
+    for x in steps:
+        parts.append(preview(s, text, viewer, bound, answer={**x, 'person': x['person'] or change['person']}, base=running))
+        for p in ([None] if x['op'].startswith('row_') else parts[-1]['people']):
+            edit_rows(running, parts[-1]['change'], s) if p is None else edit(running, p, parts[-1]['change'])
+    targets = list(dict.fromkeys(p for part in parts for p in part['people']))
+    plan = dict(people=targets, change=change, steps=[[part['change'], part['people']] for part in parts],
+                before={p: copy.deepcopy(cfg['taste']['people'].get(p, {}).get('prefs')) for p in targets},
+                item=None, name='; '.join(part['name'] for part in parts), text=text[:200], source='search')
+    if any('rows_before' in part for part in parts):
+        plan['rows_before'] = row_settings(cfg)
+    return seal(plan)
+
+def fix(old, change):
+    """Swap the person or one value in the last change; plans fix every step that matches."""
+    new = copy.deepcopy(old)
+    hit = False
+    for step in (new['steps'] if new['op'] == 'plan' else [new]):
+        if change['person']:
+            step['person'], hit = change['person'], True
+            if change['person'] == 'together' and not step['op'].startswith('row_'):
+                step['person'] = 'everyone'
+        values = [str(v) for v in change['values']]
+        right = values[-1] if values else None
+        if right and (step['op'] in ('exclude_genre', 'include_genre') or step['kind'] == 'genre'):
+            values = [GENRES.get(v.casefold(), v) for v in values]
+            right = values[-1].title()
+        if len(values) == 2 and any(str(v).casefold() == values[0].casefold() for v in step['values']):
+            step['values'] = [right if str(v).casefold() == values[0].casefold() else v for v in step['values']]
+            hit = True
+        elif len(values) == 1 and len(step['values']) == 1 and isinstance(step['values'][0], str):
+            step['values'], hit = [right], True
+    if not hit:
+        raise ValueError('Nothing to correct; say the full change')
+    if new['op'] == 'plan' and change['person']:
+        new['person'] = change['person']
+    return new
+
+def correct_preview(s, text, change, viewer, bound, scope, prior):
+    old = (prior or {}).get('change') if REGISTRY.get(((prior or {}).get('change') or {}).get('op'), {}).get('group') in ('prefs', 'rows', 'plan') else None
+    targets, entry = getattr(s, '_commands_last', {}).get(scope) or [], None
+    if old is None and targets:
+        active = [e for e in journal(s).get(targets[0], []) if not e.get('undone')]
+        entry = active[-1] if active else None
+        if entry and REGISTRY.get((entry.get('change') or {}).get('op'), {}).get('group') in ('prefs', 'rows', 'plan'):
+            old = entry['change']
+    if old is None:
+        raise ValueError('Nothing to correct; say the full change')
+    plan = preview(s, text, viewer, bound, answer=fix(old, change))
+    if prior is not None and old is prior.get('change'):
+        plan.update({k: prior[k] for k in ('undo_first',) if k in prior})
+        plan['name'] = ('Fix: ' if 'undo_first' in plan else '')+plan['name']
+    else:
+        plan.update(undo_first=dict(people=targets, stamp=undo_stamp(journal(s), targets), viewer=viewer, bound=bound),
+                    name='Fix: '+plan['name'])
+    return seal(plan)
+
+def ask_preview(s, text, change, *_):
+    question = change['question'] if (change['question'] or '').strip().endswith('?') else SLOTS.get(change['slot'], SLOTS['change'])
+    return dict(read_only=True, people=[], name=question, description='Say the change again with that detail.')
+
+def search_preview(s, text, change, *_):
+    return dict(read_only=True, search=True, people=[], name='Search: '+', '.join(map(str, change['values'])), description='Nothing changes.')
+
+def wish_preview(s, text, change, viewer, bound, *_):
+    if len(change['values']) != 1 or not isinstance(change['values'][0], str) or not change['values'][0].strip():
+        raise ValueError('values')
+    who = shelf_scope(s, change['person'], viewer, bound)
+    return seal(dict(people=[who], wish=dict(who=who, text=change['values'][0].strip()[:200]),
+                     name='Note wish for '+scope_label(s, who)+': '+change['values'][0].strip()[:200], text=text[:200], source='search'))
+
+def member_state(cfg, name):
+    """Only this member's own values, so changes to other members never conflict."""
+    hh = cfg['household']
+    return dict(member=name in hh['members'], label=hh['labels'].get(name), row=name in hh.get('member_rows', []),
+                experience=copy.deepcopy(hh.get('experiences', {}).get(name)),
+                person=copy.deepcopy(cfg['taste'].get('people', {}).get(name)))
+
+def set_member(cfg, name, state):
+    hh = cfg['household']
+    if state['member'] != (name in hh['members']):
+        hh['members'] = [*hh['members'], name] if state['member'] else [p for p in hh['members'] if p != name]
+        hh['labels']['pair'] = 'you both' if len(hh['members']) == 2 else 'everyone'
+        if hh.get('trakt_member') == name and not state['member']:
+            hh['trakt_member'] = hh['members'][0]
+    for key, value in (('labels', state['label']), ('experiences', state['experience'])):
+        hh.setdefault(key, {}).pop(name, None)
+        if value is not None:
+            hh[key][name] = copy.deepcopy(value)
+    hh['member_rows'] = [p for p in hh.get('member_rows', []) if p != name] + ([name] if state['row'] else [])
+    cfg['taste']['people'].pop(name, None)
+    if state['person'] is not None:
+        cfg['taste']['people'][name] = copy.deepcopy(state['person'])
+    return cfg
+
+def member_preview(s, text, change, viewer, bound, *_):
+    from .setup import household
+    actor = people(s, viewer=viewer, bound=bound)[0]
+    cfg = config(s)
+    name, age, label = str(change['person'] or '').strip().casefold(), change['age'], change['label']
+    if not re.fullmatch(r'[a-z][a-z0-9_-]{0,31}', name) or age is None and label is None and change['op'] == 'member_update':
+        raise ValueError('Add a member name and an age or display name')
+    known = {p: p for p in cfg['household']['members']} | {v.casefold(): p for p, v in cfg['household']['labels'].items() if p != 'pair'}
+    if change['op'] == 'member_create':
+        if name in known:
+            raise ValueError(name.title()+' is already a member')
+        cfg = household(s.DATA, [*cfg['household']['members'], name], None, None, None, existing=True, prepare=True)
+    elif name not in known:
+        raise ValueError('Unknown member name')
+    name = known.get(name, name)
+    if label is not None:
+        cfg['household']['labels'][name] = label.strip()[:40]
+    if age is not None:
+        prefs = cfg['taste']['people'].setdefault(name, {}).setdefault('prefs', {})
+        if age < 18:
+            prefs['kids_age'] = age
+        else:
+            prefs.pop('kids_age', None)
+    cfg = s.validate_config(cfg, data=s.DATA)
+    detail = ', '.join(x for x in (label and 'display name '+label, age is not None and 'age '+str(age)) if x)
+    title = ('Add member ' if change['op'] == 'member_create' else 'Update member ')+s.LABELS.get(name, name.title())
+    return seal(dict(people=[actor], change=change, member=dict(name=name, before=member_state(config(s), name), after=member_state(cfg, name)),
+                     actor=actor, name=title+(': '+detail if detail else ''), text=text[:200], source='search'))
+
+def rule_preview(s, text, change, viewer, bound, *_):
+    from . import shelves
+    scope = shelf_scope(s, change['person'], viewer, bound)
+    if len(change['values']) != 1 or not isinstance(change['values'][0], str):
+        raise ValueError('invalid shelf command')
+    if change['op'] == 'shelf_schedule':
+        months = sorted(set(change['months'] or []))
+        if not months or not all(1 <= m <= 12 for m in months):
+            raise ValueError('invalid shelf months')
+        plan = shelf_preview(s, {**change, 'op': 'shelf_add', 'values': [change['values'][0], 'always']}, viewer, bound)
+        when = ', '.join(MONTHS[m-1][0].title() for m in months)
+        return {**plan, 'months': months, 'name': plan['name'].replace('; always on', '; '+when+' only'), 'text': text[:200], 'source': 'search'}
+    hits = shelf_hits(s, change['values'][0], scope)
+    if len(hits) != 1:
+        raise ValueError('unknown or ambiguous shelf name')
+    filters = {k: v for k, v in (change['filters'] or {}).items() if v not in (None, [])}
+    whole = [h for h in filters.get('hide') or [] if h in ('movies', 'series')]
+    if whole:  # Hiding a whole type keeps only the other type.
+        filters['kind'] = 'series' if whole == ['movies'] else 'movie' if whole == ['series'] else None
+        filters['hide'] = [h for h in filters['hide'] if h not in whole]
+        filters = {k: v for k, v in filters.items() if v not in (None, [])}
+    if not filters or filters.get('years') and len(filters['years']) != 2:
+        raise ValueError('invalid shelf filter')
+    wish, rules = hits[0], shelves.rules(s)
+    shelf_scope(s, wish['scope'], viewer, bound)
+    before = rules.get(wish['id'])
+    detail = '; '.join(k.replace('_', ' ')+' '+(' to '.join(str(x) for x in v) if isinstance(v, list) else str(v)) for k, v in filters.items())
+    return seal(dict(people=[wish['scope']], change=change, rule=dict(id=wish['id'], before=before, after={**(before or {}), 'filters': filters}),
+                     name='Limit shelf '+wish['name']+': '+detail, text=text[:200], source='search'))
+
+# Title fixes live in title_fixes.json: defer rows hide a title for one person until a time, ignore rows stop one
+# watch shaping one person's taste, move rows give one watch to another member. Feedback and history stay as they were.
+FIXES = 'title_fixes.json'
+CHIPS = {'too dark': r'dark|düster|finster|mra[čc]n|мрачн|bleak|grim', 'too slow': r'slow|langsam|zäh|spor|спор|boring|langweilig|dosad',
+         'too violent': r'violen|gewalt|brutal|nasil|насил|gory|blutig', 'too silly': r'silly|albern|blöd|dumb|glup|глуп|stupid|kindisch',
+         'not my genre': r'genre|žanr|жанр', 'seen enough of these': r'seen enough|enough of these|zu viele davon|dosta (?:mi je )?(?:takvih|toga)'}
+
+def read_fixes(s):
+    path = Path(s.DATA)/FIXES
+    if not path.exists():
+        return []
+    doc = json.loads(path.read_text())
+    if not isinstance(doc, dict) or not isinstance(doc.get('fixes'), list):
+        raise ValueError(FIXES+' is damaged; restore it from a backup')
+    return doc['fixes']
+
+def save_fixes(s, rows):
+    """Expired deferrals are dropped on every write; the file holds member names, so it is private."""
+    from .intake import write_private
+    now = s.time.time()
+    rows = [r for r in rows if r.get('op') != 'defer' or r.get('until', 0) > now]
+    write_private(Path(s.DATA)/FIXES, json.dumps({'fixes': rows}, ensure_ascii=False, indent=1)+'\n')
+
+def until_time(s, until, now=None, local=None):
+    """tonight ends at the next 05:00 local time; a date hides until that day starts, after today and within a year."""
+    import datetime as dt
+    now = s.time.time() if now is None else now
+    local = s.local_now(now) if local is None else local
+    if until == 'tonight':
+        end = local.replace(hour=5, minute=0, second=0, microsecond=0)
+        end += dt.timedelta(days=1) if local >= end else dt.timedelta()
+        return wall_time(s, end, now, local)
+    try:
+        day = dt.date.fromisoformat(until) if isinstance(until, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}', until) else None
+    except ValueError:
+        day = None
+    if day is None:
+        raise ValueError('Until when? Say tonight or a date like 2026-12-24')
+    if not local.date() < day <= local.date() + dt.timedelta(days=366):
+        raise ValueError('Pick a date after today and within a year')
+    return wall_time(s, dt.datetime.combine(day, dt.time()), now, local)
+
+def wall_time(s, target, now, local):
+    """The moment local clocks show target, counting a daylight saving change between now and then."""
+    import datetime as dt
+    def offset(t):
+        return (s.local_now(t) - dt.datetime.fromtimestamp(t, dt.timezone.utc).replace(tzinfo=None)).total_seconds()
+    guess = now + (target - local).total_seconds()
+    return guess - (offset(guess) - offset(now))
+
+def find_title(s, change):
+    """A title the household watched wins; otherwise one TMDB match."""
+    title = change['values'][0].strip()
+    hits = {(e['key'], e['kind']): e for e in (getattr(s, '_profiles', {}).get('household') or {}).get('entries', [])
+            if str(e.get('title', '')).casefold() == title.casefold() and change['kind'] in (None, e.get('kind'))}
+    if len(hits) == 1:
+        e = next(iter(hits.values()))
+        return {'key': e['key'], 'kind': e['kind'], 'title': e['title'], 'year': str(e.get('year') or '')}
+    return resolve(s, {**change, 'op': 'seen'})
+
+def watched_by(s, key):
+    return [e for e in (getattr(s, '_profiles', {}).get('household') or {}).get('entries', []) if e['key'] == key]
+
+def explain_text(s, item, who):
+    info = s.explain(item['key'], item['kind'])
+    label = s.LABELS.get(who, 'you') if who else 'the household'
+    lines = []
+    if info.get('reasons'):
+        lines.append('Because: '+'; '.join(str(r) for r in info['reasons']))
+    mine = (info.get('per_person') or {}).get(who) or {}
+    pct = mine.get('percentile', info.get('percentile'))
+    if pct is not None:
+        lines.append('Match for '+label+': '+str(pct)+' of 100')
+    if (mine.get('memory') or {}).get('vetoed'):
+        lines.append('A remembered dislike of '+label+' keeps titles like this out of the rows.')
+    if who in s.PEOPLE and item['key'] in s.deferred_keys(who):
+        lines.append('Hidden for '+label+' for now; it comes back by itself.')
+    if 'model' in info and info['model'] is None:
+        lines.append('No taste model yet; Skald needs more watches before it can explain picks.')
+    return '\n'.join(lines) or 'No reasons recorded for this title yet.'
+
+def title_preview(s, text, change, viewer, bound, *_):
+    op = change['op']
+    if len(change['values']) != 1 or not isinstance(change['values'][0], str) or not change['values'][0].strip() or change['kind'] not in (None, 'movie', 'tv'):
+        raise ValueError('Which title do you mean?')
+    if op == 'explain':
+        who = bound if bound in s.PEOPLE else viewer if viewer in s.PEOPLE else None
+        item = find_title(s, change)
+        return dict(read_only=True, people=[], name='Why '+item['title']+' is in the picks', description=explain_text(s, item, who))
+    targets = people(s, None if op == 'reattribute' else change['person'], viewer, bound)
+    to = None
+    if op == 'reattribute':
+        to = next((p for p in s.PEOPLE if str(change['person'] or '').casefold() in (p, s.LABELS[p].casefold())), None)
+        if to is None or to in targets or len(targets) != 1:
+            raise ValueError('Name the other member who really watched it')
+    until = until_time(s, change['until']) if op == 'defer' else None
+    item = find_title(s, change)
+    title, labels = item['title'], ', '.join(s.LABELS[p] for p in targets)
+    base = dict(people=targets, change=change, item=item, text=text[:200], source='search')
+    if op == 'reject':
+        reason = (change['reason'] or '').strip()[:200] or None
+        chips = [c for c, pattern in CHIPS.items() if reason and re.search(pattern, reason, re.I)]
+        active, plan = s.active_feedback(s.read_feedback()), {}
+        for p in targets:
+            old = active.get((item['key'], p)) or {}
+            have = old.get('reasons', []) if old.get('action') == 'not_for_us' else []
+            if old.get('action') != 'not_for_us' or set(chips) - set(have):
+                plan[p] = dict(was=old.get('id'), reasons=[*have, *(c for c in chips if c not in have)])
+        if not plan and reason:
+            return seal(dict(base, reject={}, note=True, reason=reason,
+                             name='Already not for '+labels+': '+title+'; note the reason ('+reason+')'))
+        if not plan:
+            return dict(read_only=True, people=[], name='Already not for '+labels+': '+title, description='Nothing changes.')
+        return seal(dict(base, people=list(plan), reject=plan, reason=reason,
+                         name='Not for '+', '.join(s.LABELS[p] for p in plan)+': '+title+(' ('+reason+')' if reason else '')))
+    rows = read_fixes(s)
+    kind = {'defer': 'defer', 'ignore_learning': 'ignore', 'reattribute': 'move'}[op]
+    fixes = []
+    for p in targets:
+        if kind != 'defer':
+            if any(r.get('op') in ('ignore', 'move') and r['key'] == item['key'] and r['who'] == p for r in rows):
+                continue
+            mine = [e for e in watched_by(s, item['key']) if p in s.watch_owners(e) or kind == 'ignore' and 'together' in e.get('by', ())]
+            if not mine:
+                raise ValueError('No watch of '+title+' by '+s.LABELS[p]+' to '+('move' if kind == 'move' else 'ignore'))
+        row = dict(op=kind, key=item['key'], kind=item['kind'], title=title, who=p)
+        if kind == 'move':
+            row['to'] = to
+        if kind == 'defer':
+            row.update(until=round(until), until_text=change['until'])
+        fixes.append(row)
+    if not fixes:
+        return dict(read_only=True, people=[], name='Already done for '+labels+': '+title, description='Nothing changes.')
+    when = 'tonight' if change['until'] == 'tonight' else change['until']
+    name = {'defer': 'Hide '+title+' for '+labels+' until '+str(when)+'; it comes back by itself',
+            'ignore': 'Stop learning from '+title+' for '+labels+'; the watch stays in history',
+            'move': 'Move the watch of '+title+' from '+labels+' to '+s.LABELS.get(to, '')}[kind]
+    return seal(dict(base, people=[r['who'] for r in fixes], fix=fixes, name=name))
+
+def apply_title(s, plan):
+    """Write fix rows or not_for_us feedback, then one journal entry per person for plain undo."""
+    from . import history
+    for p in plan['people']:
+        people(s, viewer=p)
+    current, entries, events, added = config(s), journal(s), {}, []
+    if plan.get('fix'):
+        with history.locked(s.DATA):
+            rows = read_fixes(s)
+            if any(r.get('op') != 'defer' and (r.get('op'), r['key'], r['who']) in {(x['op'], x['key'], x['who']) for x in plan['fix']} for r in rows):
+                raise ValueError('Already changed; preview again')
+            added = [{**r, 'id': uuid.uuid4().hex, 't': int(s.time.time())} for r in plan['fix']]
+            save_fixes(s, rows + added)
+    if plan.get('reject'):
+        active = s.active_feedback(s.read_feedback())
+        if any((active.get((plan['item']['key'], p)) or {}).get('id') != r['was'] for p, r in plan['reject'].items()):
+            raise ValueError('Ratings changed; preview again')
+        for p, r in plan['reject'].items():
+            events[p] = s.write_feedback({**plan['item'], 'who': p, 'action': 'not_for_us', 'reasons': r['reasons']})
+    for p in plan['people']:
+        prefs = current['taste']['people'].get(p, {}).get('prefs')
+        entry = history_entry(s, plan, prefs, prefs, fix=[r for r in added if r['who'] == p] or None)
+        entry['event'] = events.get(p)
+        if 'reject' in plan:
+            entry['reason'] = plan.get('reason')
+            entry['note'] = plan.get('note')
+        entries[p] = (entries.get(p, []) + [entry])[-200:]
+    save_journal(s, entries)
+    if any(r['op'] == 'defer' for r in added):
+        s.aio_rows_changed()
+    return {'name': 'Done: '+plan['name']+". Search 'undo' to revert."}
+
+EXTRA = {'plan': plan_preview, 'correct': correct_preview, 'ask': ask_preview, 'search': search_preview,
+         'wish': wish_preview, 'member': member_preview, 'rule': rule_preview, 'title': title_preview}
+
 def journal(s):
     path = Path(s.DATA)/'commands.json'
     entries = json.loads(path.read_text()) if path.exists() else {}
@@ -599,10 +1250,9 @@ def inverse_prefs(current, before, after, path=()):
     return result
 
 def inverse_settings(cfg, person, before, after, change):
-    inverse = {'hide': 'show', 'show': 'hide', 'exclude_genre': 'include_genre',
-               'include_genre': 'exclude_genre', 'focus': 'unfocus', 'unfocus': 'focus'}
-    if change['op'] in inverse:
-        edit(cfg, person, {**change, 'op': inverse[change['op']]})
+    inverse = REGISTRY.get(change['op'], {}).get('inverse')
+    if inverse:
+        edit(cfg, person, {**change, 'op': inverse})
     else:
         current = cfg['taste']['people'].get(person, {}).get('prefs')
         set_prefs(cfg, person, inverse_prefs(current, before, after) or None)
@@ -631,9 +1281,10 @@ def history_preview(s, text, change, viewer, bound):
                     raise ValueError('Shelf changed; cannot redo this stop')
                 action['slot'] = hits[0]['slot']
             shelf = s.shelf_change(scope, original['op'], **action)
-            return dict(people=[scope], shelf=shelf, plan=shelf['plan'], name='Redo: '+entry['name'], text=text[:200], source='search')
+            return dict(people=[scope], shelf=shelf, plan=shelf['plan'], name='Redo: '+entry['name'], text=text[:200], source='search',
+                        **({'months': entry['months']} if entry.get('months') else {}))
         return preview(s, text, viewer, bound, answer={**original, 'person': scope})
-    if entry.get('event') or entry.get('rows'):
+    if entry.get('event') or entry.get('rows') or entry.get('member') or entry.get('rule') or entry.get('fix') or entry.get('note'):
         raise ValueError('This command supports plain undo only')
     actor = bound if bound in s.PEOPLE else viewer
     if not entry.get('shelf') or original['op'] == 'reset' and original['values'] != ['shelves']:
@@ -808,6 +1459,33 @@ def save_journal(s, entries):
         if os.path.exists(temp):
             os.unlink(temp)
 _LOCK = threading.RLock()
+def apply_rule(s, plan):
+    """Member and shelf-rule changes read config and journal only under the shelf lock."""
+    from . import shelves
+    from .setup import publish
+    p, m, r = plan['people'][0], plan.get('member'), plan.get('rule')
+    with shelves.locked(s):
+        s.refresh_preferences()
+        current, entries = config(s), journal(s)
+        cfg = copy.deepcopy(current)
+        rules = shelves.rules(s)
+        if m:
+            people(s, viewer=plan['actor'])
+            if member_state(current, m['name']) != m['before']:
+                raise ValueError('Settings changed; preview again')
+            cfg = s.validate_config(set_member(cfg, m['name'], m['after']), data=s.DATA)
+            publish(Path(s.DATA), cfg, replace=True)
+            s.refresh_preferences()
+        elif rules.get(r['id']) != r['before'] or not any(w['id'] == r['id'] for w in shelves.read(s)['wishes']):
+            raise ValueError('Shelves changed; preview again')
+        else:
+            shelves.save_rules(s, {**rules, r['id']: r['after']})
+        prefs = current['taste']['people'].get(p, {}).get('prefs')
+        entries[p] = (entries.get(p, []) + [history_entry(s, plan, prefs, prefs, member=m, rule=r)])[-200:]
+        save_journal(s, entries)
+    s.aio_rows_changed()
+    return {'name': 'Done: '+plan['name']+('. Restart Skald to apply member changes' if m else '')+". Search 'undo' to revert."}
+
 def apply(s, plan, *, cfg=None):
     from .setup import publish
     if plan.get('read_only'):
@@ -816,12 +1494,28 @@ def apply(s, plan, *, cfg=None):
         from .migrate import ensure
         ensure(s.DATA)
         s.refresh_preferences()
+        if plan.get('wish'):
+            from . import history
+            with history.locked(s.DATA), os.fdopen(os.open(Path(s.DATA)/'wishes.jsonl', os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), 'a') as f:
+                f.write(json.dumps({'t': int(s.time.time()), **plan['wish']}, ensure_ascii=False)+'\n')
+            return {'name': 'Noted: '+plan['wish']['text']+'. No settings changed.'}
+        if plan.get('fix') or plan.get('reject') or plan.get('note'):
+            return apply_title(s, plan)
+        if plan.get('undo_first'):
+            first = plan['undo_first']
+            if undo_stamp(journal(s), first['people']) != first['stamp']:
+                raise ValueError('Commands changed; preview again')
+            undo(s, first['people'], actor=first['viewer'])
+            apply(s, preview(s, plan['text'], first['viewer'], first['bound'], answer=plan['change']))
+            return {'name': 'Done: '+plan['name']+". Search 'undo' to revert."}
         if plan.get('target') or plan.get('reset'):
             from . import shelves
             with shelves.locked(s):
                 s.refresh_preferences()
                 current, entries = config(s), journal(s)
                 return targeted_undo(s, plan, current, entries) if plan.get('target') else apply_reset(s, plan, current, entries)
+        if plan.get('member') or plan.get('rule'):
+            return apply_rule(s, plan)
         current, entries = config(s), journal(s)
         if plan.get('change', {}).get('op') == 'undo':
             people(s, viewer=plan['actor'])
@@ -835,10 +1529,16 @@ def apply(s, plan, *, cfg=None):
             s.shelf_change(shelf['scope'], shelf['op'], plan=shelf['plan'])
             p = shelf['scope']
             after = {'wishes': [w for w in shelves.read(s)['wishes'] if w['scope'] == p], 'count': shelves.slot_count(s, p)}
+            if plan.get('months'):
+                with shelves.locked(s):
+                    added = {w['id'] for w in after['wishes']} - {w['id'] for w in before_shelf['wishes']}
+                    shelves.save_rules(s, {**shelves.rules(s), **{i: {'months': plan['months']} for i in added}})
             entry = history_entry(s, plan, current['taste']['people'].get(p, {}).get('prefs'),
                                   config(s)['taste']['people'].get(p, {}).get('prefs'))
             entry['shelf'] = after
             entry['shelf_before'] = before_shelf
+            if plan.get('months'):
+                entry['months'] = plan['months']
             entries[p] = (entries.get(p, []) + [entry])[-200:]
             save_journal(s, entries)
             return {'name': 'Done: '+plan['name']+". Search 'undo' to revert."}
@@ -851,16 +1551,17 @@ def apply(s, plan, *, cfg=None):
                     raise ValueError('Settings changed; preview again')
             cfg = copy.deepcopy(current)
         if 'change' in plan and not plan.get('item'):
-            if 'rows_before' in plan:
-                edit_rows(cfg, plan['change'], s)
-            else:
-                for p in plan['people']:
-                    edit(cfg, p, plan['change'])
+            for change, targets in plan.get('steps') or [(plan['change'], plan['people'])]:
+                if change['op'].startswith('row_'):
+                    edit_rows(cfg, change, s)
+                else:
+                    for p in targets:
+                        edit(cfg, p, change)
         cfg = s.validate_config(cfg, data=s.DATA)
         for p in plan['people']:
             event = None
             if plan.get('item'):
-                event = s.write_feedback({**plan['item'], 'who': p, 'action': {'like': 'love', 'dislike': 'not_for_us', 'seen': 'seen'}[plan['change']['op']]})
+                event = s.write_feedback({**plan['item'], 'who': p, 'action': REGISTRY[plan['change']['op']]['feedback']})
             entry = history_entry(s, plan, current['taste']['people'].get(p, {}).get('prefs'),
                                   cfg['taste']['people'].get(p, {}).get('prefs'))
             entry['event'] = event
@@ -919,14 +1620,43 @@ def undo(s, targets, actor=None):
                 if old.get('shelf_before') and old['change']['op'] != 'reset':
                     shelves.consume_undo(s, p, old['shelf_before'], old['change']['op'])
                 cfg = config(s)
+            elif old.get('member'):
+                m = old['member']
+                if member_state(cfg, m['name']) != m['after']:
+                    raise ValueError('Members changed; cannot undo this command')
+                if not m['before']['member']:
+                    from .setup import member_data
+                    rest = copy.deepcopy(cfg)
+                    rest['taste']['people'].pop(m['name'], None)
+                    if member_data(Path(s.DATA), m['name'], rest, skip=('commands.json',)):
+                        raise ValueError(m['name'].title()+' has data; remove members with skald setup and the household archive tools')
+                cfg = s.validate_config(set_member(cfg, m['name'], m['before']), data=s.DATA)
+            elif old.get('rule'):
+                rules, r = shelves.rules(s), old['rule']
+                if rules.get(r['id']) != r['after']:
+                    raise ValueError('Shelves changed; cannot undo this command')
+                shelves.save_rules(s, {k: v for k, v in rules.items() if k != r['id']} | ({r['id']: r['before']} if r['before'] else {}))
             elif old.get('shelf'):
                 shelves._change(s, p, 'undo', apply=True, expected=old.get('shelf'))
                 cfg = config(s)
+            elif old.get('fix'):
+                from . import history
+                ids = {r['id'] for r in old['fix']}
+                with history.locked(s.DATA):
+                    rows = read_fixes(s)
+                    if any(r.get('id') in ids for r in rows):
+                        save_fixes(s, [r for r in rows if r.get('id') not in ids])
+                    else:
+                        skipped.append(old['name'])
+            elif old.get('note'):
+                pass  # Only a reason was noted; the journal entry is the whole change.
             elif old.get('rows'):
                 for key, value in old['rows']['before'].items():
                     cfg['household'].pop(key, None)
                     if value is not None:
                         cfg['household'][key] = value
+                if old['before'] != old['after']:
+                    set_prefs(cfg, p, old['before'])
             elif old['event']:
                 if any(e['id'] == old['event']['id'] for e in s.active_feedback(s.read_feedback()).values()):
                     s.write_feedback({k: v for k, v in old['event'].items() if k not in ('id', 't', 'undo')} | {'undo': old['event']['id']})
@@ -1051,8 +1781,8 @@ def _special(s, query, stype, routed=False):
     q = query.casefold().strip()
     help_q = q in ('help', '?', 'hilfe')
     ideas = q in ('ideas', 'suggest')
-    local = parse_local(query, s, viewer, bound)['op'] is not None
-    if q.startswith('stop ') and not local:
+    local = parse_local(query, s, viewer, bound)['op']
+    if q.startswith('stop ') and not local or REGISTRY.get(local, {}).get('group') == 'search':
         return None
     dismissing = bool(re.fullmatch(r'no \d{2}', q))
     about = q in ('what do you know about me', 'my settings', 'settings', 'was weißt du über mich')
@@ -1098,11 +1828,12 @@ def _special(s, query, stype, routed=False):
                 return None
             if q != 'yes '+confirm_code(plan):
                 return preview_card(s, plan, stype)
-            if 'shelf' in plan:
-                shelf_scope(s, plan['shelf']['scope'], viewer, bound)
+            own = 'shelf' in plan or plan.get('wish') or plan.get('rule')
+            if own:
+                shelf_scope(s, plan['shelf']['scope'] if 'shelf' in plan else plan['people'][0], viewer, bound)
             elif bound in s.PEOPLE and plan['people'] != [bound] and not (plan.get('reset') or plan.get('target')):
                 raise PermissionError('This plan applies to another member')
-            if 'shelf' not in plan:
+            if not own:
                 if plan.get('reset') or plan.get('target'):
                     for target in plan['people']:
                         shelf_scope(s, target, viewer, bound)
@@ -1119,21 +1850,27 @@ def _special(s, query, stype, routed=False):
             result = apply(s, plan)
             pending(s).pop(scope, None)
             getattr(s, '_command_suggestions', {}).pop(scope, None)
-            s._commands_last = getattr(s, '_commands_last', {}) | {scope: plan['people']}
+            if not plan.get('wish'):
+                s._commands_last = getattr(s, '_commands_last', {}) | {scope: plan['people']}
             return card(s, result['name'], stype)
         if q in ('undo', 'rückgängig'):
             targets = getattr(s, '_commands_last', {}).get(scope) or ([bound] if bound in s.PEOPLE else None) or people(s, viewer=viewer)
             for target in targets:
                 shelf_scope(s, target, viewer, bound)
             return card(s, undo(s, targets, actor=viewer)['name'], stype)
+        prior = get_pending(s, scope)
         pending(s).pop(scope, None)
         getattr(s, '_command_suggestions', {}).pop(scope, None)
-        plan = preview(s, query, viewer, bound)
+        plan = preview(s, query, viewer, bound, scope=scope, prior=prior)
+        if plan is not None and plan.get('search'):
+            return None
         if plan is None:
             return card(s, 'Skald cannot set this yet', stype)
         if plan.get('read_only'):
             return card(s, plan['name'], stype, plan['description'])
         pending(s)[scope] = (s.time.time(), plan)
+        # A new plan may reuse a two-digit code, so earlier "yes NN" or "undo" replies must not be replayed for it.
+        getattr(s, '_command_results', {}).pop(scope, None)
         return preview_card(s, plan, stype)
     except (ValueError, PermissionError) as e:
         return card(s, str(e) if isinstance(e, PermissionError) or 'name' in str(e) or 'shelf' in str(e).lower() or 'changed since' in str(e) or not routed else 'Skald cannot set this yet', stype)
@@ -1192,12 +1929,13 @@ def api_preview(s, req):
         raise ValueError('no_llm')
     s.check({'query': str}, body['in'])
     local = parse_local(body['in']['query'], s, person, viewer)
-    if s.kids_age(viewer) is not None and local['op'] not in ('history', 'settings', 'shelf_list', 'undo', 'redo', 'reset', 'shelf_add', 'shelf_stop', 'shelf_count'):
+    if s.kids_age(viewer) is not None and not REGISTRY.get(local['op'], {}).get('kids'):
         raise PermissionError('person')
     scope = 'api:'+req['client']['name']
+    prior = get_pending(s, scope)
     pending(s).pop(scope, None)
     answer = local if local['op'] else s.decide('parse_command', body['in'], allow_llm=not body.get('no_llm', False))['answer']
-    plan = preview(s, body['in']['query'], person, viewer, answer=answer)
+    plan = preview(s, body['in']['query'], person, viewer, answer=answer, scope=scope, prior=prior)
     if plan and not plan.get('read_only'):
         plan['source'] = 'api'
         pending(s)[scope] = (s.time.time(), plan)

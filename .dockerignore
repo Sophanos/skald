@@ -4,6 +4,7 @@
 .env.*
 *.secret
 *.json
+!skald/locales/*.json
 *.jsonl
 snapshot/
 tests/fixtures/

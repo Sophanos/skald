@@ -445,6 +445,9 @@ def text_output(args, data, out):
         return f"{value:.3f}" if value is not None else "n/a (offline)"
     def line(value):
         print(value, file=out)
+    def taste_line(arch):
+        if isinstance(arch, dict) and arch.get("name") and arch.get("line"):
+            line(f"Taste: {arch['name']}. {arch['line']}")
     if args.command == "interview" and data["done"]:
         why = "member is ready" if data["done_reason"] == "ready" else "20 positives and 5 reasoned negatives"
         line(f"Interview complete: {why}.")
@@ -476,6 +479,7 @@ def text_output(args, data, out):
         else:
             line(data["say"])
             line(data.get("_count", args.person.title()))
+            taste_line(data.get("archetype"))
             for source in data["sources"][:7]:
                 c = source["counts"]
                 line(f"{source['name']}: {source['status']} · {c['accepted']} accepted · {c['review']} review")
@@ -512,6 +516,8 @@ def text_output(args, data, out):
             line(f"Top 30: overlap {cal['overlap']['jaccard']:.3f} · τ {cal['overlap']['tau']:.3f}")
     elif args.command in ("taste", "explain"):
         line(f"{data['title'] or data['key']} · score {number(data['score'])} · percentile {number(data['percentile'])} · {data['confidence'] or data['calibration']}")
+        arch = data.get("archetypes") or {}
+        taste_line(arch.get(getattr(args, "person", None)) or arch.get("household"))
         for reason in data["reasons"]:
             line("  " + reason)
         for facet in data.get("facets", [])[:6]:

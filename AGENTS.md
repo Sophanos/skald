@@ -70,6 +70,23 @@ Keep that boundary; do not over-harden for unrelated threats.
 Write docs in plain words a stranger can follow. Keep help and docs in sync.
 Use short imperative commit subjects, such as "Explain setup flags".
 
+Grow the evals with the feature. When you add or change a command, a search
+phrase or anything a model parses, add cases in the same change:
+`eval/commands_cases.jsonl` for commands, `eval/fixtures/decisions/<name>.jsonl`
+for search routing, title resolution and picks. Cover English, German and
+Serbian, typos, indirect wording and look-alikes that must not trigger it.
+Mark cases for behaviour not built yet `"contract": "next"`; switch them to
+`now` when it lands. Run `python eval/commands_eval.py --fixture` and
+`python eval/decisions.py` offline. Before a release, compare models with
+`python eval/commands_eval.py --live --models A,B` and note accuracy and cost
+in `eval/README.md`.
+
+Version releases slowly. A patch release (1.4.1) carries fixes and small
+additions that need no DATA migration and change no command, setting or default.
+A minor release (1.5.0) is only for a FORMAT bump, a changed or removed command
+or setting, or a changed default users will notice. Batch work into one release;
+do not release per feature. Add each change to the next CHANGELOG entry.
+
 Generated text has one source. Do not hand-edit its copies:
 
 - `skald/recipes.py` supplies `docs/WATCH.md` through watch_doc().

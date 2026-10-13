@@ -90,10 +90,11 @@ class Shelves(unittest.TestCase):
         s = self.s
         s.shelf_change('ana', 'add', text='genre:drama year:1990-2000 country:US', apply=True)
         with patch.object(s, 'tmdb', return_value={'results': [{'id': 900+i} for i in range(9)]}) as tmdb, \
-                patch.object(s, 'to_meta', side_effect=lambda it, typ, *a: self.cards[it['id']-900]), patch.object(s, 'member_scores', return_value={}):
+                patch.object(s, 'to_meta', side_effect=lambda it, typ, *a, lang: self.cards[it['id']-900]) as to_meta, patch.object(s, 'member_scores', return_value={}):
             out = s.shelf_feed(s.LANG)
         self.assertTrue(out[s.rid('shelf_ana_1')]['tv'])
         self.assertTrue(all(c.args[0].startswith('discover/') for c in tmdb.call_args_list))
+        self.assertTrue(all(c.kwargs['lang'] == s.LANG for c in to_meta.call_args_list))
         self.add(slot=2)
         s.shelf_feed(s.LANG)
         self.assertEqual(s.shelf_list('ana')['wishes'][1]['status'], 'needs OpenRouter')

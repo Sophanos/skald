@@ -12,11 +12,11 @@ or `~/.local/share/skald`. Change that with `--state-dir PATH`.
 
 | Command | What it does and an example |
 |---|---|
-| `me` | Show what is known about you: `skald --snapshot /path/copy me --person alex` |
+| `me` | Show what is known about you, including your taste archetype: `skald --snapshot /path/copy me --person alex` |
 | `taste show` | Show your taste profile: `skald --snapshot /path/copy taste show --person alex` |
 | `taste why` | Explain a title's fit: `skald --snapshot /path/copy taste why tmdb:123 --person alex` |
 | `taste report` | Summarize recent learning: `skald --snapshot /path/copy taste report --since 7` |
-| `explain` | Show scoring details: `skald --snapshot /path/copy explain tmdb:123` |
+| `explain` | Show scoring details and the household taste archetype: `skald --snapshot /path/copy explain tmdb:123` |
 | `rows` | Preview rows: `skald --snapshot /path/copy rows --n 10` |
 | `learn` | Inspect viewing signals: `skald --snapshot /path/copy learn` |
 | `suggest` | Read your weekly habits: `skald suggest --person alex`. Use `--dismiss ID` to hide a theme for 90 days in private DATA_DIR. Listing writes nothing; a read-only copy also works with `--snapshot`. |
@@ -64,7 +64,7 @@ The older `--live` route uses SSH and has no default host; set `SKALD_SSH_HOST` 
 | `setup link` | Issue a private laptop token: `skald setup link --name laptop --person alex` |
 | `setup prefs` | Set member rows: `skald setup prefs --person alex --discovery gems --years 1990- --exclude-movie-genres horror --exclude-series-genres reality,talk --hide documentaries,anime --focus-movie-genres horror,drama --focus-series-genres drama --focus-languages es --focus-countries ES`; `--hide` adds movies, series, documentaries, animation or anime; `--show anime` removes a hide; focus ranks without filtering; empty focus lists clear that group. `--kids-age 8` (3..17) limits all Skald rows and search for that child; `--kids-age off` clears it. Other addons and streams are not filtered; use the app's profile lock too. TMDB ratings can be missing (titles are hidden) or wrong. Reset with `skald setup prefs --person alex --clear`. Omitted flags keep other settings; `setup --status` shows each member. |
 | `setup adopt` | Make a legacy household editable without changing its config: `skald setup adopt --yes` |
-| `setup rows KEY,KEY,...` | Choose home rows in Skald's usual order: `skald setup rows episodes,foryou,top10,digital,toprated`. The two movie lists are opt-in; search stays available. `skald setup rows all` restores default rows. See [setup](SETUP.md) for valid keys. Changes refresh AIOStreams rows. |
+| `setup rows KEY,KEY,...` | Choose home rows in Skald's usual order: `skald setup rows episodes,foryou,top10,digital,toprated`. The two movie lists and New to You (`newtoyou`) are opt-in; search stays available. `skald setup rows all` restores default rows. See [setup](SETUP.md) for valid keys. Changes refresh AIOStreams rows. |
 | `connectors test` | Probe a source without saving history: `skald connectors test jellyfin --json` |
 | `connectors` | Inspect saved source health: `skald --snapshot /path/copy connectors` |
 | `trakt login` | Authorize a configured Trakt app: `skald trakt login --person alex` |
@@ -93,8 +93,8 @@ See [connector credentials and limits](CONNECTORS.md).
 | `--base` | The address your watching apps use, e.g. https://skald.example.org |
 | `--internal-base` | Skald address inside Docker for AIOStreams, e.g. http://skald:8080 |
 | `--watch` | Watching app: stremio, aiostreams or jellyfin-app |
-| `--disconnect` | Remove a member MDBList or Stremio connection and private key: `skald setup --disconnect mdblist --person alex` |
-| `--connect` | Taste source: files, trakt, mdblist, stremio, jellyfin, plex or aiostreams-db |
+| `--disconnect` | Remove a member MDBList, Stremio or PMDB connection and private key: `skald setup --disconnect mdblist --person NAME` |
+| `--connect` | Taste source: files, trakt, mdblist, stremio, pmdb, jellyfin, plex or aiostreams-db |
 | `--name` | Name for the laptop token created by `setup link` |
 | `--person` | Household member whose source or laptop token to use |
 | `--source-url` | Address of the Jellyfin or Plex server |
@@ -128,6 +128,11 @@ See [network setup](SETUP.md) and [upgrades](UPGRADE.md).
 
 For members with few ratings, doctor suggests an interview or importing a Netflix
 or IMDb export. Run `skald import --help` for the import path.
+
+PublicMetaDB: run `skald setup --connect pmdb --person NAME` with a key from
+Settings → API → Create. Use the private prompt or `--yes --key-stdin`.
+`skald connectors test pmdb` reads each account without saving history.
+See [PMDB](CONNECTORS.md#publicmetadb-pmdb) for signals and limits.
 
 Stremio: run `skald setup --connect stremio --person alex`. Paste the auth key privately,
 or leave it blank for private email and password prompts. Scripts use `--yes --key-stdin`.
@@ -166,6 +171,23 @@ Resets preserve ratings, learned taste, imports, viewing history and household r
 History keeps 180 days and at most 200 entries per scope, including undone entries.
 Undated legacy entries stay and support plain undo; they cannot be targeted or redone.
 Children can read their history and manage their own shelves through command previews.
+
+`hide anime and cap movies at 90 minutes for Ana` previews both changes as one plan; confirming applies all or none, and one `undo` reverts the whole plan.
+Right after a change, `no, I meant Ben` or `not horror, thriller` fixes it: a pending preview is replaced, an applied change is undone and the fixed one previewed.
+Unclear requests such as `maybe hide some of those?` get one short question and change nothing.
+`I wish there were more gentle mysteries` is noted in `wishes.jsonl` without changing settings.
+`limit my Classics shelf to movies under 90 minutes` adds a filter to one existing shelf (`exclude movies` keeps only series); `Christmas movies every December` adds a shelf that shows only in those months.
+`add a household member named Kim, age 12` and `update Ben to age 13` preview member changes; they apply after a restart, and `undo` reverts them unless a new member already has data.
+`something like Arrival`, `movies by Kim` and `something cozy tonight` run a search and change nothing.
+
+Title commands work on one title and preview first like other changes.
+`not tonight Arrival` (also `heute abend nicht`, `ne večeras`) hides it from your rows until 05:00 the next morning; `hide Arrival until 2026-12-24` or `blende Arrival bis zum 24.12.2026 aus` hides it until that day starts. Dates must be after today and within a year. Deferrals live in `title_fixes.json`, expire by themselves and do not hide the title from search.
+`Arrival is not for me, too slow` marks it not for you; known reasons such as too dark, too slow, too violent, too silly or not my genre are kept with the rating, other wording stays only in the command history, also when the title is already marked not for you.
+`I already watched Arrival`, `ich habe Arrival schon gesehen` and `već sam gledao Arrival` mark it seen.
+`don't learn from my watching of Arrival` keeps that plain watch out of your taste and your share of the household taste; it still counts as watched, and your ratings of it still count. `Ben watched Arrival, not me` moves your watch of it to Ben, who can then fix it the same way. Both need a recorded watch of yours and change taste only, not household history.
+`why is Arrival in my picks` explains the row without changing anything.
+`the movie Calm` or `der Film Happy` searches for a title with that name.
+Plain `undo` reverts a title command; `undo` with a phrase does not target them. Forgetting a person also removes their title fixes; a moved watch goes with the member it moved to.
 
 ## Shelves
 

@@ -65,7 +65,7 @@ def recipe(watch, manifest, lang, internal=None):
 
 
 def watch_doc():
-    return '# Where you watch\n\n' + RECOMMENDED + '\n' + '\n\n'.join(recipe(k, 'YOUR_PRINTED_MANIFEST_URL', '<lang>') for k in RECIPES) + '\n\n`More from <Name>` rows offer other films by directors and series by creators behind at least two titles you liked or finished; together rows need that evidence from every member.\n\n' + FILES.format(person='NAME') + '\n\nPlex playback should work, not yet tested by us. Skald does not supply streams.\n'
+    return '# Where you watch\n\nChoose a ready-to-run [Compose setup](../examples/README.md).\n\n' + RECOMMENDED + '\n' + '\n\n'.join(recipe(k, 'YOUR_PRINTED_MANIFEST_URL', '<lang>') for k in RECIPES) + '\n\n`More from <Name>` rows offer other films by directors and series by creators behind at least two titles you liked or finished; together rows need that evidence from every member.\n\n' + FILES.format(person='NAME') + '\n\nPlex playback should work, not yet tested by us. Skald does not supply streams.\n'
 
 RECOMMENDED = '''## Recommended: the setup we run
 

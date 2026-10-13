@@ -24,11 +24,10 @@
 <img src="docs/images/skald-home.jpg" alt="Odin home showing Skald rows for a test household" width="960">
 
 - Each member has four wish shelf slots by default; Together has two. Search `every sunday morning a classic for us`, `weekday evenings something light for me` or `make me a row of heist films`. Use `for MEMBER` for a named person. Confirm with `yes NN`; full shelves ask you to stop one first. `stop Classics` or `stop the sunday shelf` previews stopping an existing shelf; unmatched names stay title searches; `undo` restores it. `show 6 shelves` or `fewer shelves` changes slots (0..10). After shelf changes Skald asks AIOStreams to reload row names for logins made by `skald setup aiostreams`; Stremio installed with Skald's own link may need the link reinstalled to show new names. Schedules use the household timezone. Command cards appear once, in movie search results. Children manage only their own shelves, with their age filter.
-- Cards can show a short reason. The explanation API exposes a match score when there is enough history.
 - `More from <maker>` finds unseen work by directors and creators you like.
-- Continue Watching & New Episodes and Catch Up help you return to your shows and film collections.
-- Anime · New This Week and Anime · Next Season cover airing and upcoming anime.
-- Each member can choose discovery style, release years and unwanted genres.
+- Continue Watching & New Episodes and Catch Up help you return to your shows and film collections; two Anime rows cover airing and upcoming anime.
+- Each member and the household get a short taste archetype, such as “Twisty puzzle chaser”, shown in `skald me` and `skald explain`. It describes taste and does not change picks.
+- Each member can choose discovery style, release years and unwanted genres. Cards can show a short reason; the explanation API exposes a match score when there is enough history.
 ### Search
 
 <img src="docs/images/skald-search.jpg" alt="Odin search for anime I haven't watched, showing Skald AI results for a test household" width="960">
@@ -40,10 +39,12 @@
 | “anime I haven't watched” | Drops titles already in your recorded history from AI results. |
 | “sci-fi I've watched” | Selects matching titles from your own recorded history. |
 | “hide anime for Ana” | Previews a setting change. The “yes NN” code comes first in the card name. Open the card for details; type the code to apply, “undo” to revert. |
+| “hide anime and show 6 shelves”; “no, I meant Ben” | Several changes preview as one plan with one code and one undo. A correction right after a change fixes it; unclear requests get one short question. |
+| “not tonight Arrival”; “I already watched Arrival”; “Arrival is not for me, too slow” | Hides one title until tomorrow or a date, marks it seen, or rates it down with a reason. `undo` reverts each. |
+| “Ben watched Arrival, not me”; “why is Arrival in my picks”; “something like Arrival” | Moves a watch to the right person, explains a pick, or finds similar titles without changing settings. |
 | “help”; “ideas”, “suggest” | Help shows five search examples. Ideas offers at most two shelf suggestions; `yes NN` creates one, `no NN` dismisses it. |
 | “what do you know about me”, “my settings” | Shows settings, personal and Together shelves, taste facets and recent commands. |
-AI search needs OpenRouter; title search works without it. For explicit watched or not-watched requests, member links use that member's history and Together links use current members' combined history; ordinary AI search uses household history and taste.
-Watched searches use up to 300 recent titles with watch or rating evidence and omit disliked titles. If AI fails, search falls back to TMDB title results.
+AI search needs OpenRouter; title search works without it. Commands work in English, German and Serbian. For explicit watched or not-watched requests, member links use that member's history and Together links use current members' combined history; ordinary AI search uses household history and taste. Watched searches use up to 300 recent titles with watch or rating evidence and omit disliked titles. If AI fails, search falls back to TMDB title results.
 
 ## How it works
 
@@ -92,14 +93,14 @@ Rows appear when they have enough suitable titles. Names follow your household a
 | HBO for You / Paramount+ for You | Studio and network shelves ranked by taste. | No |
 | Anime · New This Week | Airing anime. | No |
 | `Anime · Next Season (<season> <year>)` | Next season's anime. | No |
+| New to You (opt-in) | Daily picks for one member or Together that keep a loved kind of story and add one they have not tried. Turn on with `skald setup rows` or “add the New to You row”. | Uses saved experience tags |
 | Find your taste | Starter titles to rate on the private taste page. | No |
 
 “More Like Your Favourites”, “Same Feeling, New World” and “Tonight's Mood” are fallback names while shelves build. “Picked for you” is also the member API's row label.
 
 ## Sources
 
-Run connector commands on the server. Prefix them with `docker compose -f compose.stack.example.yaml exec skald` for the stack, or `docker compose exec engine` for Stremio direct. Run imports on a linked laptop with Python 3.12. Replace `NAME` with a configured member and filenames with your exports. Commands below preview imports without saving.
-After changing connectors, restart Skald now (`docker compose restart engine`, or `docker compose -f compose.stack.example.yaml restart skald` for the stack) so it starts reading.
+Run connector commands on the server. Prefix them with `docker compose -f compose.stack.example.yaml exec skald` for the stack, or `docker compose exec engine` for Stremio direct. Run imports on a linked laptop with Python 3.12. Replace `NAME` with a configured member and filenames with your exports. Commands below preview imports without saving. After changing connectors, restart Skald now (`docker compose restart engine`, or `docker compose -f compose.stack.example.yaml restart skald` for the stack) so it starts reading.
 
 | Source | What it supplies | Connect or preview command |
 |---|---|---|
@@ -116,8 +117,7 @@ After changing connectors, restart Skald now (`docker compose restart engine`, o
 | Chrome | Title interests from allowed sites in a history database copy. | `python3 -m skald import chrome History --person NAME --remote --dry-run` |
 | Plain text | One title per line. | `python3 -m skald import plain titles.txt --person NAME --remote --dry-run` |
 
-Stremio viewing reaches Skald directly. AIOStreams records Jellyfin-app viewing, not Stremio playback. Trakt remains optional; its API app may need VIP, but JSON imports need no API app. Mount the AIOStreams database directory read-only before connecting it. Netflix exports with named profiles need `--profile-map "PROFILE=NAME"` for each profile. See [source limits and credentials](docs/CONNECTORS.md).
-A new household's first row build takes several minutes; rows fill in as they are built, and later builds reuse the cache.
+Stremio viewing reaches Skald directly. AIOStreams records Jellyfin-app viewing, not Stremio playback. Trakt remains optional; its API app may need VIP, but JSON imports need no API app. Mount the AIOStreams database directory read-only before connecting it. Netflix exports with named profiles need `--profile-map "PROFILE=NAME"` for each profile. See [source limits and credentials](docs/CONNECTORS.md). A new household's first row build takes several minutes; rows fill in as they are built, and later builds reuse the cache.
 
 ## Personal settings
 
@@ -139,6 +139,8 @@ The pictures above show a test household in Odin: the row overview, Home and Sea
 
 ### Pick your setup
 
+Copy a ready-to-run [Compose setup](examples/README.md) for LAN apps, existing AIOStreams, HTTPS, a tunnel or a small box.
+
 | You watch in | Install with | Learn from |
 |---|---|---|
 | Odin on Apple TV or Mac / Jellyfin apps | AIOStreams Jellyfin mode; `skald setup aiostreams`. | AIOStreams database, accounts and imports. |
@@ -159,8 +161,7 @@ ${EDITOR:-vi} .env .env.aiostreams
 ```
 
 Put `TMDB_API=YOUR_KEY` and optional `OPENROUTER_API_KEY=YOUR_KEY` in `.env`. Delete the `SKALD_MEMBERS`, `SKALD_LANG` and `SKALD_TZ` lines from `.env`.
-Setup asks for names, language and timezone. Skald runs as user 65534 and keeps DATA private.
-Make the AIOStreams secret with `openssl rand -hex 32`; set it and the public HTTPS address in `.env.aiostreams`.
+Setup asks for names, language and timezone. Skald runs as user 65534 and keeps DATA private. Make the AIOStreams secret with `openssl rand -hex 32`; set it and the public HTTPS address in `.env.aiostreams`.
 
 ```sh
 docker compose -f compose.stack.example.yaml up -d --build
@@ -168,8 +169,7 @@ docker compose -f compose.stack.example.yaml exec skald skald setup
 docker compose -f compose.stack.example.yaml exec skald skald setup aiostreams
 ```
 
-The empty Skald container waits for setup. Setup makes your AIOStreams login with Skald and TMDB title details.
-Add the printed server in Odin and use the printed user and password, or install the printed Stremio link. Configure your stream addons in AIOStreams, then connect your taste sources above.
+The empty Skald container waits for setup. Setup makes your AIOStreams login with Skald and TMDB title details. Add the printed server in Odin and use the printed user and password, or install the printed Stremio link. Configure your stream addons in AIOStreams, then connect your taste sources above.
 [AIOStreams](https://github.com/Viren070/AIOStreams) is a separate project with its own docs and licence. We use its published image.
 
 Stremio only, without AIOStreams: copy only `.env`, edit it as above, then run `docker compose up -d --build`.

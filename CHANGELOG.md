@@ -4,6 +4,30 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.4.1
+
+Connect a PublicMetaDB (PMDB) account per person. Skald reads watch history, watchlist, resume points and dropped shows with each person's private key, never writes to PMDB, and includes PMDB in backups, forgetting and `skald connectors test pmdb`.
+Six Compose examples cover addons on a home network, Odin/Jellyfin, an existing AIOStreams, Caddy HTTPS, Cloudflare Tunnel and small boxes, each with a private env template and setup commands.
+Titles in Greek, Cyrillic, Chinese and other scripts now show when TMDB has a translation in your language, instead of being replaced with the English title.
+Row names and notes now come from one bundled English string table, ready for translations. What you see does not change.
+Title fingerprints are built from the title details Skald already keeps, without asking TMDB again, and a switch to a new embedding model no longer stalls when a few titles can never be embedded.
+Commands now come from one table that lists each command's fields, checks, preview and undo. Existing commands behave as before.
+Several changes in one sentence preview as one plan, apply together or not at all, and undo together.
+Say "no, I meant Ben" or "not horror, thriller" right after a change to fix it.
+Unclear requests get one short question instead of a guess.
+Wishes such as "I wish there were more gentle mysteries" are noted in a new optional wishes.jsonl and change no settings.
+Shelves can take their own filters, and seasonal shelves can show only in chosen months, kept in a new optional shelf_rules.json.
+Household members can be added or updated by command, with preview and undo.
+"Something like Arrival", "movies by Kim" and "something cozy tonight" search without changing settings.
+Say "not tonight Arrival" or "hide Arrival until 2026-12-24" to hide one title for a while; it comes back by itself and is kept in a new optional title_fixes.json that backups include.
+Say "Arrival is not for me, too slow" to rate a title down with a reason, and "I already watched Arrival" in English, German or Serbian to mark it seen.
+Say "don't learn from my watching of Arrival" or "Ben watched Arrival, not me" to fix what your taste learns from one watch; plain undo reverts it and forgetting a person removes these fixes.
+Ask "why is Arrival in my picks" for a short explanation, or "the movie Calm" to search a title whose name looks like a mood.
+Each member and the household now get a short taste archetype, a name and one line such as "Twisty puzzle chaser", shown in `skald me` and `skald explain`. A small model names it at most once a week from the taste Skald already learned, and Skald uses its own wording when no model is set up or the answer is unusable. Archetypes are kept in a new optional archetypes.json that backups include and forgetting removes.
+The new opt-in New to You row, turned on with `skald setup rows` or by saying "add the New to You row", picks titles for one member or Together each day that keep what they love but try a kind of story they have not watched yet. Saying not for us to a title from that row counts only lightly against their taste.
+
+**Data changes:** none. The data format stays 5 with no migration. The new optional files wishes.jsonl, shelf_rules.json, title_fixes.json and archetypes.json appear only once used, and older versions ignore them, so rolling back needs no restore.
+
 ## 1.4.0
 
 Skald checks its own health on a schedule, repairs a small set of known faults by itself and can alert you by Telegram, ntfy, Gotify or Discord; `skald health` shows the saved checks and the last repair.
