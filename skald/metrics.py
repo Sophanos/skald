@@ -1,6 +1,7 @@
 """Local, counts-only row cohorts with bounded, disposable attribution evidence."""
 import copy
 import datetime as dt
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -10,6 +11,7 @@ import time
 from zoneinfo import ZoneInfo
 
 DAY = 86400
+MAX_PLAY_CREDITS = 10000
 DEFAULTS = dict(enabled=False, attribution_days=14, shown_retention_days=30, shown_max_items=10000)
 SOURCES = {'history', 'jellyfin', 'plex', 'aiostreams_db', 'trakt', 'trakt_api', 'stremio', 'mdblist',
            'import:netflix', 'import:trakt', 'import:letterboxd'}
@@ -65,6 +67,7 @@ def _state(data, config, now):
         for people in rows.values():
             for cell in people.values():
                 cell['closed'] = True
+                cell.setdefault('extra', {})['restored'] = True
                 if unfinished:
                     cell['complete'] = False
     return {'v': 1, 'shown': [], 'folded': saved['weeks'], 'sources': saved['sources'], 'cleaned': None}
@@ -79,6 +82,10 @@ def _fold(weeks, record):
     cell = _cell(weeks, record['week'], record['row'], record['person'])
     cell['shown'] += 1
     cell['played'] += bool(record['sources'])
+    if record['sources'] and record.get('play'):
+        plays = cell.setdefault('extra', {}).setdefault('plays', [])
+        if len(plays) < MAX_PLAY_CREDITS:
+            plays.append(record['play'])
     for source in record['sources']:
         cell['sources'][source] = cell['sources'].get(source, 0) + 1
     return cell
@@ -113,6 +120,7 @@ def forget(data, config, before, person, *, apply=False):
                 touched.add((record['week'], record['row'], record['person']))
                 record['times'] = [t for t in record['times'] if t >= cutoff]
                 record['sources'] = []
+                record.pop('play', None)
             if record['times']:
                 kept.append(record)
         state['shown'] = kept
@@ -121,7 +129,9 @@ def forget(data, config, before, person, *, apply=False):
                 touched.update((week, row, who) for row, people in rows.items()
                                for who in people if who in (person, 'together'))
         for week, row, who in touched:
-            _cell(state['folded'], week, row, who).update(played=0, sources={}, complete=False)
+            cell = _cell(state['folded'], week, row, who)
+            cell.update(played=0, sources={}, complete=False)
+            cell.setdefault('extra', {})['plays'] = []
         if touched and apply:
             state['sources'] = {}
             _save(data, state)
@@ -228,12 +238,16 @@ def update(data, config, plays, now=None, *, sources=(), cleanup=False):
             coverage.setdefault(source, {'dated': 0, 'undated': 0})['dated' if dated else 'undated'] += 1
             if not dated:
                 continue
+            # Connector copies of the same dated play share an opaque credit.
+            credit = hashlib.sha256(json.dumps(
+                [play['person'], play['key'], play['kind'], float(at)]).encode()).hexdigest()
             for record in index.get((play['key'], play['kind']), ()):
                 if record['person'] not in (play['person'], 'together'):
                     continue
                 if any(0 <= at - shown <= settings(config)['attribution_days']*DAY for shown in record['times']):
                     if source not in record['sources']:
                         record['sources'].append(source)
+                    record.setdefault('play', credit)
         state['sources'] = coverage
         _prune(state, config, now, daily=cleanup)
         _save(data, state)
@@ -262,6 +276,124 @@ def report(data, config, now=None, *, weeks=4, days=None):
                     shown=counts['shown'], played=counts['played'], sources=counts['sources'],
                     complete=counts['complete'], rate=counts['rate']))
     return out
+
+
+def row_learning(store, *, scope, now, attribution_days=None, families=None):
+    """Return bounded learning from enabled, complete counts in store['weeks'].
+
+    extra carries tz (UTC by default), attribution_days and restored (no raw evidence).
+    A caller may also mark individual restored cells with extra.restored.
+    extra.plays holds opaque play credits; played counts without these cannot learn.
+    Each play shares its credit across eligible cohorts and people in the scope.
+    Mood and lane evidence is pooled by family; every slot gets the same L, not a theme claim.
+    Kid and guest scopes have no separately recorded cohorts and stay neutral.
+    """
+    return {row: details['L'] for row, details in row_learning_details(
+        store, scope=scope, now=now, attribution_days=attribution_days, families=families).items()}
+
+
+def row_learning_details(store, *, scope, now, attribution_days=None, families=None):
+    """Pure cohort diagnostics behind row_learning; support is mature week count."""
+    if not store or not store.get('enabled') or scope == 'guest' or scope.startswith('kid:'):
+        return {}
+    extra = store.get('extra', {})
+    if extra.get('restored'):
+        return {}
+    families = families or {}
+    attribution_days = extra.get('attribution_days', DEFAULTS['attribution_days']) if attribution_days is None else attribution_days
+    zone = ZoneInfo(extra.get('tz', 'UTC'))
+    today = dt.datetime.fromtimestamp(now, zone).date()
+    start = today - dt.timedelta(days=today.weekday(), weeks=12)
+    pools, row_pools, plays = {}, {}, {}
+    for week, rows in sorted(store.get('weeks', {}).items()):
+        date = dt.date.fromisoformat(week)
+        end = dt.datetime.combine(date + dt.timedelta(days=7), dt.time(), zone).timestamp()
+        mature = dt.datetime.combine(date + dt.timedelta(days=7 + attribution_days), dt.time(), zone).timestamp()
+        if date < start or now <= mature:
+            continue
+        weight = 2 ** (-(now - end) / (28 * DAY))
+        for row, people in sorted(rows.items()):
+            family = families.get(row)
+            if family in ('utility', 'chart', 'shelf'):
+                continue
+            pool = ('family', family) if family in ('mood', 'lane') else ('row', row)
+            for person, cell in sorted(people.items()):
+                if (scope != 'household' and person != scope or not cell.get('complete', False)
+                        or cell.get('extra', {}).get('restored')):
+                    continue
+                credits = cell.get('extra', {}).get('plays', [])
+                if not cell['shown'] or len(credits) != cell['played']:
+                    continue
+                total = pools.setdefault(pool, {'S': 0.0, 'P': 0.0, 'weeks': set()})
+                total['S'] += weight * cell['shown']
+                for play in credits:
+                    plays.setdefault(play, []).append((pool, weight))
+                total['weeks'].add(week)
+                row_pools[row] = pool
+    if not pools:
+        return {}
+    for credits in plays.values():
+        for pool, weight in credits:
+            pools[pool]['P'] += weight / len(credits)
+    for row, family in sorted(families.items()):
+        pool = ('family', family)
+        if pool in pools:
+            row_pools[row] = pool
+    p0 = (sum(r['P'] for r in pools.values()) + 1) / (sum(r['S'] for r in pools.values()) + 1000)
+    results = {}
+    for pool, counts in pools.items():
+        shown, played, support = counts['S'], counts['P'], len(counts['weeks'])
+        p = (played + 1000 * p0) / (shown + 1000)
+        limit = .01
+        prior = 1000 * p0
+        limited = min(played, max(0, .05 / (limit * math.log(2)) - prior))
+        gain = limit * limited + .05 * math.log2((prior + played) / (prior + limited))
+        learning = max(-.05, min(.05, .05 * math.log2(1000 / (shown + 1000)) + gain))
+        neutral = 'fewer than two mature weeks' if support < 2 else (
+            'fewer than 200 effective showings' if shown < 200 else '')
+        results[pool] = dict(S=shown, P=played, p=p, p0=p0, support=support,
+                             L=0.0 if neutral else learning, neutral=neutral)
+    return {row: dict(results[pool]) for row, pool in sorted(row_pools.items())}
+
+
+def learning_report(data, config, now=None, *, scope='household'):
+    """Read local cohorts without saving, cleaning or loading the server."""
+    now = time.time() if now is None else now
+    out = {'enabled': settings(config)['enabled'], 'scope': scope, 'rows': {}, 'neutral': ''}
+    if not out['enabled']:
+        out['neutral'] = 'metrics are off'
+        return out
+    with _lock:
+        state = _read(Path(data)/'metrics_shown.json', None)
+        if state is None:
+            out['neutral'] = 'restored counts have no attribution evidence' if (Path(data)/'metrics.json').exists() else 'metrics are missing'
+            return out
+        store = {**_totals(_state(data, config, now)), 'enabled': True,
+                 'extra': {'tz': config['region']['tz'], 'attribution_days': settings(config)['attribution_days']}}
+    from .members import rid
+    families = {rid(name, config): family for family, names in (
+        ('utility', ('episodes', 'catchup', 'upcoming', 'rewatch', 'airing', 'nextseason', 'interview')),
+        ('chart', ('top10', 'digital')),
+        ('mood', tuple(f'mood{i}' for i in range(1, 5))),
+        ('lane', tuple(f'lane{i}' for i in range(1, 6)) + ('lanebench1', 'lanebench2')),
+    ) for name in names}
+    for rows in store['weeks'].values():
+        for row in rows:
+            if row.startswith(rid('shelf_', config)):
+                families[row] = 'shelf'
+    out['rows'] = row_learning_details(store, scope=scope, now=now, families=families)
+    if not out['rows']:
+        out['neutral'] = 'no complete mature cohorts for this scope'
+    return out
+
+
+def learning_text(result):
+    yield f"Row learning: {result['scope']} (mood and lane slots share family evidence)"
+    yield 'Row                             S        P        p       p0  support        L  Neutral reason'
+    for row, r in result['rows'].items():
+        yield f"{row:<30}  {r['S']:>7.1f}  {r['P']:>7.1f}  {r['p']:>7.4f}  {r['p0']:>7.4f}  {r['support']:>7}  {r['L']:>7.4f}  {r['neutral']}"
+    if result['neutral']:
+        yield result['neutral']
 
 
 def collect(server, now):

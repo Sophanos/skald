@@ -255,7 +255,8 @@ class NewToYouRow(Base):
         self.assertIn("newtoyou", members.ROW_KEYS)
         self.assertEqual(members.ROW_KEYS[-1], "newtoyou")
         self.assertFalse(s.row_enabled(cid))
-        before = self.cids()
+        with patch.dict(s.CONFIG['household'], row_labels={}):
+            before = self.cids()
         self.assertNotIn(cid, before)
         day = dt.datetime(2026, 10, 13, 20)
         self.assertNotIn("newtoyou", [name for name, *_ in s.job_specs(day, {})])
@@ -470,7 +471,7 @@ class ReviewFixes(Base):
         self.assertEqual(items["ben"]["at"], int(NOW))
 
     def test_parse_command_version_bumped(self):
-        self.assertEqual(self.s.DECISIONS["parse_command"]["ver"], 11)
+        self.assertEqual(self.s.DECISIONS["parse_command"]["ver"], 12)
 
 
 if __name__ == "__main__":

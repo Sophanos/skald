@@ -238,6 +238,7 @@ class RowsR2(unittest.TestCase):
                 patch.object(s, 'tired_keys', return_value={}), \
                 patch.object(s, 'rank_by_taste', side_effect=lambda m, xs: [(None, [], *x) for x in xs]), \
                 patch.object(s, 'with_match', side_effect=lambda x: x), patch.object(s, 'is_hero', return_value=False), \
+                patch.object(s, 'themed_row', side_effect=lambda m, p, theme, items, *a, **kw: items), \
                 patch.object(s, 'lane_member', return_value=True), \
                 patch.object(s, 'lane_title', return_value='Synthetic Anime' if anime else 'Synthetic'), redirect_stdout(io.StringIO()):
             return s.lanes_feed('de-DE')
@@ -255,11 +256,11 @@ class RowsR2(unittest.TestCase):
         self.assertEqual(self.lane_build(metas, metas[:12])['_names'], {})
 
     def test_lane_healthy_chosen_and_storage_retained(self):
-        # A viable shelf is selected while its stored reserve remains unchanged.
+        # Front-of-home cards do not count as this lane's own supply.
         metas = cards(32)
         out = self.lane_build(metas, metas[24:])
         self.assertEqual(out['_names'][rid('lane1', self.s.CONFIG)]['lane'], 'k:1')
-        self.assertEqual(out[rid('lane1', self.s.CONFIG)]['pool'], metas)
+        self.assertEqual(out[rid('lane1', self.s.CONFIG)]['pool'], metas[:24])
         self.assertEqual(len(out[rid('lane1', self.s.CONFIG)]['tv']), 24)
 
     def test_lane_majority_animation_skip_unless_anime(self):
@@ -325,13 +326,14 @@ class RowsR2(unittest.TestCase):
             self.assertCountEqual(result, metas)
             self.assertEqual(result[-5:], metas[3:8])
 
-    def test_mood_move_preserves_selected_twenty(self):
-        # Hero movement happens inside the selected shelf rather than losing cards at its size limit.
+    def test_mood_caps_heroes_in_selected_twenty(self):
+        # The home cap removes surplus heroes without borrowing replacements.
         s, metas = self.s, cards(30)
         with patch.object(s, 'is_hero', side_effect=lambda x: int(x['id'][5:]) < 8):
             result = self.served(rid('mood1', s.CONFIG), metas)
-            self.assertCountEqual(result, metas[:20])
-            self.assertLessEqual(sum(s.is_hero(x) for x in result[:10]), 3)
+            self.assertEqual(len(result), 20)
+            self.assertEqual(sum(s.is_hero(x) for x in result), s.ROW_HERO_MAX)
+            self.assertTrue(all(x in result for x in metas[8:26]))
 
     def test_report_measures_row_targets(self):
         # The report must cover every session target without exposing title data.

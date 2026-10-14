@@ -37,7 +37,7 @@ def parser():
 
     def cmd(parent, name):
         descriptions = {"taste": "inspect taste and learning", "show": "show the taste profile", "why": "explain a title's fit",
-                        "report": "summarize recent learning", "explain": "trace a title's score", "rows": "preview recommendation rows",
+                        "report": "summarize recent learning", "align": "show taste drivers and correction previews", "calibration": "inspect local match calibration", "explain": "trace a title's score", "rows": "preview recommendation rows",
                         "react": "simulate a reaction", "learn": "inspect learning signals", "metrics": "show local weekly row play counts",
                         "connectors": "show input health and sync cadence", "health": "show saved server checks, repairs and alert availability", "memory": "inspect memory proposals", "doctor": "check local setup and state", "keys": "inspect mixed title keys",
                         "import": "import one local export", "imports": "list or undo imports", "list": "list saved items", "undo": "undo a saved import",
@@ -91,6 +91,10 @@ def parser():
     addon.add_argument("--rotate-addon-token", action="store_true")
     taste = cmd(commands, "taste").add_subparsers(dest="taste", required=True)
     person(cmd(taste, "show"))
+    align = cmd(taste, "align")
+    align.add_argument("--person", choices=(*PEOPLE, "household"), help="member to inspect; omit for the household")
+    align.add_argument("--limit", type=int, default=10, help="maximum drivers and facets per kind, 1..100")
+    cmd(taste, "calibration").add_argument("--person", choices=(*PEOPLE, "together", "household"))
     why = cmd(taste, "why")
     why.add_argument("title", nargs="+")
     person(why)
@@ -106,6 +110,25 @@ def parser():
     rows.add_argument("--row")
     rows.add_argument("--n", type=int, default=10)
     rows.add_argument("--lang", default=members.CONFIG["region"]["lang"])
+    row_actions = rows.add_subparsers(dest="rows_action")
+    row_actions.add_parser("pool", help="inspect pool seeds and cached counts").add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    for op in ('plan', 'why', 'prefer', 'refresh'):
+        c = row_actions.add_parser(op, help={'plan': 'explain every home row', 'why': 'explain one row and its cards',
+                                       'prefer': 'change a household row family cap', 'refresh': 'queue a row refresh for the worker'}[op])
+        c.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
+        if op in ('plan', 'why'):
+            c.add_argument('--person', choices=('household', 'together', *PEOPLE, 'guest'), default='household')
+            c.add_argument('--lang', default=argparse.SUPPRESS)
+        else:
+            c.add_argument('--yes', action='store_true', help='apply the preview')
+            c.add_argument('--plan', help='apply only if the preview hash still matches')
+        if op in ('why', 'refresh'):
+            c.add_argument('row_name', metavar='ROW', help='registered row id or label')
+        if op == 'prefer':
+            c.add_argument('--theme', choices=('mood', 'lane'), required=True, help='row family to change')
+            direction = c.add_mutually_exclusive_group(required=True)
+            direction.add_argument('--more', action='store_true', help='raise the row limit by one')
+            direction.add_argument('--fewer', action='store_true', help='lower the row limit by one')
     react = cmd(commands, "react")
     react.add_argument("action", nargs="?", choices=("love", "loves", "like", "likes", "meh", "seen", "not_for_us", "not_tonight", "interest"))
     react.add_argument("title", nargs="*")
@@ -125,7 +148,11 @@ def parser():
         "--person", "--member", dest="person", choices=PEOPLE if not members.CONFIG_ERROR else None)
     cmd(commands, "learn")
     cmd(commands, "health")
-    cmd(commands, "metrics").add_argument("--days", type=int, help="include row weeks touching the last 1..35 days (default: 4 weeks)")
+    metrics = cmd(commands, "metrics")
+    metrics.add_argument("--days", type=int, help="include row weeks touching the last 1..35 days (default: 4 weeks)")
+    learning = metrics.add_subparsers(dest="metrics_action").add_parser("learning", help="show mature row learning without writing")
+    person(learning)
+    learning.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     suggestions = cmd(commands, "suggest")
     suggestions.add_argument("--person", choices=PEOPLE, required=True)
     suggestions.add_argument("--dismiss", help="dismiss one suggestion id for 90 days")
@@ -354,8 +381,12 @@ def execute(args, engine, state, snapshot, out=None):
     if args.command == "taste":
         if args.taste == "show":
             return engine.profile(args.person)
+        if args.taste == "align":
+            return engine.align(args.person, args.limit)
         if args.taste == "report":
             return engine.report(args.person, args.since, args.before)
+        if args.taste == "calibration":
+            return engine.calibration(args.person)
         key = title_key(engine, args.title)
         if args.trace:
             return engine.trace(key, args.person)
@@ -363,6 +394,11 @@ def execute(args, engine, state, snapshot, out=None):
     if args.command == "explain":
         return engine.trace(title_key(engine, args.title), args.person)
     if args.command == "rows":
+        if args.rows_action == "pool":
+            return engine.pool()
+        if args.rows_action in ('plan', 'why'):
+            from . import rowplan
+            return rowplan.plan(engine._server, args.person, args.lang) if args.rows_action == 'plan' else rowplan.why(engine._server, args.row_name, args.person, args.lang)
         if not 1 <= args.n <= 100:
             raise ValueError("--n must be between 1 and 100")
         data = engine.rows(args.lang)
@@ -400,6 +436,9 @@ def execute(args, engine, state, snapshot, out=None):
     if args.command == "learn":
         return engine.learn()
     if args.command == "metrics":
+        if args.metrics_action == 'learning':
+            from .metrics import learning_report
+            return learning_report(engine._work, engine._server.CONFIG, scope=args.person or 'household')
         return engine.metrics(days=args.days)
     if args.command == "memory":
         return engine.memory(args.person, args.explain)
@@ -490,6 +529,9 @@ def text_output(args, data, out):
             line(f"Pending: {data['pending']['review']} review · {data['pending']['memory']} memory")
             for action in data["actions"]:
                 line(action["cli"])
+    elif args.command == "taste" and args.taste == "align":
+        from .alignment import text
+        line(text(data))
     elif args.command == "taste" and args.taste == "show":
         line(f"{data['person'] or 'Household'} · {data['titles']} titles · " + ", ".join(f"{k} {v}" for k, v in data["sources"].items()))
         for group in ("experiences", "themes", "creators"):
@@ -501,6 +543,12 @@ def text_output(args, data, out):
         line("Signals: " + ", ".join(f"{k} {v}" for k, v in data["signals"].items()))
         for source, counts in data["source_signals"].items():
             line(f"  {source:10} " + ", ".join(f"{signal} {n}" for signal, n in counts.items()))
+    elif args.command == "taste" and args.taste == "calibration":
+        ref = data['reference']
+        line(f"{data['person'] or 'Household'} · reference {ref['kind'] or 'unavailable'} · {ref['size']} titles")
+        line("Scores: " + " · ".join(f"{p} {number(value)}" for p, value in data['scores'].items()))
+        for cid, row in data['rows'].items():
+            line(cid + ": " + " · ".join(f"{band}% {n}" for band, n in row['bands'].items()) + f" · unknown {row['unknown']}")
     elif args.command == "taste" and args.taste == "report":
         name = (data["person"] or "Household").title()
         w, cal = data["movers"]["window"], data["calibration"]
@@ -532,6 +580,22 @@ def text_output(args, data, out):
             for e in data["events"]:
                 line(f"  {e['src']} {e['day'] or 'undated'} {e['weight']:+.3f} · {e['title']}")
     elif args.command == "rows":
+        if args.rows_action == "pool":
+            line(f"Pool: {data['pool_size']} candidates")
+            if data.get('counts_built_at') is not None:
+                line(f"Counts from background build: {data['counts_built_at']}; selection matches: {data['selection_matches_build']}")
+            if data.get('unavailable_endpoints'):
+                line(f"Unavailable offline endpoints: {data['unavailable_endpoints']}")
+            for e in data['seeds']:
+                line(f"  {e['title']} ({e['key']}, {e['kind']}): {'chosen' if e['chosen'] else 'skipped'}, {e['reason']}; "
+                     f"candidates {e['candidates']}, kept {e['kept']}")
+            line(f"Cap: {data.get('cap', 6)} per seed; removed {data.get('cap_removed', 0)}")
+            return
+        if args.rows_action in ('plan', 'why'):
+            from .rowplan import text
+            for value in text(data):
+                line(value)
+            return
         for row in data["rows"]:
             line(f"{row['id']} · {row['name']}")
             for i, title in enumerate(row["titles"], 1):
@@ -561,8 +625,8 @@ def text_output(args, data, out):
                 health += "; " + c['health']['fixHint']
             line(f"{c['id']}{origin} | {c['kind']} | {c['person']} | {health} | {date(c['last_new'])} | {date(c['next_due'])} | {c['reminder'] or '—'}")
     elif args.command == "metrics":
-        from .metrics import text
-        for message in text(data):
+        from .metrics import text, learning_text
+        for message in (learning_text(data) if getattr(args, 'metrics_action', None) == 'learning' else text(data)):
             line(message)
     elif args.command == "memory":
         facts = [data["fact"]] if "fact" in data else data["facts"]
@@ -686,6 +750,7 @@ def main(argv=None, out=None):
     sub, _ = tail.parse_known_args(known.command[1:])
     known.remote, known.person = sub.remote, sub.person
     known.json = known.json or sub.json
+    calibration = [arg for arg in known.command if arg != "--json"][:2] == ["taste", "calibration"]
     known.command = known.command[0] if known.command else None
     args = None
     try:
@@ -722,7 +787,10 @@ def main(argv=None, out=None):
                 return 0 if ok else 1
         from . import migrate
         cli_argv = sys.argv[1:] if argv is None else argv
-        if not known.snapshot and not known.live and not known.remote and known.command != "suggest" and not any(
+        readonly_align = known.command == "taste" and "align" in cli_argv
+        row_control = known.command == 'rows' and any(v in ('plan', 'why', 'prefer', 'refresh') for v in cli_argv)
+        if not known.snapshot and not known.live and not known.remote and known.command != "suggest" and not readonly_align and not row_control and not calibration and not (
+                known.command == "metrics" and "learning" in cli_argv) and not any(
                 flag in cli_argv for flag in ('--help', '-h')):
             local_data = os.environ.get("DATA_DIR", "/data")
             # Additive settings/history formats need no writes for read-only commands.
@@ -740,10 +808,30 @@ def main(argv=None, out=None):
         if members.CONFIG_ERROR and (isinstance(members.CONFIG_ERROR, FormatError) or args.command not in ("backup", "doctor", "connect")):
             raise members.CONFIG_ERROR
         state = Path(args.state_dir).resolve()
+        if args.command == "taste" and args.taste == "calibration":
+            if args.live:
+                raise ValueError("taste calibration reads local data only; omit --live")
+            with Engine(args.snapshot or os.environ.get("DATA_DIR", "/data")) as engine:
+                data = engine.calibration(args.person)
+            if args.json:
+                print(json.dumps(data, ensure_ascii=False, allow_nan=False), file=out)
+            else:
+                text_output(args, data, out)
+            return 0
         if args.command is None:
             p.print_help(file=out)
             if not (state / "onboard.json").exists():
                 print("start with: skald onboard", file=out)
+            return 0
+        if args.command == "taste" and args.taste == "align":
+            if args.live:
+                raise ValueError('taste align reads local DATA_DIR or --snapshot only; omit --live')
+            with redirect_stdout(sys.stderr), Engine(args.snapshot or os.environ.get('DATA_DIR', '/data')) as engine:
+                data = engine.align(args.person, args.limit)
+            if args.json:
+                print(json.dumps(data, ensure_ascii=False, allow_nan=False), file=out)
+            else:
+                text_output(args, data, out)
             return 0
         if args.command == "history":
             from .history import forget
@@ -780,13 +868,17 @@ def main(argv=None, out=None):
                     print("Repeat with --yes to apply these counts.", file=out)
             return 0
         if args.command == "metrics":
-            from .metrics import report, settings, disable
+            from .metrics import report, settings, disable, learning_report
             if args.live:
                 raise ValueError('metrics reads local DATA_DIR or --snapshot only; omit --live')
             members.require_config(members.CONFIG_SOURCE, members.CONFIG_ERROR)
-            if not args.snapshot and not settings(members.CONFIG)['enabled']:
+            if not args.snapshot and args.metrics_action != 'learning' and not settings(members.CONFIG)['enabled']:
                 disable(os.environ.get('DATA_DIR', '/data'))
-            data = report(args.snapshot or os.environ.get('DATA_DIR', '/data'), members.CONFIG, days=args.days)
+            if args.metrics_action == 'learning':
+                data = learning_report(args.snapshot or os.environ.get('DATA_DIR', '/data'), members.CONFIG,
+                                       scope=args.person or 'household')
+            else:
+                data = report(args.snapshot or os.environ.get('DATA_DIR', '/data'), members.CONFIG, days=args.days)
             if args.json:
                 print(json.dumps(data, ensure_ascii=False, allow_nan=False), file=out)
             else:
@@ -822,12 +914,42 @@ def main(argv=None, out=None):
                     data = s.shelf_change(scope, args.shelf_op, apply=getattr(args, "yes", False) or args.shelf_op in ("stop", "count"), **kwargs)
             print(json.dumps(data, ensure_ascii=False, indent=None if args.json else 2), file=out)
             return 0
+        if args.command == 'rows' and args.rows_action in ('plan', 'why'):
+            from . import rowplan
+            if args.live:
+                raise ValueError('rows plan and why use local DATA or --snapshot')
+            with Engine(args.snapshot or os.environ.get('DATA_DIR', '/data'), offline=True) as engine:
+                data = rowplan.plan(engine._server, args.person, args.lang) if args.rows_action == 'plan' else rowplan.why(engine._server, args.row_name, args.person, args.lang)
+            print(json.dumps(data, ensure_ascii=False) if args.json else '\n'.join(rowplan.text(data)), file=out)
+            return 0
+        if args.command == 'rows' and args.rows_action in ('prefer', 'refresh'):
+            from . import commands
+            if args.live or args.snapshot:
+                raise ValueError('row changes use local DATA_DIR')
+            data_dir = Path(os.environ.get('DATA_DIR', '/data'))
+            with Engine(data_dir, offline=True) as engine:
+                s = engine._server
+                # Household controls do not need a player or network refresh.
+                s.aio_rows_changed = lambda: None
+                if args.rows_action == 'refresh':
+                    answer = dict(op='row_refresh', kind=None, values=[args.row_name], person=None)
+                else:
+                    answer = dict(op='home_more' if args.more else 'home_fewer', kind=None, values=[args.theme], person=None)
+                data = commands.preview(s, '', next((p for p in s.PEOPLE if s.kids_age(p) is None), None), answer=answer)
+                data['source'] = 'cli'
+                if args.plan and args.plan != data['plan']:
+                    raise ValueError('Plan changed; preview again')
+                if args.yes or args.plan:
+                    with patch.object(s, 'DATA', str(data_dir)):
+                        data = commands.apply(s, data)
+            print(json.dumps(data, ensure_ascii=False) if args.json else data['name'] + ('? Plan: '+data['plan'] if 'plan' in data else ''), file=out)
+            return 0
         if args.command == "command":
             from . import commands, setup
             with setup.server(Path(os.environ.get("DATA_DIR", "/data")),
                               report=lambda line: print(line, file=sys.stderr if args.json else out)) as s:
                 if args.undo:
-                    data = commands.undo(s, commands.people(s, viewer=args.person))
+                    data = commands.undo(s, commands.people(s, viewer=args.person), source='cli')
                 else:
                     data = commands.preview(s, args.text, args.person)
                     if data is None:

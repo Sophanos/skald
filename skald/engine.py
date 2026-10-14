@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_FILES = (".skald-format", "skald.json", "legacy.json", "profile.json", "emb.json", "facets.json", "learn.json", "taste.json", "trakt.json",
-              "feeds.json", "shown.json", "history.json", "history-summary.json", "history-forgotten.json", "feedback.jsonl", "imports.jsonl", "online.json", "metrics.json", "memory.json", "interview.json", "taste_ring.json", "connectors.json", "shelves.json", "undo.jsonl", "archetypes.json", "title_fixes.json")
+              "feeds.json", "shown.json", "shown_scopes.json", "history.json", "history-summary.json", "history-forgotten.json", "feedback.jsonl", "imports.jsonl", "online.json", "metrics.json", "memory.json", "interview.json", "taste_ring.json", "connectors.json", "shelves.json", "undo.jsonl", "archetypes.json", "title_fixes.json")
 
 
 def data_files(config):
@@ -59,6 +59,20 @@ def denied(*args, **kwargs):
 def plain(value):
     return json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False,
                                  default=lambda v: sorted(v) if isinstance(v, set) else list(v)))
+
+
+def facet_view(model, person=None, types="xktd", n=10, keys=None):
+    aff = model["paff"].get(person, {}) if person else model["aff"]
+    out = []
+    for fid, value in sorted(aff.items(), key=lambda pair: (-pair[1], pair[0])):
+        if fid[0] not in types or keys is not None and fid not in keys:
+            continue
+        anchors = [model["ent"][k][0] for _, k in model["holders"].get(fid, [])
+                   if k in model["ent"] and (not person or person in model["ent"][k][1] or "together" in model["ent"][k][1])][:3]
+        out.append({"id": fid, "name": model["names"].get(fid, fid), "affinity": round(value, 4), "anchors": anchors})
+        if len(out) >= n:
+            break
+    return out
 
 
 class Engine:
@@ -268,17 +282,11 @@ class Engine:
             raise ValueError("unknown person")
 
     def _facets(self, model, person=None, types="xktd", n=10, keys=None):
-        aff = model["paff"].get(person, {}) if person else model["aff"]
-        out = []
-        for fid, value in sorted(aff.items(), key=lambda pair: (-pair[1], pair[0])):
-            if fid[0] not in types or keys is not None and fid not in keys:
-                continue
-            anchors = [model["ent"][k][0] for _, k in model["holders"].get(fid, [])
-                       if k in model["ent"] and (not person or person in model["ent"][k][1] or "together" in model["ent"][k][1])][:3]
-            out.append({"id": fid, "name": model["names"].get(fid, fid), "affinity": round(value, 4), "anchors": anchors})
-            if len(out) >= n:
-                break
-        return out
+        return facet_view(model, person, types, n, keys)
+
+    def align(self, person=None, limit=10):
+        from .alignment import view
+        return view(self._server, self._profile, self._model, person, limit)
 
     def profile(self, person=None):
         self._person(person)
@@ -310,7 +318,37 @@ class Engine:
                 "percentile": percentile, "confidence": confidence, "maturity": s.maturity(self._model, person),
                 "reasons": s.reasons(self._model, key, fids, 3, person, kind),
                 "facets": facets,
-                "calibration": "snapshot has no trending baseline" if percentile is None else "trending"}
+                "calibration": self._model.get("cal_reference") or "snapshot has no reference"}
+
+    def calibration(self, person=None):
+        from . import shelves
+        person = None if person == "household" else person
+        self._person(None if person == "together" else person)
+        s, m = self._server, self._model
+        bg = m.get("pbg", {}).get(person, []) if person else m["bg"]
+        scores = {f"p{p}": bg[round((len(bg)-1)*p/100)] if bg else None for p in (0, 10, 25, 50, 75, 90, 100)}
+        owners = {**s.ROW_OWNER, **{s.rid(f"shelf_{w['scope']}_{w['slot']}"): w['scope'] for w in shelves.read(s)['wishes']}}
+        rows = {}
+        for (cid, lang), rec in sorted(s._feeds.items()):
+            if lang != s.LANG:
+                continue
+            who = owners.get(cid, person)
+            for typ, metas in (rec.get("metas") or {}).items():
+                if typ not in ("tv", "movie", "series") or not isinstance(metas, list):
+                    continue
+                bands, unknown = {f"{d}-{d+9}": 0 for d in range(40, 100, 10)}, 0
+                for meta in metas:
+                    kind = "movie" if meta.get("type") == "movie" else "tv"
+                    score = s.person_score(m, meta["id"], who, kind)[0]
+                    pct = s.match_pct(m, score, who)
+                    if pct is None:
+                        unknown += 1
+                    else:
+                        bands[f"{pct//10*10}-{pct//10*10+9}"] += 1
+                row = cid if typ == "tv" else cid + ":" + typ
+                rows[row] = {"person": who, "bands": bands, "unknown": unknown}
+        return {"person": person, "reference": {"kind": m.get("cal_reference"), "size": len(bg)},
+                "scores": scores, "rows": rows}
 
     def explain(self, key):
         return plain(self._server.explain(key, self._index.get(key, {}).get("kind")))
@@ -469,6 +507,32 @@ class Engine:
                                   "undated": sum(ev["t"] is None for ev in events),
                                   "baseline": bool(dated and cutoff >= min(dated))}, "facets": facets, "decay": decay},
             "rows": rows, "calibration": calibration})
+
+    def pool(self, tmdb=None):
+        """Inspect today's seeds and cached build counts, or replay with a supplied offline TMDB."""
+        s = self._server
+        p = s.adult_profile(s._profiles.get('household')) or {'entries': [], 'seen': set(), 'negative': set()}
+        feed = s.feed(s.rid('foryou'), s.LANG)
+        cached = (feed.get('names') or {}).get('pool')
+        report = {}
+        if cached is not None and tmdb is None:
+            report = copy.deepcopy(cached)
+            s.pool_seeds(p, report)
+            counts = {(e['key'], e['kind']): e for e in cached['seeds']}
+            for e in report['seeds']:
+                old = counts.get((e['key'], e['kind']))
+                e.update({k: old[k] if old else None for k in ('candidates', 'kept')})
+            report['counts_built_at'] = feed.get('built')
+            report['selection_matches_build'] = {(e['key'], e['kind']) for e in report['seeds'] if e['chosen']} == \
+                                                {(e['key'], e['kind']) for e in cached['seeds'] if e['chosen']}
+        else:
+            with patch.object(s, 'tmdb', tmdb or s.tmdb):
+                s.candidate_pool(p, metas=True, report=report)
+            report['counts_built_at'] = None
+            report['selection_matches_build'] = True
+        cards = feed.get('metas', {}).get('tv') or []
+        report['unique_foryou_titles'] = len({(x['id'], x['type']) for x in cards})
+        return report
 
     def rows(self, lang=None):
         s = self._server

@@ -55,6 +55,20 @@ class LanesPin(unittest.TestCase):
                 self.assertEqual(serve.call_count, calls)
                 self.assertIs(s.feed(s.LANES[0], LANG), pinned)
 
+    def test_hidden_moods_do_not_replace_the_lane_pin(self):
+        s = self.s
+        s.CONFIG['household']['home'] = {'family_caps': {'mood': 0}}
+        self.put(s.LANES[0], cards(16), 'k:1')
+        self.put(s.LANE_BENCH[0], cards(16, 100), 'k:2')
+        s._feeds[s.MOODS_ROWS[0], LANG] = {'metas': {'tv': cards(16)}}
+        with patch.object(s, 'DEDUPE_ORDER', [s.MOODS_ROWS[0], *s.LANES]):
+            pins = s.pin_decision(LANG)
+            self.assertEqual(pins[s.LANES[0], LANG]['names']['lane'], 'k:1')
+            s._pin_cache.clear()
+            s.CONFIG['household']['rows'] = ['moods', 'lanes']
+            pins = s.pin_decision(LANG)
+            self.assertEqual(pins[s.LANES[0], LANG]['names']['lane'], 'k:2')
+
     def test_pin_cache_misses_on_changed_inputs(self):
         s = self.s
         self.put(s.LANES[0], cards(16), 'k:1')
@@ -186,6 +200,7 @@ class LanesPin(unittest.TestCase):
 
     def test_cross_session_name_content_and_first_safe_unused_bench(self):
         s = self.s
+        s.CONFIG['household']['rows'] = ['lanes']
         for i, cid in enumerate(s.LANES):
             self.put(cid, cards(4 if i < 2 else 16, i*100), f'k:{i+1}')
         self.put(s.LANE_BENCH[0], cards(16, 600), 'k:6')
@@ -250,6 +265,30 @@ class LanesPin(unittest.TestCase):
             row = s.row_metas(s.LANES[0], 'tv', LANG, who='none')
             self.assertEqual(len(row), 16)
             self.assertEqual(row.names['lane'], 'k:2')
+
+    def test_vetted_additions_survive_pinned_lane_after_build_changes_theme(self):
+        s, cid = self.s, self.s.LANES[0]
+        xs = [dict(x, _row={'theme': 'k:1'}) for x in cards(16)]
+        self.put(cid, xs, 'k:1')
+        s._facets.clear()
+        s.pin_shown(LANG)
+        self.put(cid, cards(16, 100), 'k:2')
+        row = s.row_metas(cid, 'tv', LANG, who='none')
+        self.assertCountEqual([x['id'] for x in row], [x['id'] for x in xs])
+        self.assertEqual(row.names['lane'], 'k:1')
+        self.assertFalse(s.row_related(dict(cards(1, 999)[0], _row={'theme': 'k:1'}), cid, LANG))
+
+    def test_vetted_bench_additions_and_reserve_survive_promotion(self):
+        s, cid = self.s, self.s.LANES[0]
+        self.put(cid, cards(4), 'k:1')
+        xs = [dict(x, _row={'theme': 'k:2'}) for x in cards(16, 100)]
+        self.put(s.LANE_BENCH[0], xs[:4], 'k:2', xs[4:])
+        s._facets.clear()
+        s.pin_shown(LANG)
+        self.assertEqual(s.feed(cid, LANG).get('_bench'), s.LANE_BENCH[0])
+        row = s.row_metas(cid, 'tv', LANG, who='none')
+        self.assertCountEqual([x['id'] for x in row], [x['id'] for x in xs])
+        self.assertEqual(row.names['lane'], 'k:2')
 
     def test_restart_keeps_bench_record_and_its_reserve(self):
         s = self.s

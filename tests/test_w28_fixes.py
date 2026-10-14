@@ -115,6 +115,7 @@ class W28Fixes(unittest.TestCase):
         shutil.copytree(FIXTURE/'data', self.data, dirs_exist_ok=True)
         cfg = json.loads((self.data/'legacy.json').read_text())
         cfg['row_prefix'] = 'test'
+        cfg['household']['row_order'] = []
         (self.data/'legacy.json').write_text(json.dumps(cfg))
         order = Path(self.temp.name)/'order.mjs'
         with setup.server(self.data) as s:

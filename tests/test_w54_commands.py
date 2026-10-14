@@ -165,7 +165,10 @@ class Commands(unittest.TestCase):
         req = {'viewer': 'ana', 'client': {'name': 'synthetic'}, 'body': {'in': {'query': 'hide anime'}}}
         with self.assertRaises(PermissionError):
             self.c.api_preview(self.s, req)
-        self.s.decide.assert_not_called()
+        self.s.decide.assert_called_once()
+        (name, inp), kwargs = self.s.decide.call_args
+        self.assertEqual((name, inp['query'], kwargs), ('parse_command', 'hide anime', {'allow_llm': True}))
+        self.assertNotIn('api:synthetic', self.c.pending(self.s))
 
     def test_undo_consumes_superseded_taste_event(self):
         self.change.update(op='like', kind='tv', values=['Dark'])

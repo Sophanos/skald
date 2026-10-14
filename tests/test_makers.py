@@ -34,6 +34,7 @@ class Makers(unittest.TestCase):
                 patch.object(s, 'lane_titles', side_effect=lambda fid, *a, **kw: [(x['id'], 'movie', x) for x in pool[fid]]) as fetch, \
                 patch.object(s, 'rank_by_taste', side_effect=lambda m, xs: [(None, [], *x) for x in xs]), \
                 patch.object(s, 'lane_title', side_effect=lambda fid, *a: f'Title {fid}'), \
+                patch.object(s, 'themed_row', side_effect=lambda m, p, theme, items, *a, **kw: items), \
                 patch.object(s, 'person_loves', return_value=[]), redirect_stdout(io.StringIO()):
             out = s.lanes_feed('en-US')
         return out, fetch

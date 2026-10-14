@@ -95,7 +95,9 @@ def report(snapshot, base=None, base_ref=BASE_REF):
                 for scope in (None, *s.SCOPES):
                     root = f"/{s.LANG}/" + (f"p/{scope}/" if scope is not None else "")
                     routes.append(root + "manifest.json")
-                    routes.extend(root + f"catalog/{typ}/{cid}.json" for cid, typ in catalogs)
+                    with s.addon_scope(scope):
+                        scoped_catalogs = [(cid, typ) for cid, types, _ in s.feed_rows(s.LANG) for typ in types]
+                    routes.extend(root + f"catalog/{typ}/{cid}.json" for cid, typ in scoped_catalogs)
                     routes.extend(root + f"catalog/{typ}/{rid('search', s.CONFIG)}/search={query}.json"
                                   for typ in ("movie", "series")
                                   for query in ("fixture", "Am%C3%A9lie", "%E6%97%A5%E6%9C%AC%E8%AA%9E", "a" * 180))

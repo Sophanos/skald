@@ -14,21 +14,37 @@ or `~/.local/share/skald`. Change that with `--state-dir PATH`.
 |---|---|
 | `me` | Show what is known about you, including your taste archetype: `skald --snapshot /path/copy me --person alex` |
 | `taste show` | Show your taste profile: `skald --snapshot /path/copy taste show --person alex` |
+| `taste align` | Read the titles and facets shaping your picks, with correction previews: `skald --snapshot /path/copy taste align --person alex --limit 10 --json`. Omit `--person` for the household. Writes nothing. |
 | `taste why` | Explain a title's fit: `skald --snapshot /path/copy taste why tmdb:123 --person alex` |
 | `taste report` | Summarize recent learning: `skald --snapshot /path/copy taste report --since 7` |
+| `taste calibration` | Inspect the reference, score percentiles and cached row match bands without fetching or writing: `skald taste calibration --person alex --json` |
 | `explain` | Show scoring details and the household taste archetype: `skald --snapshot /path/copy explain tmdb:123` |
 | `rows` | Preview rows: `skald --snapshot /path/copy rows --n 10` |
+| `rows pool [--json]` | Read today's seed choices and last background pool counts: `skald --snapshot /path/copy rows pool --json`; missing offline endpoints are reported, and counts carry their build time. |
+| `rows plan` | Explain every registered home row, including hidden rows: `skald rows plan --person household --lang en-US --json`. Reads local `DATA_DIR` or `--snapshot`; `--person` also accepts `together`, a member or `guest`. |
+| `rows why ROW` | Explain one row and its kept and dropped cards: `skald rows why mood1 --person ana --json`. Uses the same read-only build as `rows plan`. |
+| `rows prefer` | Preview a household mood or lane limit change: `skald rows prefer --theme mood --more` or `--theme lane --fewer`. Defaults are three each; limits are 0..8. Apply with `--plan HASH` from the preview or `--yes`. Preview and apply refuse a reduction below six populated rows, or the current count if already lower, and never allow zero. Changes use the existing atomic `skald.json` write; the server reloads them on its next row request or worker pass. An explicit household `rows` list bypasses these limits. |
+| `rows refresh ROW` | Preview refreshing one row: `skald rows refresh mood1`. Apply with `--plan HASH` or `--yes`; the CLI atomically queues row ids in `DATA_DIR/row_refresh.json`, without writing feeds or calling upstream services. The worker clears those rows' stamps and deletes the request at the start of its next feed pass. Older servers ignore the request. A grouped mood or lane build can also rebuild its siblings. Queued CLI refreshes have no undo. |
 | `learn` | Inspect viewing signals: `skald --snapshot /path/copy learn` |
 | `suggest` | Read your weekly habits: `skald suggest --person alex`. Use `--dismiss ID` to hide a theme for 90 days in private DATA_DIR. Listing writes nothing; a read-only copy also works with `--snapshot`. |
 | `memory` | Inspect saved preferences: `skald --snapshot /path/copy memory` |
 | `history` | Preview forgetting old evidence: `skald history --forget-before 2026-09-01 --person alex`. `--dry-run` is the default; repeat with `--yes` to write local DATA_DIR. A mid-month cutoff removes that person's whole boundary month; typed ratings and existing backups stay. |
 | `history --cleanup` | Preview configured raw retention cleanup and its unresolved residual count. Add `--yes` to apply; disabled retention writes nothing. |
 | `metrics` | Show counts per row, person and week for the current week and previous three: `skald metrics`. Reads local `DATA_DIR`; `skald --snapshot /path/copy metrics --days 7` includes weeks touching those days. Lists play sources, never titles. |
+| `metrics learning` | Read mature row learning without writing: `skald metrics learning --person alex --json`. Omit `--person` for the household. Shows decayed showings (S), credited plays (P), posterior (p), discovery baseline (p0), mature week support, learning (L) and why neutral. Mood and lane slots share family evidence. |
 | `health` | Read saved server checks, the last repair and alert availability: `skald health --json`. Reads local DATA_DIR or an explicit copy; makes no network requests. |
 
 `taste report` shows "Learned from N of M titles" for each adult: positive taste
 titles with a facet record out of their positive taste titles. Shared watches count
 for each adult. `--json` includes these counts under `coverage`, by member.
+
+Each For You candidate pool invocation makes at most 34 TMDB list requests and
+fetches details for at most 50 uncached candidates, best ranked first. Ranking
+uses cached taste facets first, then list ratings and vote counts for unknown
+titles. The remaining details fill in through the cache on later builds.
+The background feed build invokes the pool twice, for the prompt and for cards,
+so its pools use at most 68 list requests and 100 candidate detail requests.
+These bounds exclude taste model preparation, genre lists and resolving AI picks.
 
 ## Teach it
 
@@ -157,6 +173,10 @@ See [connectors](CONNECTORS.md#mdblist) for limits and disconnect instructions.
 `no horror` and `hide horror` exclude Horror from movies and series; `hide horror movies` changes movies only. Including a genre without a type clears it for both. `create a new catalog about psygoloy crime`, `add a row for crime`, `neue Reihe mit Horrorfilmen` and `erstelle einen Katalog über Psychologie und Krimi` preview an always-on shelf. Theme text, including typos, stays as typed. `best catalog of crime movies` remains a one-off search.
 
 Shelves accept any weekday list and whole clock hours, for example `every monday,friday 19-22 comedy`. German phrases include `montags morgens`, `freitags abends`, `wochentags morgens` and `am Wochenende abends`, followed by a theme. An explicit start such as `at 20:00` runs until midnight. Schedules use the existing logical day from 05 to 29 (05:00 next morning). Household row commands include `rename For You to Ana Picks`, `hide Top 10`, `show Latest Digital Releases` and `put Top 10 above For You`. They change rows for everyone. Undo refuses to overwrite a later household row change.
+
+Commander also answers `why these rows?`, `why does Because show this` and `why don't I see mood rows` from the home plan (`home_plan`). Ask for `more mood rows` (`home_more`), `fewer lane rows` (`home_fewer`) or `new picks in the cozy row` (`row_refresh`) to preview a household change. Confirm with the exact `yes NN` shown in the preview, then use `undo` to revert. `Refresh this row` asks which row when there is no row context. These operations use the same model decision path and support English, German and Serbian. Undo a Commander refresh inside Commander; the CLI refuses to restore worker stamps. A refresh undo refuses to overwrite a newer background build.
+
+The family limits live in `household.home.family_caps`, for example `{"mood": 3, "lane": 3}`. Missing limits default to three, including when only row order or labels are configured. Plan counts describe the stored feeds under the current viewer's filters, including Family and active archived rows. Inspection uses cached metadata only and never enriches records, pins rows or records exposures. Metrics, when enabled, add shown and play counts from the last four weeks.
 
 Search `every sunday morning a classic for us` or `weekday evenings something light for me` for a scheduled shelf in the household timezone (Sunday 05-12 or weekdays 18-24). Use `for MEMBER` for a named person, or `for us`, `for both`, `for both of us`, `for everyone` or `for together` for a Together shelf. `make me a row of heist films` creates an always-on shelf. `stop Classics` or `stop the sunday shelf` previews stopping an existing shelf with that name; unmatched names stay title searches; `undo` restores it. `show 6 shelves` or `fewer shelves` previews a slot count change (0..10). After shelf changes Skald asks AIOStreams to reload row names for logins made by `skald setup aiostreams`; Stremio installed with Skald's own link may need the link reinstalled to show new names. Full shelves ask you to stop one first. `my settings` or `settings` lists personal and Together shelves. `what do you know about NAME` answers for a named member. A member id or full label also works in `my settings for NAME`, `NAME settings`, `NAME's settings`, `settings NAME` or `settings for NAME`. `help` shows five search examples. `ideas` and `suggest` offer at most two habit suggestions; `yes NN` creates one and `no NN` dismisses it for 90 days. The exact `yes NN` code comes first in each preview or suggestion card name. Card names stay short (24 characters); open a card to read its details. Command cards appear once, in movie search results; paired series requests return no command cards. Shared links ask for a member. Children can manage their own shelves; fills keep their age filter, and they cannot change Together or other people's shelves.
 

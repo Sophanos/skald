@@ -81,6 +81,7 @@ class ScopedAddon(unittest.TestCase):
                 expected = {**legacy, 'id': legacy['id'] + '.' + scope,
                             'name': legacy['name'] + ' · ' + scope.title(),
                             'description': legacy['description'] + ' · ' + scope.title()}
+                expected['catalogs'] = [r for r in legacy['catalogs'] if scope not in s.PEOPLE or r['id'] not in s.ROW_OWNER or s.ROW_OWNER[r['id']] == scope]
                 self.assertEqual((code, raw), (200, wire(expected)))
         self.assertEqual(Path(s.DATA, 'shown.json').read_bytes(), shown)
 

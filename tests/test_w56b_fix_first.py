@@ -66,9 +66,9 @@ class TogetherFixes(unittest.TestCase):
         s = self.s
         def stamps():
             return {name: stamp for name, _, stamp, _, _ in s.job_specs(s.local_now(), {'household': 'same'})}
-        with patch.object(s, 'OR_KEY', 'synthetic'):
+        with patch.dict(s.CONFIG['household'], {'row_order': []}), patch.object(s, 'OR_KEY', 'synthetic'):
             before = stamps()
-            self.assertEqual(hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(), '692d4460d206e4cc29bf3ac9a91c0439eea738d797127cf002b22dc3c8b09d5a')
+            self.assertEqual(hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(), 'b8114b2e7a062c15d6fcaee8293b864a5a700d789f7a3a5598d615913718da72')
             with self.prefs(ana={'kids_age': 8}):
                 child = stamps()
             with self.prefs(ana={'kids_age': 13}):

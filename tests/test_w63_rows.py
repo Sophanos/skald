@@ -136,7 +136,7 @@ class SelectedRows(unittest.TestCase):
                 expected = s.rid('foryou' if key == 'foryou' else 'rewatchai')
                 self.assertEqual(personal[1], [expected])
                 result = personal[4]('en-US')
-                self.assertEqual(set(result), {expected})
+                self.assertEqual(set(result), {expected, '_names'} if key == 'foryou' else {expected})
                 self.assertEqual([c.args[0] for c in picks.call_args_list], [['new'] if key == 'foryou' else ['old']])
                 self.assertEqual(llm.call_args.args[5], [section])
                 self.assertNotIn('## ' + ('REWATCH' if key == 'foryou' else 'FOR YOU'), llm.call_args.args[0])
@@ -153,18 +153,17 @@ class SelectedRows(unittest.TestCase):
                 self.assertEqual(self.served(cid, xs, who='ana', typ='movie'), [xs[24], *xs[:19]])
                 self.assertEqual(self.served(cid, xs[:8], who='ana', typ='movie'), xs[:8])
 
-    def test_player_order_only_skips_explicitly_disabled_rows(self):
+    def test_player_order_skips_unlisted_rows(self):
         from eval.rows_report import display_rows
         s = self.s
         with tempfile.TemporaryDirectory() as temp, patch.object(s, 'feed_rows', return_value=[]):
             order = Path(temp) / 'order.mjs'
             order.write_text("const ORDER = ['player.foryou:tv'];")
-            with self.assertRaises(KeyError):
-                display_rows(s, order=order)
+            self.assertEqual(display_rows(s, order=order), [])
             cfg = copy.deepcopy(s.CONFIG)
             cfg['household']['rows'] = ['foryou']
-            with patch.object(s, 'CONFIG', cfg), self.assertRaises(KeyError):
-                display_rows(s, order=order)
+            with patch.object(s, 'CONFIG', cfg):
+                self.assertEqual(display_rows(s, order=order), [])
             cfg['household']['rows'] = ['top10']
             with patch.object(s, 'CONFIG', cfg):
                 self.assertEqual(display_rows(s, order=order), [])

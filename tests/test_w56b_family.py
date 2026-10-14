@@ -30,11 +30,12 @@ class Family(unittest.TestCase):
             s.personal_feed('en-US')
             return llm.call_args.args[:2]
 
-    def test_no_child_household_unchanged(self):
+    def test_no_child_household_default_rows(self):
         s = self.s
         with patch.object(s, 'pin_shown'), patch.object(s, 'feed', return_value={}):
             value = [s.manifest('en-US'), self.served(s.rid('leap'), cards(8), who='both'), self.prompt()]
-        self.assertEqual(hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest(), '5922dd6659f82cf5883ac0cc5120a7d155350a1a0f22bd469ce1aa7811e0dd31')
+        value[0]['catalogs'] = [c for c in value[0]['catalogs'] if c['id'] not in s.BECAUSE_ROWS[1:]]
+        self.assertEqual(hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest(), '56b6ed45067d0a1ef55ec52803633dafeac7ae2f52e1360f92ab8cc12594a372')
         self.assertEqual(s.adult_people(), s.PEOPLE)
         self.assertNotIn('family', [j[0] for j in s.job_specs(s.local_now(), {})])
 

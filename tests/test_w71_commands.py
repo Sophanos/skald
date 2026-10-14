@@ -29,7 +29,7 @@ class SettingsCommands(unittest.TestCase):
 
     def test_glm_fallback_and_override(self):
         spec = self.s.DECISIONS['parse_command']
-        self.assertEqual(spec['ver'], 11)
+        self.assertEqual(spec['ver'], 12)
         fallback = spec['llm']['fallback']
         self.assertEqual(fallback['timeout'], 6)
         body = fallback['prompt']([{'query': 'hide anime'}])
@@ -225,6 +225,7 @@ class SettingsCommands(unittest.TestCase):
         self.assertLessEqual(ranked.index(metas[0]), 3)
 
     def test_hiding_a_row_keeps_the_other_rows_in_place(self):
+        c.apply(self.s, self.plan('row_rename', values=['foryou', 'Picks']))
         with patch.object(self.s, 'feed', return_value={}), patch.object(self.s, 'shelf_rows', return_value=[]):
             before = [r[0] for r in self.s.feed_rows()]
             c.apply(self.s, self.plan('row_hide', values=['top10']))

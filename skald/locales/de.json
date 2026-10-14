@@ -1,0 +1,16 @@
+{
+  "align.drivers": "Einflüsse",
+  "align.days": "Tage",
+  "align.genres": "Genres",
+  "align.themes": "Themen",
+  "align.makers": "Filmschaffende",
+  "align.feelings": "Gefühle",
+  "align.check": "Prüfen (nur Korrekturvorschauen)",
+  "align.none": "Keine strukturellen Hinweise.",
+  "align.backfill_only": "Nur gesammelt markierte Wiedergaben.",
+  "align.undated": "Kein Wiedergabedatum gespeichert.",
+  "align.dominant": "Mindestens die Hälfte des positiven Gewichts.",
+  "align.member_conflict": "Hier positiv, bei einem anderen Mitglied negativ.",
+  "align.shared_only": "Nur Daten von einem gemeinsamen Gerät oder Konto.",
+  "align.ignored_seeding": "Lernen ignoriert, aber weiterhin als Ausgangstitel genutzt."
+}

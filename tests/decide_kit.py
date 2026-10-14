@@ -162,8 +162,9 @@ def check_contract(testcase, server, name, fixtures=None):
     for row in rows:
         for schema, value in ((spec["inp"], row["in"]), (spec["out"], row["expect"])):
             for string in _free_strings(server, schema, value):
-                # A query can equal a public enum such as the history operation.
-                if string not in _closed_strings(spec['out']):
+                # Public op suffixes such as fewer can also be literal command values.
+                enums = _closed_strings(spec['out'])
+                if string not in enums and not any(e.endswith('_'+string) for e in enums):
                     testcase.assertNotIn(string, text)
     if spec["serving"]:
         reset(server)
@@ -251,7 +252,7 @@ def synthetic_model(server):
     return m
 
 
-SETUP = {"explain_pick": synthetic_model, "mood_pick": reset, "rank_titles": synthetic_model}
+SETUP = {"explain_pick": synthetic_model, "mood_pick": reset, "theme_source": reset, "rank_titles": synthetic_model}
 
 
 def write_legacy(data):

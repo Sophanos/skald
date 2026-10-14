@@ -25,6 +25,9 @@ class LanesR3(unittest.TestCase):
         s = self.s
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
+        cfg = copy.deepcopy(s.CONFIG)
+        cfg['household']['row_order'] = []
+        self.stack.enter_context(patch.object(s, 'CONFIG', cfg))
         for store in (s._feeds, s._shown, s._facets, s._home_cache):
             self.stack.enter_context(patch.dict(store, {}, clear=True))
         self.stack.enter_context(patch.dict(s._profiles, {'household': {'seen': set(), 'negative': set(), 'entries': []}}, clear=True))
@@ -50,7 +53,7 @@ class LanesR3(unittest.TestCase):
         self.s._feeds[cid, 'de-DE'] = {'metas': {'tv': xs, 'pool': list(pool)},
                                        'names': {'title': f'Title {fid}', 'lane': fid}}
 
-    def build(self, groups):
+    def build(self, groups, source=None):
         s = self.s
         model = {'aff': {fid: len(groups)-i for i, fid in enumerate(groups)}, 'names': {fid: 'HBO' if fid[0] in 'nc' else fid for fid in groups}}
         for fid, xs in groups.items():
@@ -58,11 +61,13 @@ class LanesR3(unittest.TestCase):
         with patch.object(s, 'get_model', return_value=model), \
                 patch.object(s, 'lane_titles', side_effect=lambda fid, lang: [(x['id'], 'movie', x) for x in groups[fid]]), \
                 patch.object(s, 'rank_by_taste', side_effect=lambda m, xs: [(None, [], *x) for x in xs]), \
+                patch.object(s, 'themed_row', side_effect=source or (lambda m, p, theme, items, *a, **kw: items)), \
                 patch.object(s, 'lane_title', side_effect=lambda fid, *a: f'Title {fid}'), redirect_stdout(io.StringIO()):
             return s.lanes_feed('de-DE')
 
     def test_build_excludes_every_built_front_and_all_moods(self):
         s, front, deep = self.s, [], []
+        s.CONFIG['household']['home'] = {'family_caps': {'mood': len(s.MOODS_ROWS)}}
         for i, cid in enumerate(s.DEDUPE_ORDER[:s.DEDUPE_ORDER.index(s.LANES[0])]):
             if not s.row_enabled(cid):
                 continue
@@ -86,6 +91,39 @@ class LanesR3(unittest.TestCase):
         self.assertEqual(len(out[rid('lane1', self.s.CONFIG)]['pool']), 80)
         self.assertEqual(self.build({'k:1': cards(15)})['_names'], {})
         self.assertIn(rid('lane1', self.s.CONFIG), self.build({'k:1': cards(16)})['_names'])
+
+    def test_hidden_moods_do_not_reserve_lane_titles(self):
+        s = self.s
+        for cap, shared in ((0, 1), (1, 2)):
+            s._feeds.clear()
+            s.CONFIG['household']['home'] = {'family_caps': {'mood': cap}}
+            for i in (1, 2):
+                s._feeds[s.rid('mood'+str(i)), 'de-DE'] = {'metas': {'tv': cards(16, i*100)}}
+            with self.subTest(cap=cap):
+                out = self.build({'k:1': cards(16, shared*100)})
+                self.assertEqual(len(out[s.LANES[0]]['tv']), 16)
+        s.CONFIG['household']['rows'] = ['moods', 'lanes']
+        s.CONFIG['household']['home']['family_caps']['mood'] = 0
+        self.assertEqual(self.build({'k:1': cards(16, 100)})[s.LANES[0]]['tv'], [])
+
+    def test_source_status_follows_selected_theme_to_final_slot(self):
+        from skald import rowplan
+        s = self.s
+        self.put(s.LANES[1], [], 'k:1')
+        sourced = []
+        def source(m, p, theme, items, lang, cid, **kw):
+            sourced.append(theme['key'])
+            rowplan.source_status(s, cid, lang, date='2026-10-11',
+                                  reused=theme['key'] == 'k:2', failed=theme['key'] == 'd:3')
+            return items
+        with patch.dict(s._row_source_status, {}, clear=True):
+            out = self.build({'k:1': cards(16, 100), 'k:2': cards(16, 200), 'd:3': cards(1, 300)}, source)
+            self.assertEqual(sourced, ['k:1', 'k:2', 'd:3'])
+            self.assertEqual(out['_names'][s.LANES[1]]['lane'], 'k:1')
+            self.assertTrue(s._row_source_status[s.LANES[1], 'de-DE']['fresh'])
+            self.assertEqual(out['_names'][s.LANES[0]]['lane'], 'k:2')
+            self.assertTrue(s._row_source_status[s.LANES[0], 'de-DE']['reused_today'])
+            self.assertFalse(s._row_source_status[s.LANES[0], 'de-DE']['failed'])
 
     def test_build_earlier_lanes_exclude_the_whole_depth(self):
         xs = cards(40)

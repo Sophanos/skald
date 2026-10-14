@@ -23,6 +23,7 @@ class Search(unittest.TestCase):
     resolve = search_base.SearchRouting.resolve
     results = search_base.SearchRouting.results
     finish_pickers = search_base.SearchRouting.finish_pickers
+    legacy_picker = search_base.SearchRouting.legacy_picker
     http_results = talk_base.Talk.http_results
 
     def test_typo_title_keeps_ready_picker_after_person_timeout_or_failure(self):
@@ -46,7 +47,8 @@ class Search(unittest.TestCase):
                 elapsed = clock() - start
                 self.assertEqual([(meta['id'], meta['name']) for meta in metas], [('tmdb:42', self.s.AI_MARK+'Arrival')])
                 self.assertLess(elapsed, .18, 'typo fallback exceeded the scaled .14-second deadline')
-                picker.assert_called_once()
+                self.finish_pickers()
+                self.assertEqual(picker.call_count, 2)
 
     def test_slow_person_search_and_credits_respect_deadline(self):
         self.route['choice'] = 'title'
@@ -77,10 +79,11 @@ class Search(unittest.TestCase):
         with patch.object(self.s, 'llm_text', return_value='Sorry, I cannot suggest anything.') as text:
             for _ in range(2):
                 self.assertEqual([m['id'] for m in self.results('synthetic malformed picker')], ['tmdb:40'])
-            self.assertEqual(text.call_count, 2)
+            self.assertEqual(text.call_count, 4)
             self.assertEqual(self.s._ai, {})
 
     def test_deliberate_empty_picker_stays_empty_and_cached(self):
+        self.legacy_picker()
         self.llm_picks.side_effect = self.real_llm_picks
         self.search_both.return_value = ([{'id': 40, 'title': 'TMDB fallback'}], {})
         for reply in ('', ' \n'):
@@ -113,7 +116,8 @@ class Search(unittest.TestCase):
                     time.sleep(.15)
             rows = [job.result(timeout=2) for job in jobs]
         self.assertEqual([call.args[1]['query'] for call in self.decide.call_args_list], ['Incept'])
-        self.assertEqual([call.args[1].splitlines()[0] for call in self.llm_picks.call_args_list], ['Incept'])
+        self.finish_pickers()
+        self.assertEqual([call.args[1].splitlines()[0] for call in self.llm_picks.call_args_list], ['Incept', 'Incept'])
         self.assertEqual(rows[:2], [[], []])
         self.assertTrue(rows[2])
 
@@ -159,6 +163,7 @@ class Search(unittest.TestCase):
         self.assertEqual(parallel, [True])
 
     def test_per_type_cache_and_prompt(self):
+        self.legacy_picker()
         movie = self.s.ai_future('synthetic wish', stype='movie')
         series = self.s.ai_future('synthetic wish', stype='series')
         self.assertIsNot(movie, series)
@@ -305,9 +310,9 @@ class Search(unittest.TestCase):
         self.assertEqual(fallbacks.count('TimeoutError'), 1)
         self.assertTrue(prompts)
         for system, tokens, stype in prompts:
-            self.assertIn('18 lines', system)
+            self.assertIn(f'{18 if tokens == 850 else s.SEARCH_WIDE_SIZE} lines', system)
             self.assertIn('This catalog shows movies only' if stype == 'movie' else 'This catalog shows series only', system)
-            self.assertEqual(tokens, 850)
+            self.assertIn(tokens, (850, 2000))
 
     def test_refine_drops_raw_picker_and_uses_combined_wish(self):
         self.results('first wish')

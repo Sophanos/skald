@@ -43,6 +43,12 @@ REGISTRY = {
     'explain': _op('title', kids=True, hint='explain is a why question about one title in the picks and changes nothing: "Why is Dune here?" values [Dune].'),
     'like_results': _op('results', feedback='love', hint='like_results saves every shown result as the actor\'s taste: "I like these, save them as my taste". Use only with shown results context; kind null values [] person null.'),
     'shelf_from_results': _op('results', kids=True, hint='shelf_from_results saves the shown results as a row or shelf named from the last search: "save this as a row". Use only with shown results context; kind null values [] person null.'),
+    'taste_drivers': _op('read', kids=True, hint='taste_drivers reads what shapes this person\'s picks, with drivers and correction previews; changes nothing: kind null values [], language the speaker\'s BCP 47 language code (en, de, sr-latn or sr-cyrl). '
+                        '"what shapes my picks?", "warum empfiehlst du mir so viele Krimis?", "zašto mi stalno nudiš anime?" are taste_drivers. A why question about one named title is explain; asking for titles now is a search.'),
+    'home_plan': _op('home', kids=True, hint='home_plan explains home rows, read only: "why these rows?" values [], "why does Because show this" values [because], "why don\'t I see mood rows" values [moods]; kind null. Values [lanes] explain the lane family.'),
+    'home_more': _op('home', hint='home_more raises a household row family cap: "more mood rows" values [mood]; "more lane rows" values [lane]; kind null.'),
+    'home_fewer': _op('home', hint='home_fewer lowers a household row family cap: "fewer lane rows" values [lane]; "fewer mood rows" values [mood]; kind null.'),
+    'row_refresh': _op('home', hint='row_refresh requests new picks for one household row, kind null values [row id]. Use the current row context for "this"; without row context use ask slot change and ask which row. Use [] if a row reference is unresolved. Resolve a named dynamic row to its id from the row context. Title names like Refresh This Row are searches, not commands.'),
 }
 OPS = tuple(REGISTRY)
 BASE = ('op', 'kind', 'values', 'person')
@@ -53,7 +59,8 @@ SLOTS = {'change': 'Which change do you mean?', 'person': 'Who should this apply
 FILTERS = {'kind': ('movie', 'series', None), 'runtime': (int, None), 'years': ([(int, None), 2], None),
            'languages': ([str, 10], None), 'exclude_genres': ([str, 10], None), 'hide': ([str, 5], None)}
 OUT = {**STEP, 'steps': ([STEP, 6], None), 'slot': (*SLOTS, None), 'question': (str, None), 'age': (int, None),
-       'label': (str, None), 'months': ([int, 12], None), 'filters': (FILTERS, None), 'until': (str, None), 'reason': (str, None)}
+       'label': (str, None), 'months': ([int, 12], None), 'filters': (FILTERS, None), 'until': (str, None), 'reason': (str, None),
+       'language': (str, None)}
 NONE = dict(op=None, kind=None, values=[], person=None)
 
 def parse_json(content):
@@ -257,10 +264,8 @@ IGNORES = (r"(?:don't|do not|please don't)\s+learn\s+(?:anything\s+)?from\s+(?:m
 MOVES = (r'(\w+)\s+(?:watched|saw)\s+(.+?),?\s+not\s+(?:me|i)', r'(.+?)\s+(?:je gledao|je gledala|је гледао|је гледала)\s+(.+?),?\s+(?:ne ja|не ја)',
          r'(\w+)\s+hat\s+(.+?)\s+(?:geschaut|gesehen|angeschaut),?\s+nicht ich', r'(.+?)\s+hat\s+(\w+)\s+(?:geschaut|gesehen|angeschaut),?\s+nicht ich')
 EXPLAINS = (r'why (?:is|was) (.+?) (?:here|there|in (?:my|our|the) \w+|recommended|suggested|showing|shown)\b.*',
-            r'why (?:do|did) you (?:recommend|suggest|show) (?:me )?(.+?)(?: to me| for me)?',
             r'warum (?:wird|wurde) mir (.+?) (?:empfohlen|vorgeschlagen|gezeigt)', r'warum (?:ist|steht) (.+?) (?:hier|da|in meinen \w+)\b.*',
-            r'warum empfiehlst du (?:mir )?(.+)', r'zašto je (.+?) (?:ovde|ovdje|tu|u mojim \w+|preporučen\w*)\b.*',
-            r'zašto mi (?:preporučuješ|predlažeš) (.+)', r'зашто је (.+?) (?:овде|ту)\b.*')
+            r'zašto je (.+?) (?:ovde|ovdje|tu|u mojim \w+|preporučen\w*)\b.*', r'зашто је (.+?) (?:овде|ту)\b.*')
 NOT_TITLES = {'it', 'this', 'that', 'this one', 'that one', 'them', 'es', 'das', 'den', 'ihn', 'to', 'ovo', 'taj', 'то', 'ово', 'me', 'mich', 'ja', 'i'}
 
 def fix_title(text, s):
@@ -427,11 +432,15 @@ def row_id(name):
     return aliases.get(name, name if name in ROW_KEYS else None)
 
 def row_settings(cfg):
-    return {key: copy.deepcopy(cfg['household'].get(key)) for key in ('rows', 'row_labels', 'row_order')}
+    return {key: copy.deepcopy(cfg['household'].get(key)) for key in ('rows', 'row_labels', 'row_order', 'home')}
 
 def edit_rows(cfg, change, s):
     from .members import ROW_KEYS
     op, kind, values = change['op'], change['kind'], change['values']
+    if op in ('home_more', 'home_fewer'):
+        from .rowplan import prefer
+        prefer(cfg, values[0], op == 'home_more')
+        return
     count = 2 if op in ('row_rename', 'row_move') else 1
     if kind is not None or len(values) != count or values[0] not in ROW_KEYS:
         raise ValueError('row id or values')
@@ -615,7 +624,7 @@ def shelf_preview(s, change, viewer, bound):
 
 def command_prompt(s):
     return ('Return JSON with every key always present: op, kind, values, person; null when unknown. Exactly one persistent personal change, one extra op below or op null. '
-              'Do not guess person, kind, days or hours unless clearly stated. Title names, questions and ordinary one-off searches return op null, except explicit settings/list requests. '
+              'Do not guess person, kind, days or hours unless clearly stated. Title names, questions and ordinary one-off searches return op null, except the read ops described below. '
               'Never choose hide/show for a genre: hide horror movies means exclude_genre Horror kind movie. '
               'Genre exclusion or inclusion without a type uses kind null and applies to movies and series. '
               'Only hide movies/series when asked to remove the whole type. Explicit shelf requests are changes. Ops: ' + ', '.join(OPS) + '. '
@@ -632,6 +641,7 @@ def command_prompt(s):
               'reset my taste is unsupported, op null. Never reset learned taste, ratings or viewing history. '
               'Row commands affect the household: row_rename values [row id,new label], row_hide/row_show [row id], row_move [row id,before row id]. '
               'Row ids: episodes,foryou,week,upcoming,catchup,rewatch,because,leap,top10,people,moods,lanes,docs,studios,anime,shelves,digital,toprated,newtoyou. '
+              'Row context lists current row ids and labels; resolve named rows to those ids. It does not select a current row for the word this. '
               'Top 10 maps to top10, top rated to toprated, Latest Digital Releases to digital, For You to foryou, New to You to newtoyou. '
               'shelf_add kind null, values [theme, always] or [theme, days, hours] (comma-separated mon,tue,wed,thu,fri,sat,sun or weekdays/weekend/daily; clock hour window 05-12 or 18-24). '
               'Creating, adding or making a catalog, row, shelf or list about/for/with/of a theme is shelf_add [theme,always]. '
@@ -664,8 +674,9 @@ def register(s):
         body = request(batch[0], fallback_model, fallback_effort)
         body['max_tokens'] = 1200
         return body
-    s.decision('parse_command', ver=11, lane='search', cap=None, ttl=30*s.DAY,
-        inp={'query': str, 'last': (str, None), 'shown': (str, [str, 30], None)}, out=OUT, norm=s.route_norm, rule=rule, params={},
+    s.decision('parse_command', ver=12, lane='search', cap=None, ttl=30*s.DAY,
+        inp={'query': str, 'last': (str, None), 'shown': (str, [str, 30], None), 'rows': ([{'id': str, 'label': str}, 100], None)}, out=OUT,
+        norm=lambda inp: {**s.route_norm(inp), **({'rows': inp['rows']} if inp.get('rows') is not None else {})}, rule=rule, params={},
         llm={'path': '/api/v1/chat/completions', 'model': model, 'batch': 1, 'timeout': 6,
              'prompt': lambda b: request(b[0], model, effort),
              'parse': lambda r, b: [(parse(r), 1)],
@@ -677,7 +688,8 @@ def command_state(inp):
     shown = inp.get('shown') or ''
     if isinstance(shown, list):
         shown = ', '.join(shown)
-    return f"Last search: {inp['last']}\nShown titles: {shown}\nTyped now: {inp['query']}" if inp.get('last') is not None else inp['query']
+    text = f"Last search: {inp['last']}\nShown titles: {shown}\nTyped now: {inp['query']}" if inp.get('last') is not None else inp['query']
+    return text + ('\nRow context: '+json.dumps(inp['rows'], ensure_ascii=False) if inp.get('rows') else '')
 def pending(s):
     if not hasattr(s, '_commands_pending'):
         s._commands_pending = {}
@@ -778,10 +790,8 @@ def preview(s, text, viewer=None, bound=None, answer=None, scope=None, prior=Non
     local = dict(NONE) if results else parse_local(text, s, viewer, bound)
     if not results and text.strip().casefold().startswith('stop ') and not local['op']:
         return None
-    inp = {'query': text}
-    if results:
-        inp.update(last=results['query'], shown=[x['title'] for x in s.shown_titles(results)])
-    change = copy.deepcopy(answer if answer is not None else local if local['op'] else s.decide('parse_command', inp)['answer'])
+    from .rowplan import command_input
+    change = copy.deepcopy(answer if answer is not None else local if local['op'] else s.decide('parse_command', command_input(s, text, results))['answer'])
     change = {**dict.fromkeys(OUT), **change}
     s.check(OUT, change)
     change['values'] = change['values'] or []
@@ -794,10 +804,27 @@ def preview(s, text, viewer=None, bound=None, answer=None, scope=None, prior=Non
         return reset_preview(s, text, change, viewer, bound)
     if change['op'] == 'redo' or change['op'] == 'undo' and change['values']:
         return history_preview(s, text, change, viewer, bound)
-    if change['op'] in ('settings', 'shelf_list', 'history'):
+    if change['op'] in ('settings', 'shelf_list', 'history', 'taste_drivers'):
         if change['kind'] is not None or change['values']:
             raise ValueError('read-only settings command')
         target = shelf_scope(s, change['person'], viewer, bound)
+        if change['op'] == 'taste_drivers':
+            from .alignment import view, text as alignment_text
+            actor = bound if bound in s.PEOPLE else viewer
+            if actor in s.PEOPLE and target not in (actor, 'together'):
+                raise PermissionError('This read applies to another member')
+            profile = s._profiles.get('household')
+            if profile is None and not getattr(s, '_CONFIG_READONLY', False):
+                # A second engine would load all of server.py again inside the live server.
+                raise ValueError('Taste is still loading. Try again in a minute.')
+            if profile is None:
+                from .engine import Engine
+                with Engine(s.DATA) as engine:
+                    data = engine.align(target)
+            else:
+                data = view(s, profile, s.get_model(False), target)
+            description = alignment_text(data, change['language'] or s.LANG)
+            return dict(read_only=True, people=[target], name=description.splitlines()[0], description=description, alignment=data)
         if change['op'] == 'history':
             details = [relative_time(s.time.time(), e.get('t'))+': '+e['name']+(' (undone)' if e.get('undone') else '')
                        for e in reversed(journal(s).get(target, []))]
@@ -1247,7 +1274,8 @@ def apply_title(s, plan):
         s.aio_rows_changed()
     return {'name': 'Done: '+plan['name']+". Search 'undo' to revert."}
 
-EXTRA = {'plan': plan_preview, 'correct': correct_preview, 'ask': ask_preview, 'search': search_preview,
+from .rowplan import preview as home_preview
+EXTRA = {'home': home_preview, 'plan': plan_preview, 'correct': correct_preview, 'ask': ask_preview, 'search': search_preview,
          'wish': wish_preview, 'member': member_preview, 'rule': rule_preview, 'title': title_preview}
 
 def journal(s):
@@ -1585,7 +1613,7 @@ def apply(s, plan, *, cfg=None):
             first = plan['undo_first']
             if undo_stamp(journal(s), first['people']) != first['stamp']:
                 raise ValueError('Commands changed; preview again')
-            undo(s, first['people'], actor=first['viewer'])
+            undo(s, first['people'], actor=first['viewer'], source=plan.get('source'))
             apply(s, preview(s, plan['text'], first['viewer'], first['bound'], answer=plan['change']))
             return {'name': 'Done: '+plan['name']+". Search 'undo' to revert."}
         if plan.get('target') or plan.get('reset'):
@@ -1597,11 +1625,24 @@ def apply(s, plan, *, cfg=None):
         if plan.get('member') or plan.get('rule'):
             return apply_rule(s, plan)
         current, entries = config(s), journal(s)
+        if plan.get('refresh'):
+            from .rowplan import refresh, queue_refresh
+            people(s, viewer=plan['actor'])
+            r = plan['refresh']
+            if plan.get('source') == 'cli':
+                queue_refresh(s, r['id'])
+                return {'name': 'Queued: '+plan['name']+'. The worker will refresh it on its next feed pass.'}
+            refresh(s, r['id'], r['before'])
+            p = plan['people'][0]
+            entry = history_entry(s, plan, plan['before'][p], plan['before'][p], refresh=r)
+            entries[p] = (entries.get(p, []) + [entry])[-200:]
+            save_journal(s, entries)
+            return {'name': 'Done: '+plan['name']+". Search 'undo' to revert."}
         if plan.get('change', {}).get('op') == 'undo':
             people(s, viewer=plan['actor'])
             if undo_stamp(entries, plan['people']) != plan['undo_before']:
                 raise ValueError('Commands changed; preview undo again')
-            return undo(s, plan['people'], actor=plan['actor'])
+            return undo(s, plan['people'], actor=plan['actor'], source=plan.get('source'))
         if 'shelf' in plan:
             from . import shelves
             shelf = plan['shelf']
@@ -1640,12 +1681,15 @@ def apply(s, plan, *, cfg=None):
             cfg = copy.deepcopy(current)
         if 'change' in plan and not plan.get('item'):
             for change, targets in plan.get('steps') or [(plan['change'], plan['people'])]:
-                if change['op'].startswith('row_'):
+                if change['op'].startswith('row_') or change['op'] in ('home_more', 'home_fewer'):
                     edit_rows(cfg, change, s)
                 else:
                     for p in targets:
                         edit(cfg, p, change)
         cfg = s.validate_config(cfg, data=s.DATA)
+        if plan.get('change', {}).get('op') in ('home_more', 'home_fewer'):
+            from .rowplan import projected_home
+            projected_home(s, current, cfg, plan['change']['op'] == 'home_more')
         for p in plan['people']:
             event = None
             if plan.get('item'):
@@ -1665,7 +1709,7 @@ def apply(s, plan, *, cfg=None):
         if counts(current) != counts(cfg) or row_settings(current) != row_settings(cfg):
             s.aio_rows_changed()
     return {'name': 'Done: '+plan['name']+'. Search \'undo\' to revert.'}
-def undo(s, targets, actor=None):
+def undo(s, targets, actor=None, *, source=None):
     from . import shelves
     from .setup import publish
     with _LOCK, shelves.locked(s):
@@ -1681,6 +1725,8 @@ def undo(s, targets, actor=None):
             active = [e for e in entries.get(p, []) if not e.get('undone')]
             if not active:
                 raise ValueError('No command to undo')
+            if source == 'cli' and active[-1].get('refresh'):
+                raise ValueError('Undo row refresh in Commander')
             rows = active[-1].get('rows')
             if rows and row_settings(cfg) != rows['after']:
                 raise ValueError('Rows changed; cannot undo an older row command')
@@ -1745,6 +1791,10 @@ def undo(s, targets, actor=None):
                         cfg['household'][key] = value
                 if old['before'] != old['after']:
                     set_prefs(cfg, p, old['before'])
+            elif old.get('refresh'):
+                from .rowplan import refresh
+                r = old['refresh']
+                refresh(s, r['id'], r['before'], restore=True)
             elif old['event']:
                 if any(e['id'] == old['event']['id'] for e in s.active_feedback(s.read_feedback()).values()):
                     s.write_feedback({k: v for k, v in old['event'].items() if k not in ('id', 't', 'undo')} | {'undo': old['event']['id']})
@@ -2105,12 +2155,13 @@ def api_preview(s, req):
         raise ValueError('no_llm')
     s.check({'query': str}, body['in'])
     local = parse_local(body['in']['query'], s, person, viewer)
-    if s.kids_age(viewer) is not None and not REGISTRY.get(local['op'], {}).get('kids'):
-        raise PermissionError('person')
     scope = 'api:'+req['client']['name']
     prior = get_pending(s, scope)
     pending(s).pop(scope, None)
-    answer = local if local['op'] else s.decide('parse_command', body['in'], allow_llm=not body.get('no_llm', False))['answer']
+    from .rowplan import command_input
+    answer = local if local['op'] else s.decide('parse_command', command_input(s, body['in']['query']), allow_llm=not body.get('no_llm', False))['answer']
+    if s.kids_age(viewer) is not None and not REGISTRY.get(answer['op'], {}).get('kids'):
+        raise PermissionError('person')
     plan = preview(s, body['in']['query'], person, viewer, answer=answer, scope=scope, prior=prior)
     if plan and not plan.get('read_only'):
         plan['source'] = 'api'

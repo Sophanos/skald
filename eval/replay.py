@@ -432,7 +432,7 @@ def report(data, elapsed):
     meta = data['metadata']
     lines = ['# Skald offline replay', '',
              f"Snapshot: {meta['snapshot']}; universe n={meta['universe_n']}; seed={meta['seed']}.",
-             f'Runtime: {elapsed:.1f}s. No network; trending calibration skipped; no match percentages inferred.',
+             f'Runtime: {elapsed:.1f}s. No network; local known-title calibration when available; trending fallback skipped.',
              'Ranking ties use ascending key. Unscorable targets count as misses. All numbers are fractions.',
              'The universe is previously collected titles, not uniform distractors; watched ≠ loved. '
              'Static embeddings, facets and snapshot recency weights can contain future information.', '']

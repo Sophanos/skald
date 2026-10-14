@@ -6,7 +6,7 @@
 {"in": {"key": "tmdb:900003", "kind": "movie", "person": "ben"}, "expect": {"why": null, "match": null, "confidence": null, "rung": null}, "recorded": null, "note": "Synthetic calibrated model"}
 {"in": {"key": "tmdb:900003", "kind": "movie", "person": "ana"}, "expect": {"why": "Private puzzle", "match": 96, "confidence": "Good fit", "rung": "facet"}, "recorded": null, "note": "Synthetic calibrated model"}
 {"in": {"key": "tmdb:900003", "kind": "movie", "person": "together"}, "expect": {"why": null, "match": null, "confidence": null, "rung": null}, "recorded": null, "note": "Synthetic calibrated model"}
-{"in": {"key": "tmdb:900005", "kind": "movie", "person": null}, "expect": {"why": "Unanchored theme", "match": 88, "confidence": "Good fit", "rung": "facet"}, "recorded": null, "note": "Synthetic calibrated model"}
+{"in": {"key": "tmdb:900005", "kind": "movie", "person": null}, "expect": {"why": null, "match": 88, "confidence": "Good fit", "rung": null, "reasons": []}, "recorded": null, "note": "Synthetic calibrated model"}
 {"in": {"key": "tmdb:900005", "kind": "movie", "person": "ben"}, "expect": {"why": null, "match": 70, "confidence": "Good fit", "rung": null}, "recorded": null, "note": "Synthetic calibrated model"}
 {"in": {"key": "tmdb:900005", "kind": "movie", "person": "ana"}, "expect": {"why": null, "match": 70, "confidence": "Good fit", "rung": null}, "recorded": null, "note": "Synthetic calibrated model"}
 {"in": {"key": "tmdb:900005", "kind": "movie", "person": "together"}, "expect": {"why": null, "match": 70, "confidence": "Good fit", "rung": null}, "recorded": null, "note": "Synthetic calibrated model"}

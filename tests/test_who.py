@@ -215,8 +215,9 @@ class WhoTests(unittest.TestCase):
                     expected = who in s.PEOPLE and cid in s.PERSON_ROWS
                     self.assertEqual(order.call_count, int(expected))
                     if expected:
-                        self.assertEqual(result[0]['id'], 'tmdb:29')
+                        self.assertEqual(result[0]['id'], 'tmdb:0' if cid == s.rid('foryou') else 'tmdb:29')
             with patch.object(s, 'who_watching', return_value=('ben', 'tap')) as watching, \
+                    patch.object(s, 'feed', return_value={'metas': {'tv': metas}}), \
                     patch.object(s, 'served_row', return_value=[]) as served:
                 s.row_metas(rid('lane5', s.CONFIG), 'tv', 'de-DE')
                 watching.assert_called_once_with()

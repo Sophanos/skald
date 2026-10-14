@@ -24,7 +24,7 @@ class EngineFixTests(unittest.TestCase):
 
     def test_digital_and_toprated_dedupe_and_refill(self):
         s = self.s
-        cards = [dict(id=f'tmdb:{n}', type='movie', name=f'Synthetic {n}') for n in range(40)]
+        cards = [dict(id=f'tmdb:{n}', type='movie', name=f'Synthetic {n} Card') for n in range(40)]
         above = s.mark_above(set(), s.rid('top10'), cards[:10])
         above = s.mark_above(above, s.rid('foryou'), cards[10:30])
         with patch.object(s, 'row_list', return_value=cards), \

@@ -27,16 +27,16 @@ class W95Rows(unittest.TestCase):
 
     def candidates(self, recs, trends, scores, model):
         s = self.s
-        seeds = [{'id': i, 'kind': 'movie', 'title': f'Synthetic Seed {i}'} for i in (9000, 9001)]
+        seeds = [{'key': f'tmdb:{i}', 'id': i, 'kind': 'movie', 'title': f'Synthetic Seed {i}'} for i in (9000, 9001)]
         def tmdb(path, **params):
             return {'results': recs[:15] if path == 'movie/9000/recommendations' else
                     recs[15:] if path == 'movie/9001/recommendations' else
                     trends if path == 'trending/movie/week' else []}
-        def rank(m, items):
+        def rank(m, items, **params):
             return sorted([(scores.get(k), [], k, kind, payload) for k, kind, payload in items],
                           key=lambda x: (x[0] is None, -(x[0] or 0)))
         with ExitStack() as stack:
-            for name, value in {'get_model': model, 'top_seeds': seeds, 'tired_keys': {},
+            for name, value in {'get_model': model, 'pool_seeds': seeds, 'tired_keys': {},
                                 'match_pct': None, 'reasons': [], 'genres': {}}.items():
                 stack.enter_context(patch.object(s, name, return_value=value))
             stack.enter_context(patch.object(s, 'with_match', side_effect=lambda x: x))
@@ -60,15 +60,27 @@ class W95Rows(unittest.TestCase):
         recs = [title(i) for i in range(1, 21)]
         trends = [title(21), title(22)]
         self.assertEqual([x['id'] for x in self.candidates(recs, trends, {}, None)],
-                         [f'tmdb:{i}' for i in range(1, 21)])
+                         [f'tmdb:{i}' for i in (*range(1, 7), *range(16, 21))] + ['tmdb:21', 'tmdb:22'])
         self.assertEqual([x['id'] for x in self.candidates(recs[:19], trends, {}, None)],
-                         [f'tmdb:{i}' for i in range(1, 20)] + ['tmdb:21', 'tmdb:22'])
+                         [f'tmdb:{i}' for i in (*range(1, 7), *range(16, 20))] + ['tmdb:21', 'tmdb:22'])
+        seeds = [{'key': f'tmdb:{i}', 'id': i, 'kind': 'movie', 'title': f'Synthetic Seed {i}'}
+                 for i in range(9000, 9004)]
+        with patch.object(self.s, 'pool_seeds', return_value=seeds), \
+                patch.object(self.s, 'get_model', return_value=None), patch.object(self.s, 'tired_keys', return_value={}), \
+                patch.object(self.s, 'tmdb', side_effect=lambda path, **params: {'results':
+                    [title(100 + i) for i in range(2)] if path.startswith('trending/') else
+                    [title(int(path.split('/')[1]) * 100 + i) for i in range(6)]}), \
+                patch.object(self.s, 'genres', return_value={}), patch.object(self.s, 'with_match', side_effect=lambda x: x):
+            cards = self.s.candidate_pool({'entries': [], 'seen': set(), 'negative': set()}, metas=True)
+        self.assertEqual(len(cards), 24)
+        self.assertNotIn('tmdb:100', [x['id'] for x in cards])
 
     def test_ai_picks_and_refills_share_served_trending_cap(self):
         s, cid = self.s, self.s.rid('foryou')
         recs, trends = [title(i) for i in range(1, 5)], [title(i) for i in (1, 5, 6, 7, 8, 9)]
-        p = {'entries': [{'key': 'tmdb:9000'}], 'seen': set(), 'negative': set(), 'searches': []}
-        seed = {'id': 9000, 'kind': 'movie', 'title': 'Synthetic Seed'}
+        seed = {'key': 'tmdb:9000', 'id': 9000, 'kind': 'movie', 'stype': 'movie',
+                'title': 'Synthetic Seed', 'weight': 1, 'age': 1, 'signal': 'watched'}
+        p = {'entries': [seed], 'seen': set(), 'negative': set(), 'searches': []}
         def tmdb(path, **params):
             return {'results': recs if path.endswith('/recommendations') else
                     trends if path == 'trending/movie/week' else []}

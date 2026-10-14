@@ -61,7 +61,8 @@ class Talk(unittest.TestCase):
         headers, metas = self.http_results('dark movies')
         self.assertTrue(metas)
         self.assertEqual(headers['Cache-Control'], 'no-store')
-        self.llm_picks.assert_called_once()
+        self.finish_pickers()
+        self.assertEqual(self.llm_picks.call_count, 2)
 
     def test_context_rows_ttl_and_scope(self):
         s = self.s
@@ -183,10 +184,10 @@ class Talk(unittest.TestCase):
             self.results('more like this')
             first = picker.call_count
             self.results('more like this', 'series')
-            self.assertEqual(picker.call_count, first + 2)
+            self.assertEqual(picker.call_count, first + 4)
             self.results('cozy movies')
             self.results('more like this')
-            self.assertEqual(picker.call_count, first + 6)
+            self.assertEqual(picker.call_count, first + 12)
 
     def test_router_cache_includes_ids_and_previous_answers(self):
         self.results('dark movies')
@@ -214,8 +215,8 @@ class Talk(unittest.TestCase):
             self.results('save this as a row')
         self.assertTrue(special.call_args.kwargs['routed'])
         self.assertEqual(special.call_args.kwargs['results']['query'], 'dark movies')
-        self.assertEqual(special.call_args.kwargs['results']['rows']['movie'][0]['title'], 'Title 4')
-        self.assertLessEqual(self.llm_picks.call_count, 1)
+        self.assertEqual(special.call_args.kwargs['results']['rows']['movie'][0]['title'], 'Title 1')
+        self.assertLessEqual(self.llm_picks.call_count, 2)
 
     def test_followup_uses_router_instead_of_local_settings_rules(self):
         self.results('dark movies')
@@ -232,7 +233,7 @@ class Talk(unittest.TestCase):
         self.llm_picks.reset_mock()
         self.assertEqual([x['id'] for x in self.results('Title 8')], ['tmdb:8'])
         self.assertEqual(self.s.last_search()['query'], 'Title 8')
-        self.assertLessEqual(self.llm_picks.call_count, 1)
+        self.assertLessEqual(self.llm_picks.call_count, 2)
 
     def test_slow_picker_stays_cached_until_it_finishes(self):
         gate = threading.Event()
@@ -250,7 +251,8 @@ class Talk(unittest.TestCase):
         self.assertEqual(len(self.s._ai), 1)
         gate.set()
         self.assertTrue(self.results('dark movies'))
-        self.llm_picks.assert_called_once()
+        self.finish_pickers()
+        self.assertEqual(self.llm_picks.call_count, 2)
         self.decide.assert_called_once()
 
 

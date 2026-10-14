@@ -248,5 +248,19 @@
   "archetype.streak.power": "power-games",
   "archetype.streak.true": "true-story",
   "archetype.streak.home": "found-family",
-  "archetype.streak.dark": "dark-side"
+  "archetype.streak.dark": "dark-side",
+  "align.drivers": "Drivers",
+  "align.days": "days",
+  "align.genres": "Genres",
+  "align.themes": "Themes",
+  "align.makers": "Makers",
+  "align.feelings": "Feelings",
+  "align.check": "Check (correction previews only)",
+  "align.none": "No structural checks.",
+  "align.backfill_only": "Only bulk-marked plays.",
+  "align.undated": "No watch date recorded.",
+  "align.dominant": "At least half of the positive weight.",
+  "align.member_conflict": "Positive here, negative for another member.",
+  "align.shared_only": "Only shared-device or account evidence.",
+  "align.ignored_seeding": "Learning ignored but still seeding."
 }

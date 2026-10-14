@@ -50,6 +50,7 @@ All methods return detached JSON-compatible dictionaries. Callers receive no mod
 |---|---|
 | `profile(person=None)` | Entries without raw history, source/signal counts, top experiences/themes/creators, affinities and anchors |
 | `score(key, person=None)` | Score, reasons, facets/anchors, percentile and confidence |
+| `calibration(person=None)` | Reference kind and size, score percentiles and cached row match bands |
 | `explain(key)` | Existing server explanation, including per-person scores |
 | `rows(lang="de-DE")` | Actual snapshot rows through `row_metas`, with names, ordered title keys and why lines |
 | `react(events, person=None)` | Changed ranks per served row and in the top 50, facet deltas; never persists events |
@@ -58,7 +59,7 @@ All methods return detached JSON-compatible dictionaries. Callers receive no mod
 
 The loader copies only named engine data files to a temporary directory. It stubs TMDB, AniList and OpenRouter in offline mode and never starts the HTTP server or feed worker. It uses cached metadata for local title resolution. If `profile.json` is absent, it reconstructs the profile with `build_profile` from cached metadata and `history.json`/`trakt.json`; unresolved history is skipped by the existing server behavior. Stored snapshot profiles retain their snapshot weights. The facade calls the existing scoring/model functions without changing their rules.
 
-Snapshot data does not contain the trending calibration population, so percentile and confidence are `null`, with an explanation, instead of an invented baseline. Reaction ranks compare taste-sorted versions of the same served pools, plus unconsumed cached titles. They measure model response; they do not predict new feed membership, curation, availability or row-builder behavior. The same post-event candidate universe is used before and after. Negative reasons are accepted and validated by the existing remote schema; their effects follow the existing model.
+Match percentages rank a title against a deterministic sample of at most 800 known, unseen, non-negative titles in the local facet store, scored for the household, member or Together. The model records `cal_reference` as `known` or `trending`. With fewer than 200 local titles, an online build falls back to trending; offline builds cannot fetch that fallback. Percentile and confidence remain `null` when the reference is unavailable or the person's taste evidence is too new. The display remains 40..99 with midranks for ties, so 70 is the median. Reaction ranks compare taste-sorted versions of the same served pools, plus unconsumed cached titles. They measure model response; they do not predict new feed membership, curation, availability or row-builder behavior. The same post-event candidate universe is used before and after. Negative reasons are accepted and validated by the existing remote schema; their effects follow the existing model.
 
 ## Local onboarding
 

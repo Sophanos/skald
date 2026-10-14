@@ -24,7 +24,7 @@ class ApiViewsTests(ApiCase):
         with patch.object(s, "explain", side_effect=AssertionError("private explain called")):
             view = s.title_view("tmdb:900001", "movie", "ben")
             self.assertEqual(view["rung"], "seed")
-            self.assertEqual(s.title_view("tmdb:900005", "movie")["rung"], "facet")
+            self.assertIsNone(s.title_view("tmdb:900005", "movie")["rung"])
             self.assertIsNone(s.title_view("tmdb:900001", "tv"))
             self.assertIsNone(s.title_view("tmdb:999999", "movie"))
             self.assertIsNone(s.title_view("tmdb:900003", "movie", "ben"))

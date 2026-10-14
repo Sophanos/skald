@@ -75,6 +75,8 @@ def display_rows(server, lang='de-DE', order=None):
                     for suffix, typ in re.findall(r"'\w+\.([^:']+):([^']+)'", source)]
     rows = []
     for cid, typ in requests:
+        if cid not in names:
+            continue
         if server.CONFIG.get('household', {}).get('rows') is not None and not server.row_enabled(cid):
             continue
         name = names[cid]

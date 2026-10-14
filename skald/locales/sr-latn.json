@@ -1,0 +1,16 @@
+{
+  "align.drivers": "Uticaji",
+  "align.days": "dana",
+  "align.genres": "Žanrovi",
+  "align.themes": "Teme",
+  "align.makers": "Autori",
+  "align.feelings": "Osećanja",
+  "align.check": "Proveri (samo pregled ispravki)",
+  "align.none": "Nema strukturnih upozorenja.",
+  "align.backfill_only": "Samo grupno označena gledanja.",
+  "align.undated": "Datum gledanja nije sačuvan.",
+  "align.dominant": "Najmanje polovina pozitivne težine.",
+  "align.member_conflict": "Ovde pozitivan signal, kod drugog člana negativan.",
+  "align.shared_only": "Samo podaci sa zajedničkog uređaja ili naloga.",
+  "align.ignored_seeding": "Učenje je isključeno, ali naslov i dalje utiče na izbor."
+}

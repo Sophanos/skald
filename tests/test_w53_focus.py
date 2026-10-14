@@ -79,10 +79,10 @@ class FocusRows(unittest.TestCase):
         xs = [{**x, '_row': {'g': ['Animation'], 'lang': lang}} for x, lang in zip(cards(3), ['ja', 'en', 'ko'])]
         with self.prefs(ana={'hide': ['anime']}), patch.object(s, 'frec', return_value={}):
             for who, expected in [('ana', xs[1:]), ('both', xs[1:]), ('ben', xs), (s.GUEST, xs)]:
-                self.assertEqual(self.served(s.rid('leap'), xs, who=who), expected)
+                self.assertEqual(self.served(s.rid('newtoyou'), xs, who=who), expected)
             self.assertFalse(s.preference_ok(xs[0], s.rid('ana'), 'both'))
         with self.prefs(ana={'hide': []}), patch.object(s, 'frec', return_value={}):
-            self.assertEqual(self.served(s.rid('leap'), xs, who='ana'), xs)
+            self.assertEqual(self.served(s.rid('newtoyou'), xs, who='ana'), xs)
 
     def test_hide_categories_kinds_and_together(self):
         s = self.s
@@ -96,15 +96,15 @@ class FocusRows(unittest.TestCase):
                                   ('anime', {2}), ('movies', {0, 2, 4}), ('series', {1, 3, 5})]:
                 with self.subTest(hide=hide), self.prefs(ana={'hide': [hide]}):
                     expected = [x for i, x in enumerate(xs) if i not in dropped]
-                    self.assertEqual(self.served(s.rid('leap'), xs, who='ana'), expected)
+                    self.assertEqual(self.served(s.rid('newtoyou'), xs, who='ana'), expected)
                     self.assertEqual([x for x in xs if s.preference_ok(x, s.rid('ana'), 'both')], expected)
-                    self.assertEqual(self.served(s.rid('leap'), xs, who='both'),
+                    self.assertEqual(self.served(s.rid('newtoyou'), xs, who='both'),
                                      xs if hide in ('movies', 'series') else expected)
-                    self.assertEqual(self.served(s.rid('leap'), xs, who='ben'), xs)
-                    self.assertEqual(self.served(s.rid('leap'), xs, who=s.GUEST), xs)
+                    self.assertEqual(self.served(s.rid('newtoyou'), xs, who='ben'), xs)
+                    self.assertEqual(self.served(s.rid('newtoyou'), xs, who=s.GUEST), xs)
             with self.prefs(ana={'hide': ['movies', 'series']}, ben={'hide': ['animation']}):
-                self.assertEqual(self.served(s.rid('leap'), xs, who='ana'), [])
-                self.assertEqual(self.served(s.rid('leap'), xs, who='both'), [xs[i] for i in [0, 1, 4, 5]])
+                self.assertEqual(self.served(s.rid('newtoyou'), xs, who='ana'), [])
+                self.assertEqual(self.served(s.rid('newtoyou'), xs, who='both'), [xs[i] for i in [0, 1, 4, 5]])
 
     def test_started_rows_skip_all_preference_filters(self):
         s = self.s

@@ -1,5 +1,6 @@
 """Manifest visibility from synthetic, stored catalog rows."""
 from contextlib import ExitStack
+import copy
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -8,7 +9,7 @@ from eval.profile_golden import ROOT, offline_server
 
 
 def cards(n, start=0, typ='movie'):
-    return [dict(id=f'tmdb:{start+i}', name=f'Synthetic Card {start+i}', type=typ) for i in range(n)]
+    return [dict(id=f'tmdb:{start+i}', name=f'Synthetic {start+i} Card', type=typ) for i in range(n)]
 
 
 class ManifestRows(unittest.TestCase):
@@ -22,6 +23,9 @@ class ManifestRows(unittest.TestCase):
         s = self.s
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
+        cfg = copy.deepcopy(s.CONFIG)
+        cfg['household']['row_order'] = []
+        self.stack.enter_context(patch.object(s, 'CONFIG', cfg))
         self.stack.enter_context(patch.object(s, 'DATA', self.stack.enter_context(tempfile.TemporaryDirectory())))
         self.stack.enter_context(patch.object(s, '_feeds_empty', set()))
         for store in (s._feeds, s._shown, s._shown_scoped, s._pin_cache, s._home_cache, s._profiles):
@@ -51,7 +55,7 @@ class ManifestRows(unittest.TestCase):
     def test_no_signal_then_build_restores_manifest_row(self):
         s = self.s
         cids = [s.rid('because'), s.rid('leap')]
-        self.assertTrue(set(cids) <= {r['id'] for r in self.rows()})
+        self.assertTrue(set(cids).isdisjoint(r['id'] for r in self.rows()))
         self.pass_job(cids, lambda lang: None)
         self.assertEqual(s._feeds, {})
         self.assertTrue(set(cids).isdisjoint(r['id'] for r in self.rows()))
@@ -79,11 +83,11 @@ class ManifestRows(unittest.TestCase):
             with self.subTest(build=build.__name__):
                 self.pass_job([cid], build)
                 self.assertEqual(s._feeds, {})
-                self.assertIn(cid, {r['id'] for r in self.rows()})
+                self.assertNotIn(cid, {r['id'] for r in self.rows()})
 
     def test_unknown_then_empty_then_six(self):
         s = self.s
-        expected = {cid for cid, _, _ in s.feed_rows(s.LANG)} | {s.rid('search')}
+        expected = {cid for cid, _, _ in s.feed_rows(s.LANG) if cid not in s.THEMED_ROWS} | {s.rid('search')}
         self.assertEqual({r['id'] for r in self.rows()}, expected)
         for cid, typs, _ in s.feed_rows(s.LANG):
             self.put(cid, [], 'tv' if cid in s.MIXED else typs[0])
@@ -105,7 +109,7 @@ class ManifestRows(unittest.TestCase):
             self.assertNotIn(cid, {r['id'] for r in self.rows(member)})
             self.assertIn(cid, {r['id'] for r in self.rows('together')})
             with s.addon_scope(member):
-                self.assertEqual(len(s.row_metas(cid, 'tv', s.LANG, who=member)), 5)
+                self.assertEqual(s.row_metas(cid, 'tv', s.LANG, who=member), [])
 
     def test_search_only_watch_again_is_empty_and_unlisted(self):
         s, cid = self.s, self.s.rid('rewatch')
@@ -200,6 +204,9 @@ class ManifestRows(unittest.TestCase):
 
     def test_duplicate_names_mixed_types_and_exceptions(self):
         s = self.s
+        s.CONFIG['household']['rows'] = ['moods', 'lanes', 'episodes', 'top10']
+        for i, cid in enumerate(s.MOODS_ROWS + s.LANES):
+            self.put(cid, cards(6, 1000 + i*100))
         rows = self.rows()
         home = [r for r in rows if r['id'] != s.rid('search')]
         self.assertEqual(len({r['name'] for r in home}), len(home))
@@ -222,6 +229,9 @@ class ManifestRows(unittest.TestCase):
 
     def test_suffixes_reserve_original_names(self):
         s = self.s
+        s.CONFIG['household']['rows'] = ['moods']
+        for i, cid in enumerate(s.MOODS_ROWS):
+            self.put(cid, cards(6, 1000 + i*100))
         catalogs = [(cid, ('tv',), name) for cid, name in
                     zip(s.MOODS_ROWS, ('Space', 'Space', 'Space · 2', 'Space'))]
         with patch.object(s, 'feed_rows', return_value=catalogs):

@@ -88,6 +88,12 @@ class ReplayTest(unittest.TestCase):
         self.assertIsNone(replay.metrics([])['mrr'])
         self.assertTrue(replay.metrics([{'rank': None}])['median_unbounded'])
 
+    def test_report_explains_local_calibration_without_network_baseline(self):
+        text = replay.report({'metadata': {'snapshot': 'synthetic', 'universe_n': 5000, 'seed': 108},
+                              'protocols': {}, 'bugs': []}, .1)
+        self.assertIn('local known-title calibration', text)
+        self.assertNotIn('no match percentages inferred', text)
+
     def test_guard_precedes_import_and_cannot_be_swallowed(self):
         original = replay.importlib.util.module_from_spec
 

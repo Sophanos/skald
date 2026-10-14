@@ -290,7 +290,8 @@ def fill(s, lang, now=None, build=True):
                 try:
                     with s.addon_scope(scope):
                         profile = s.search_profile()
-                    s.ensure_facets([(x['id'], 'movie' if x['type'] == 'movie' else 'tv') for x in raw['candidates']])
+                    if build:
+                        s.ensure_facets([(x['id'], 'movie' if x['type'] == 'movie' else 'tv') for x in raw['candidates']])
                     metas = list({x['id']: x for x in raw['candidates'] if (pinned or x['id'] not in profile.get('seen', ())) and x['id'] not in profile.get('negative', ()) and s.preference_ok(x, cid, who) and rule_ok(s, x, rule)}.values())
                     scores = s.member_scores(metas, who) if who in s.PEOPLE else s.week_scores(metas)
                     metas.sort(key=lambda x: scores.get(x['id'], 0), reverse=True)

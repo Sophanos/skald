@@ -58,7 +58,7 @@ from types import SimpleNamespace
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.4.6"
+VERSION = "1.4.7"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -320,6 +320,12 @@ def validate_config(doc, *, data=None, environ=None):
     order = hh.get('row_order', [])
     need(isinstance(order, list) and all(isinstance(k, str) and k in ROW_KEYS for k in order) and
          len(set(order)) == len(order), 'household.row_order')
+    if 'home' in hh:
+        from skald.rowplan import validate_home
+        try:
+            validate_home(hh['home'])
+        except ValueError as e:
+            raise ConfigError(str(e)) from None
     need(type(hh.get("shelves", 2)) is int and 0 <= hh.get("shelves", 2) <= 10, "household.shelves (0..10)")
     labels = hh["labels"]
     need(isinstance(labels, dict), "household.labels")
@@ -556,7 +562,7 @@ def public_config(cfg):
     schema = fresh_config(cfg["household"]["members"])
     out = {"v": cfg["v"], "row_prefix": cfg.get("row_prefix", DEFAULT_ROW_PREFIX), **{k: {p: cfg[k][p] for p in schema[k]} for k in ("household", "region", "addon")}}
     out["household"] = {**out["household"], "labels": {p: cfg["household"]["labels"][p] for p in (*cfg["household"]["members"], "pair")}}
-    for key in ('rows', 'row_labels', 'row_order', 'shelves'):
+    for key in ('rows', 'row_labels', 'row_order', 'shelves', 'home'):
         if key in cfg['household']:
             out['household'][key] = cfg['household'][key]
     out["taste"] = {p: {k: v for k, v in traits.items() if k in ("likes", "archived", "rewatch_collections")}
@@ -570,7 +576,7 @@ def public_config(cfg):
 # --- end household config ---
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from skald import migrate, shelves, metrics as row_metrics
+from skald import migrate, shelves, rowplan, metrics as row_metrics
 from skald.i18n import t as _translate
 
 # One place for the future player interface language setting.
@@ -715,6 +721,9 @@ AI_MIN_LEN = 4
 SEARCH_SETTLE = 0.35  # seconds a non-title query waits for the next keystroke before spending an AI call
 AI_SEARCH_TTL = 24 * 60 * 60
 SEARCH_HISTORY_LIMIT = 1200  # Prompt only; watched filtering uses the complete scoped history.
+SEARCH_WIDE_SIZE = 30
+SEARCH_WIDE_TIMEOUT = 12
+SEARCH_TIMEOUT = 7
 SEARCH_ORDER = "parallel"
 SEARCH_CHANNELS = {"title": "tmdb", "command": "command", "request": "picker", "discover": "picker"}
 ROUTE_MODEL = os.environ.get("SKALD_ROUTE_MODEL") or "perplexity/pplx-decider-v1.1-27b"
@@ -875,12 +884,12 @@ def _usage_roll():
 def save_usage():
     with _usage_lock:
         snap = json.dumps(_usage)
-    try:
-        with open(os.path.join(DATA, "usage.json.tmp"), "w") as fh:
-            fh.write(snap)
-        os.replace(os.path.join(DATA, "usage.json.tmp"), os.path.join(DATA, "usage.json"))
-    except OSError:
-        pass
+        try:
+            with open(os.path.join(DATA, "usage.json.tmp"), "w") as fh:
+                fh.write(snap)
+            os.replace(os.path.join(DATA, "usage.json.tmp"), os.path.join(DATA, "usage.json"))
+        except OSError:
+            pass
 
 
 def openrouter(path, body, timeout, lane, label):
@@ -894,6 +903,7 @@ def openrouter(path, body, timeout, lane, label):
         key = f"{lane}:{label}"
         _usage["calls"][key] = _usage["calls"].get(key, 0) + 1
         _usage["month_calls"] += 1
+    save_usage()  # shortcut: response cost saves on the next call; add a completion save if exact restart costs are needed.
     req = urllib.request.Request("https://openrouter.ai" + path, json.dumps(body).encode(), {
         "Authorization": "Bearer " + OR_KEY, "Content-Type": "application/json", "X-Title": "Skald"})
     with _connector_open(req, timeout=timeout) as r:
@@ -906,7 +916,6 @@ def openrouter(path, body, timeout, lane, label):
         _usage["cost"] += usage.get("cost") or 0
         _usage["month_cost"] += usage.get("cost") or 0
         _usage["tokens"] += usage.get("total_tokens") or 0
-    threading.Thread(target=save_usage, daemon=True).start()
     return j
 
 
@@ -1617,7 +1626,7 @@ def search_person():
     return person if person in PEOPLE and (_model["m"] or {}).get("paff", {}).get(person) else None
 
 
-def search_picks(query, history, listing="taste", stype="movie", person=...):
+def search_picks(query, history, listing="taste", stype="movie", person=..., wide=True):
     if person is ...:
         person = search_person()
     m = _model["m"]
@@ -1637,24 +1646,102 @@ def search_picks(query, history, listing="taste", stype="movie", person=...):
         "'movies' or 'films' means movies only; 'shows' or 'series' means series only; otherwise give at least 12 movies and 12 series.",
         type_instruction)
     timing = {}
+    if wide:
+        system = system.replace("18 lines", f"{SEARCH_WIDE_SIZE} lines").replace("give 18 ", f"give {SEARCH_WIDE_SIZE} ")
     def pick():
         start = time.monotonic()
         try:
-            return llm_picks(system, prompt, 850, 6, "search", "picks")
+            return llm_picks(system, prompt, 2000 if wide else 850,
+                             SEARCH_WIDE_TIMEOUT if wide else 6, "search", "wide_picks" if wide else "picks")
         finally:
             timing["ms"] = round((time.monotonic() - start) * 1000)
+    rules = _pool.submit(search_rules, query) if wide else None
     future = _pool.submit(pick)
     future.search_timing = timing
+    future.search_wide = wide
+    future.search_rules = rules
+    future.search_fallback = search_picks(query, history, listing, stype, person, wide=False) if wide else None
     return future
 
 
-def ai_plan(query, history=None, context=None, stype="movie", person=...):
+def search_rules(wish):
+    llm = DECISIONS["parse_command"]["llm"]
+    for attempt in (llm, llm["fallback"]):
+        try:
+            body = attempt["prompt"]([{"query": wish, "last": None}])
+            body.update(usage={"include": True}, messages=[
+                {"role": "system", "content": 'Extract only explicit release-year limits and reference titles used as a model for recommendations. '
+                 'Return JSON {"from": integer or null, "to": integer or null, "exclude": [title names]}. '
+                 'Bounds are inclusive. Convert requested decades to year bounds. Either bound can be null. '
+                 'Exclude titles used as reference examples, not titles the user wants to find or rewatch. '
+                 'For a combined wish follow the latest refinement and retain earlier rules it does not change. '
+                 'Do not invent limits or TMDB ids. No explanation.'},
+                {"role": "user", "content": wish}])
+            reply = openrouter(attempt["path"], body, 4, "search", "rules")
+            value = search_commands.parse_json(reply["choices"][0]["message"]["content"])
+            if not isinstance(value, dict):
+                raise ValueError("Rules must be an object")
+            rules = {"from": value.get("from"), "to": value.get("to"), "exclude": value.get("exclude", [])}
+            if any(v is not None and (type(v) is not int or not 1 <= v <= 9999) for v in (rules["from"], rules["to"])):
+                raise ValueError("Invalid year bounds")
+            if rules["from"] is not None and rules["to"] is not None and rules["from"] > rules["to"]:
+                raise ValueError("Reversed year bounds")
+            if not isinstance(rules["exclude"], list) or not all(isinstance(v, str) for v in rules["exclude"]):
+                raise ValueError("Invalid reference titles")
+            return rules
+        except Exception as error:
+            if isinstance(error, BudgetExceeded):
+                break
+    return {"from": None, "to": None, "exclude": []}
+
+
+def wide_rank(metas, rules, person, references=None):
+    names = {resolve_normal(name) for name in rules["exclude"]}
+    excluded = {pair for name in names for pair in (references or {}).get(name, ())}
+    with _facets_lock:
+        facets = list(_facets.items())
+    excluded.update((slot.split("@")[0], "movie" if rec["kind"] == "movie" else "series")
+                    for slot, rec in facets if rec.get("kind") in ("movie", "tv")
+                    and resolve_normal(rec.get("title") or "") in names)
+    excluded.update((e["key"], e["stype"]) for e in _profiles.get("household", {}).get("entries", [])
+                    if resolve_normal(e["title"]) in names)
+    allowed = []
+    for meta in metas:
+        kind = "movie" if meta["type"] == "movie" else "tv"
+        year = None
+        for value in (frec(meta["id"], kind).get("y"), meta.get("releaseInfo")):
+            try:
+                parsed = int(str(value)[:4])
+                if 1 <= parsed <= 9999:
+                    year = parsed
+                    break
+            except (ValueError, TypeError):
+                continue
+        if year is not None and (rules["from"] is not None and year < rules["from"] or rules["to"] is not None and year > rules["to"]):
+            continue
+        if (meta["id"], meta["type"]) not in excluded and resolve_normal(meta["name"].removeprefix(AI_MARK)) not in names:
+            allowed.append(meta)
+    metas = list({x["id"]: x for x in allowed}.values())
+    model = _model["m"]
+    tastes = [score_key(model, x["id"], person, kind="movie" if x["type"] == "movie" else "tv")[0]
+              if model else None for x in metas]
+    known = [v for v in tastes if v is not None]
+    low, high = min(known, default=0), max(known, default=0)
+    ranked = []
+    for i, (meta, score) in enumerate(zip(metas, tastes)):
+        taste = (score - low) / (high - low) if score is not None and high > low else .5
+        ranked.append((-(.2 * (1 - i / len(metas)) + .8 * taste), meta["id"], meta))
+    return [meta for _, _, meta in sorted(ranked, key=lambda x: (x[0], x[1]))][:15]
+
+
+def ai_plan(query, history=None, context=None, stype="movie", person=..., picks=...):
     """Route once; retain a shared picker future for requests and empty title results."""
     if person is ...:
         person = search_person()
     if history is None:
         history = seen_history(search_profile())
-    picks = search_picks(query, history, stype=stype, person=person)
+    if picks is ...:
+        picks = search_picks(query, history, stype=stype, person=person)
     inp = {"query": query}
     if context:
         inp.update(last=context["query"], shown=[x["title"] for x in shown_titles(context)])
@@ -1718,10 +1805,14 @@ def llm_text(system, prompt, max_tokens, timeout, lane, label, effort="none"):
     return j["choices"][0]["message"].get("content") or ""
 
 
+class NoPicks(list):
+    """An explicit NONE is a valid empty catalog, not a failed picker."""
+
+
 def llm_picks(system, prompt, max_tokens, timeout, lane, label):
     text = llm_text(system, prompt, max_tokens, timeout, lane, label)
     if text.strip() == "NONE":
-        return []
+        return NoPicks()
     picks = parse_picks(text)
     if text.strip() and not picks:
         raise ValueError("Invalid picker reply")
@@ -1767,7 +1858,9 @@ def ai_future(query, history=None, stype="movie", timing=None):
         if history is None:
             history = seen_history(search_profile())  # Capture the caller's scope before entering the pool.
         person = search_person()
-        fut = _outer.submit(ai_plan, query, history, context, stype, person)
+        picks = search_picks(query, history, stype=stype, person=person)
+        fut = _outer.submit(ai_plan, query, history, context, stype, person, picks)
+        fut.search_picks = picks
         ttl = min(AI_SEARCH_TTL, context["at"] + LAST_SEARCH_TTL - time.time()) if context else AI_SEARCH_TTL
         _ai[key] = (time.time() + ttl, fut)
         return fut
@@ -1796,7 +1889,7 @@ def manifest(lang, scope=None):
                     _, prefs = row_preferences(cid, scope)
                     if ('movies' if typ == 'movie' else 'series') in prefs[0].get('hide', []):
                         continue
-                if cid not in SHELF_ROWS and (feed(cid, lang) or (cid, lang) in _feeds_empty or cid == rid('family')) and (cid != rid('top10') or kids_age(safety_subject()) is not None):
+                if cid not in SHELF_ROWS and (cid in THEMED_ROWS or feed(cid, lang) or (cid, lang) in _feeds_empty or cid == rid('family')) and (cid != rid('top10') or kids_age(safety_subject()) is not None):
                     # Count the cached composition of stored rows, with the catalog's viewer and pins.
                     metas = row_metas(cid, typ, lang, who=SCOPES[scope]) if scope is not None else row_metas(cid, typ, lang)
                     if len(metas) < (1 if cid == rid('episodes') else ROW_MIN):
@@ -1903,17 +1996,34 @@ def resolve_pick(kind, title, year, lang):
     return best, art.get(best["id"], {})
 
 
-def ai_search(stype, kind, picks, lang, names, mark=AI_MARK):
-    jobs = [(p[3], _outer.submit(resolve_pick, kind, p[0], p[1], lang)) for p in picks if p[2] == stype]
+def ai_search(stype, kind, picks, lang, names, mark=AI_MARK, history=None, references=None, deadline=None):
+    if history is not None:
+        allowed = {(e["title"].casefold(), str(e.get("year") or ""), e["stype"]): e for e in history}
+        metas, used = [], set()
+        for title, year, typ, why in picks:
+            e = allowed.get((title.casefold(), year or "", typ))
+            if e and typ == stype:
+                if references is not None:
+                    references.setdefault(resolve_normal(title), set()).add((e["key"], typ))
+                if e["key"] not in used:
+                    used.add(e["key"])
+                    it = {"id": e["id"], "title": e["title"], "name": e["title"],
+                          "release_date": str(e.get("year") or ""), "first_air_date": str(e.get("year") or "")}
+                    metas.append(to_meta(it, stype, kind, names, {}, mark, why, lang=lang))
+        return metas
+    jobs = [(p[0], p[3], _outer.submit(resolve_pick, kind, p[0], p[1], lang)) for p in picks if p[2] == stype]
     metas, seen = [], set()
-    for why, job in jobs:
+    for title, why, job in jobs:
         try:
-            hit = job.result()
+            hit = job.result(timeout=None if deadline is None else max(0, deadline - time.monotonic()))
         except Exception:
             continue
-        if hit and hit[0]["id"] not in seen:
-            seen.add(hit[0]["id"])
-            metas.append(to_meta(hit[0], stype, kind, names, hit[1], mark, why, lang=lang))
+        if hit:
+            if references is not None:
+                references.setdefault(resolve_normal(title), set()).add((f"tmdb:{hit[0]['id']}", stype))
+            if hit[0]["id"] not in seen:
+                seen.add(hit[0]["id"])
+                metas.append(to_meta(hit[0], stype, kind, names, hit[1], mark, why, lang=lang))
     return metas
 
 
@@ -1959,6 +2069,11 @@ def superseded(query, wait):
 
 
 def search(stype, query, lang, title_only=False):
+    deadline = time.monotonic() + SEARCH_TIMEOUT
+    def remaining():
+        return max(0, deadline - time.monotonic())
+    def call(fn, *args, **kwargs):
+        return _outer.submit(fn, *args, **kwargs).result(timeout=remaining())
     timing = {}
     _scoping.search_timing = None
     request = start_search(query)
@@ -1967,7 +2082,10 @@ def search(stype, query, lang, title_only=False):
     who = safety_subject()
     def filtered(metas):
         if kids_age(who) is not None:
-            ensure_facets([(x["id"], kind) for x in metas])
+            try:
+                call(ensure_facets, [(x["id"], kind) for x in metas])
+            except TimeoutError:
+                return []
             return [x for x in metas if child_ok(x, who)]
         return metas
     context = search_turn(query) if not title_only else None
@@ -1980,8 +2098,14 @@ def search(stype, query, lang, title_only=False):
     p = search_profile()
     history = seen_history(p)
     person = search_person()
-    if not title_only and OR_KEY and (context is not None or len(query) >= AI_MIN_LEN and not looks_like_title(query, lang)):
-        complete = not superseded(query, SEARCH_SETTLE)
+    title = True
+    if not title_only and OR_KEY and (context is not None or len(query) >= AI_MIN_LEN):
+        try:
+            title = context is None and call(looks_like_title, query, lang)
+        except TimeoutError:
+            title = False
+    if not title_only and OR_KEY and not title:
+        complete = not superseded(query, min(SEARCH_SETTLE, remaining()))
         with _ai_lock:
             scope, turn = request
             complete = complete and _search_turns.get(scope) == (search_key(query), turn)
@@ -1993,10 +2117,45 @@ def search(stype, query, lang, title_only=False):
         return q in {(it.get(k) or "").casefold() for k in ("title", "name", "original_title", "original_name")}
 
     tmdb_start = time.monotonic()
-    data, art = search_both(kind, query, lang) if plan is None or SEARCH_ORDER == "parallel" else ([], {})
+    title_job = _outer.submit(search_both, kind, query, lang) if plan is None or SEARCH_ORDER == "parallel" else None
+    data, art = [], {}
+    if plan is None:
+        try:
+            data, art = title_job.result(timeout=remaining())
+        except TimeoutError:
+            complete = False
+    names_job = _pool.submit(genres, kind, lang)
     timing["resolve_ms"] = round((time.monotonic() - tmdb_start) * 1000)
     picks, answer, channel = None, None, "tmdb"
+    fallback_job = None
+    fallback_metas = None
     resolve_start = None
+    def fallback_picks():
+        with _ai_lock:
+            if getattr(answer["picks"], "search_wide", False) is True:
+                answer["picks"].cancel()
+                answer["picks"] = answer["picks"].search_fallback
+        return answer["picks"].result(timeout=remaining())
+
+    def resolve_fallback(picker, intent):
+        legacy = picker.search_fallback
+        return ai_search(stype, kind, legacy.result(timeout=remaining()), lang, names_job.result(timeout=remaining()),
+                         history=history if intent == "seen" else None, deadline=deadline)
+
+    def failed_search(error):
+        nonlocal complete
+        waiting = answer.get("picks") if answer else plan
+        failed = waiting is not None and (waiting.cancelled() or waiting.done() and waiting.exception() is not None)
+        if isinstance(error, TimeoutError) and not failed:
+            complete = False
+        if channel == "picker":
+            timing["picker_ms"] = "timeout" if isinstance(error, TimeoutError) else 0
+        if not isinstance(error, TimeoutError) or failed:
+            with _ai_lock:
+                for key, (_, future) in list(_ai.items()):
+                    if future is plan:
+                        del _ai[key]
+
     def served(metas):
         if plan is not None:
             timing.update(router_ms=(answer or {}).get("router_ms", "timeout"),
@@ -2010,14 +2169,22 @@ def search(stype, query, lang, title_only=False):
         answers = {k: v for k, v in (answer or {}).items() if k not in ("picks", "wish", "router_ms", "router_source")}
         return remember_search(query, stype, metas, answers, context, (answer or {}).get("wish", query), request)
     if plan is not None:
-        deadline = time.monotonic() + 7
         try:
-            answer = plan.result(timeout=7)
+            try:
+                # Leave time for the parallel fallback to resolve if routing is late.
+                answer = plan.result(timeout=min(3, remaining()))
+            except TimeoutError:
+                picker = getattr(plan, 'search_picks', None)
+                if picker is None:
+                    raise
+                answer = dict(choice=None, watched='any', list='taste', picks=picker)
+                complete = False
             channel = "command" if answer.get("previous") == "act" else "picker" if answer.get("previous") == "refine" else SEARCH_CHANNELS.get(answer["choice"], "picker")
+            if channel != 'command' and getattr(answer['picks'], 'search_wide', False) is True:
+                fallback_job = _outer.submit(resolve_fallback, answer['picks'], answer.get('watched', 'any'))
             resolve_start = time.monotonic()
             if answer["choice"] == "title" and answer.get("previous") != "act":
-                if SEARCH_ORDER == "router_first":
-                    data, art = search_both(kind, query, lang)
+                data, art = title_job.result(timeout=remaining()) if title_job else call(search_both, kind, query, lang)
                 other_job = _outer.submit(search_both, "tv" if kind == "movie" else "movie", query, lang)
                 person_job = _outer.submit(person_titles, query, kind, lang)
                 try:
@@ -2039,7 +2206,7 @@ def search(stype, query, lang, title_only=False):
                     channel = "tmdb"
                     if answer["picks"] is not None:
                         answer["picks"].cancel()
-                    names = genres(kind, lang)
+                    names = names_job.result(timeout=remaining())
                     return served(filtered([to_meta(it, stype, kind, names, art.get(it["id"], {}), lang=lang)
                                             for it in titles if not it.get("adult")])[:15])
                 if any(exact(it) for it in data + other):
@@ -2047,33 +2214,37 @@ def search(stype, query, lang, title_only=False):
                 if not data and other:
                     channel = "tmdb"
                     return served([])
-            if channel == "tmdb" and SEARCH_ORDER == "router_first":
-                data, art = search_both(kind, query, lang)
+            if channel == "tmdb" and not data:
+                data, art = title_job.result(timeout=remaining()) if title_job else call(search_both, kind, query, lang)
             if channel == "tmdb" and not data:
                 channel = "picker"
             if channel == "picker":
                 with _ai_lock:
                     if answer["picks"] is None:
                         answer["picks"] = search_picks(answer.get("wish", query), history, answer["list"], stype, person)
-                timeout = 6 if SEARCH_ORDER == "router_first" else max(0, deadline - time.monotonic())
+                    wide = getattr(answer["picks"], "search_wide", False) is True
+                    rules_job = answer["picks"].search_rules if wide else None
+                if wide and fallback_job is None:
+                    fallback_job = _outer.submit(resolve_fallback, answer['picks'], answer.get('watched', 'any'))
+                timeout = min(SEARCH_WIDE_TIMEOUT, remaining()) if wide else remaining()
                 timing["resolve_ms"] += round((time.monotonic() - resolve_start) * 1000)
                 resolve_start = None
-                picks = answer["picks"].result(timeout=timeout)
+                try:
+                    picks = answer["picks"].result(timeout=timeout)
+                    if wide and not picks and not isinstance(picks, NoPicks):
+                        wide = False
+                        picks = None
+                        picks = fallback_picks()
+                except Exception:
+                    if not wide:
+                        raise
+                    wide = False
+                    picks = fallback_picks()
                 if timing.get("picker_ms") != "cached":
                     timing["picker_ms"] = getattr(answer["picks"], "search_timing", {}).get("ms", 0)
                 resolve_start = time.monotonic()
         except Exception as error:
-            waiting = answer.get("picks") if answer else plan
-            failed = waiting is not None and (waiting.cancelled() or waiting.done() and waiting.exception() is not None)
-            if isinstance(error, TimeoutError) and not failed:
-                complete = False
-            if channel == "picker":
-                timing["picker_ms"] = "timeout" if isinstance(error, TimeoutError) else 0
-            if not isinstance(error, TimeoutError) or failed:
-                with _ai_lock:
-                    for key, (_, future) in list(_ai.items()):
-                        if future is plan:
-                            del _ai[key]
+            failed_search(error)
         if answer is not None and channel == "command":
             with search_commands._LOCK:
                 with _ai_lock:
@@ -2086,26 +2257,56 @@ def search(stype, query, lang, title_only=False):
                 served(command.get("metas", []))
                 return command
             answer = None
-    names = genres(kind, lang)
+    try:
+        names = names_job.result(timeout=remaining())
+    except TimeoutError:
+        complete = False
+        return served([])
+    if picks is not None and wide:
+        if isinstance(picks, NoPicks):
+            return served([])
+        references = {}
+        allowed = {e["key"] for e in history if e["stype"] == stype}
+        intent = answer.get("watched", "any")
+        metas = ai_search(stype, kind, picks, lang, names, history=history if intent == "seen" else None,
+                          references=references, deadline=deadline)
+        metas = filtered([x for x in metas if x["id"] not in p.get("negative", ())
+                          and (intent != "unseen" or x["id"] not in p.get("seen", ()))
+                          and (intent != "seen" or x["id"] in allowed)
+                          and not frec(x["id"], kind).get("adult")])
+        if metas:
+            try:
+                rules = rules_job.result(timeout=remaining())
+            except Exception:
+                rules = {"from": None, "to": None, "exclude": []}
+            metas = wide_rank(metas, rules, person, references)
+        if metas:
+            return served(metas)
+        try:
+            picks = fallback_picks()
+        except Exception as error:
+            picks = None
+            failed_search(error)
+        else:
+            if timing.get("picker_ms") != "cached":
+                timing["picker_ms"] = getattr(answer["picks"], "search_timing", {}).get("ms", 0)
     if picks is not None:
         if not picks:
             return served([])
+        if fallback_job is not None:
+            try:
+                fallback_metas = fallback_job.result(timeout=remaining())
+            except Exception as error:
+                failed_search(error)
+                return served([])
         intent = answer.get("watched", "any") if answer is not None else "any"
         if intent == "seen" and picks is not None:
-            allowed = {(e["title"].casefold(), str(e.get("year") or ""), e["stype"]): e for e in history}
-            metas, used = [], set()
-            for title, year, typ, why in picks:
-                e = allowed.get((title.casefold(), year or "", typ))
-                if e and typ == stype and e["key"] not in used:
-                    used.add(e["key"])
-                    it = {"id": e["id"], "title": e["title"], "name": e["title"],
-                          "release_date": str(e.get("year") or ""), "first_air_date": str(e.get("year") or "")}
-                    metas.append(to_meta(it, stype, kind, names, {}, AI_MARK, why, lang=lang))
+            metas = fallback_metas if fallback_metas is not None else ai_search(stype, kind, picks, lang, names, history=history, deadline=deadline)
             if answer.get("list", "taste") == "taste":
                 metas = taste_rerank(metas)
             return served(filtered(metas)[:15])
         if picks or (intent == "unseen" and picks is not None):
-            metas = ai_search(stype, kind, picks, lang, names)
+            metas = fallback_metas if fallback_metas is not None else ai_search(stype, kind, picks, lang, names, deadline=deadline)
             seen = []
             if p:
                 metas = [x for x in metas if x["id"] not in p.get("negative", ())]
@@ -2118,7 +2319,7 @@ def search(stype, query, lang, title_only=False):
                 exclude = set(p.get("seen", ())) | set(p.get("negative", ())) | {x["id"] for x in metas}
                 for seed in list(metas):
                     try:
-                        more, art = with_art(f"{kind}/{seed['id'][5:]}/recommendations", lang, include_adult="false")
+                        more, art = call(with_art, f"{kind}/{seed['id'][5:]}/recommendations", lang, include_adult="false")
                     except Exception:
                         continue
                     more = [it for it in more if f"tmdb:{it['id']}" not in exclude and not it.get("adult")
@@ -2134,8 +2335,11 @@ def search(stype, query, lang, title_only=False):
                         break
             return served(metas[:15])
 
-    if SEARCH_ORDER == "router_first" and plan is not None and not data:
-        data, art = search_both(kind, query, lang)
+    if plan is not None and not data:
+        try:
+            data, art = title_job.result(timeout=remaining()) if title_job else call(search_both, kind, query, lang)
+        except TimeoutError:
+            complete = False
     ranked = sorted((it for it in data if not it.get("adult")), key=lambda it: (exact(it), it.get("popularity") or 0), reverse=True)
     metas = filtered([to_meta(it, stype, kind, names, art.get(it["id"], {}), lang=lang) for it in ranked])
     if answer is not None and channel == "picker":
@@ -2383,11 +2587,15 @@ def shelf_items(cid, typ, lang, who=None):
 
 ROW_WINDOW = 12
 ROW_MIN = 6
+ROW_HERO_MAX = 2
+HOME_FRANCHISE_ROWS = 2
 DOCS = [rid('doctrend'), rid('wonder'), rid('cosmos'), rid('history'), rid('meaning')]
 STUDIO_ROWS = [rid('hbo'), rid('paramount')]
+BECAUSE_ROWS = [rid('because'), rid('because2'), rid('because3')]
+THEMED_ROWS = set(MOODS_ROWS + LANE_ROWS + DOCS + STUDIO_ROWS + BECAUSE_ROWS + [rid('leap')])
 # Keep the player catalog order in sync (Top 10 has two catalogs).
 DEDUPE_ORDER = ([rid('episodes'), rid('foryou'), rid('week'), rid('because'), rid('catchup'), rid('upcoming'),
-                 rid('leap')] + list(ROW_OWNER) + [rid('rewatch'), rid('top10'), rid('digital'), rid('toprated')] + STUDIO_ROWS + MOODS_ROWS + DOCS + LANES
+                 rid('leap')] + list(ROW_OWNER) + [rid('rewatch'), rid('top10'), rid('digital'), rid('toprated')] + STUDIO_ROWS + MOODS_ROWS + BECAUSE_ROWS[1:] + DOCS + LANES
                 + [rid('airing'), rid('nextseason'), rid('newtoyou')])
 GUEST_ROW_POLICY = {
     rid('episodes'): False,  # Resume household plays.
@@ -2419,11 +2627,11 @@ GUEST_ROW_POLICY = {
     rid('nextseason'): False,  # Household history masks.
     rid('newtoyou'): False,  # Member taste rotation.
 }
-GUEST_ROW_POLICY.update(dict.fromkeys(ROW_OWNER, False))
+GUEST_ROW_POLICY.update(dict.fromkeys([*ROW_OWNER, *BECAUSE_ROWS], False))
 GUEST_ROW_POLICY.update({rid('digital'): True, rid('toprated'): True})
 GUEST_ROWS = {cid for cid, allowed in GUEST_ROW_POLICY.items() if allowed}
 MIXED = ({rid('foryou'), rid('upcoming'), rid('catchup'), rid('rewatch'), rid('because'), rid('week'),
-          rid('leap'), rid('family'), rid('newtoyou')} | set(ROW_OWNER) | {rid(p) for p in ARCHIVED} | set(LANES) | set(MOODS_ROWS) | set(SHELF_ROWS) | set(DOCS) | set(STUDIO_ROWS))
+          rid('leap'), rid('family'), rid('newtoyou')} | set(BECAUSE_ROWS) | set(ROW_OWNER) | {rid(p) for p in ARCHIVED} | set(LANES) | set(MOODS_ROWS) | set(SHELF_ROWS) | set(DOCS) | set(STUDIO_ROWS))
 MIX = ("tv", "movie", "series")  # tv = both kinds in one row; movie / series = one kind only
 STAMP_V = "17.3"  # bump to rebuild every row once after a format change
 ROW_MAX = 40
@@ -2463,18 +2671,27 @@ def row_groups():
     return {'people': [*ROW_OWNER, *[rid(p) for p in ARCHIVED]],
               'moods': MOODS_ROWS, 'lanes': LANE_ROWS, 'docs': [*DOCS, rid('docsai')],
               'studios': STUDIO_ROWS, 'anime': [rid('airing'), rid('nextseason')],
-              'shelves': SHELF_ROWS, 'rewatch': [rid('rewatch'), rid('rewatchai')]}
+              'shelves': SHELF_ROWS, 'rewatch': [rid('rewatch'), rid('rewatchai')], 'because': BECAUSE_ROWS}
+
+
+def default_rows():
+    return not any(key in CONFIG['household'] for key in ('rows', 'row_order', 'row_labels')) and kids_age(safety_subject()) is None
+
+
+def row_scope_ok(cid):
+    scope = getattr(_scoping, 'scope', None)
+    return cid not in ROW_OWNER or scope not in PEOPLE or scope == ROW_OWNER[cid]
 
 
 def row_enabled(cid):
     keys = CONFIG['household'].get('rows')
     if keys is None:
-        return cid not in (rid('digital'), rid('toprated'), rid('newtoyou'))
+        return cid not in (rid('digital'), rid('toprated'), rid('newtoyou')) and (not default_rows() or cid not in STUDIO_ROWS)
     groups = row_groups()
     return any(cid in groups.get(key, [rid(key)]) for key in keys)
 
 
-def feed_rows(lang=LANG, profiles=True):
+def feed_rows(lang=LANG, profiles=True, who=None, *, home=None):
     """Home rows in display order: (catalog id, types, name or {type: name})."""
     nxt, nyear = anime_season(local_now(), 1)
 
@@ -2496,6 +2713,7 @@ def feed_rows(lang=LANG, profiles=True):
         (rid('leap'), MIX, built(rid('leap'), t("row.leap"))),
         (rid('top10'), ("movie", "series"), {"movie": t("row.top10.movie"), "series": t("row.top10.series")}),
     ] + [(cid, MIX, t("row.member", person=LABELS[p])) for cid, p in ROW_OWNER.items()] + [(cid, MIX, built(cid, t("row.mood"))) for cid in MOODS_ROWS] \
+      + [(cid, MIX, built(cid, t("row.because"))) for cid in BECAUSE_ROWS[1:]] \
       + [(cid, MIX, built(cid, t("row.picked"))) for cid in LANES] \
       + [(cid, MIX, DOC_ROWS.get(cid, DOC_TREND)[0]) for cid in DOCS] + [(cid, MIX, STUDIOS[cid][0]) for cid in STUDIO_ROWS] + [
         (rid('airing'), ("series",), t("row.anime.week")),
@@ -2517,7 +2735,12 @@ def feed_rows(lang=LANG, profiles=True):
     labels = {cid: label for key, label in CONFIG['household'].get('row_labels', {}).items()
               for cid in groups.get(key, [rid(key)])}
     rows = [(cid, types, labels.get(cid, name)) for cid, types, name in rows]
-    return sorted((r for r in rows if row_enabled(r[0])), key=lambda r: rank.get(r[0], len(rank)))
+    rows = sorted((r for r in rows if row_enabled(r[0]) and row_scope_ok(r[0])), key=lambda r: rank.get(r[0], len(rank)))
+    if default_rows():
+        who = SCOPES[scope] if scope is not None else who_watching()[0] if who is None else who
+        home = _home_rows(lang, who) if home is None else home
+        rows = [r for r in rows if r[0] not in MOODS_ROWS + LANES + DOCS or home.get((r[0], 'tv'))]
+    return rows
 
 
 def read_history():
@@ -2554,6 +2777,8 @@ def read_taste():
         with open(path) as fh:
             return {**DEFAULT_TASTE, **json.load(fh)}
     except FileNotFoundError:
+        if rowplan._trace.get() is not None:
+            return DEFAULT_TASTE
         try:
             with open(path, "w") as fh:
                 json.dump(DEFAULT_TASTE, fh, ensure_ascii=False, indent=1)
@@ -3271,6 +3496,9 @@ def _connector_write_locked(name, doc, *, indent=None, newline=False):
     return True
 
 
+BACKFILL_PLAYS = 5
+
+
 def _aiostreams_db(options):
     configured = CONFIG["connectors"]["aiostreams_db"]["options"]
     if options != configured or os.path.islink(options["path"]):
@@ -3284,19 +3512,26 @@ def _aiostreams_db(options):
             raise SchemaMismatch()
         where = " or ".join(["uuid like ?"] * len(profiles)) or "0"
         rows = con.execute(
-            f"select lower(substr(uuid, 1, 8)), media_type, base_id, max(coalesce(last_played_at, 0)), max(played), "
+            f"with marked as (select *, sum(case when kind = 'episode' and played = 1 then 1 else 0 end) "
+            f"over (partition by lower(substr(uuid, 1, 8)), cast(last_played_at / 60000 as integer)) as minute_plays "
+            f"from watch_state where ({where})), history as (select *, "
+            f"last_played_at is not null and minute_plays >= ? as backfill from marked) "
+            f"select lower(substr(uuid, 1, 8)), media_type, base_id, "
+            f"max(case when not backfill then last_played_at end), max(played), "
             f"sum(case when kind = 'episode' and played = 1 then 1 else 0 end), max(favorite), "
             f"max(case when duration_ms > 0 then 1.0 * position_ms / duration_ms else 0 end), count(*), max(rating), "
             f"max(likes), max(dropped), "
             f"max(case when kind = 'episode' and played = 1 then season * 1000 + episode end), "
-            f"max(case when kind = 'episode' and played = 0 and position_ms > 0 then season * 1000 + episode end) "
-            f"from watch_state where ({where}) group by 1, 2, 3 order by 4 desc limit 120",
-            tuple(p + "%" for p in profiles)).fetchall()
+            f"max(case when kind = 'episode' and played = 0 and position_ms > 0 then season * 1000 + episode end), "
+            f"max(backfill) from history group by 1, 2, 3 order by 4 desc limit 120",
+            (*tuple(p + "%" for p in profiles), BACKFILL_PLAYS)).fetchall()
     items = []
-    for prefix, typ, base, at, played, eps, fav, prog, n, rating, likes, dropped, last, resume in rows:
+    for prefix, typ, base, at, played, eps, fav, prog, n, rating, likes, dropped, last, resume, backfill in rows:
         item = {"profile": profiles[prefix], "type": typ, "id": base, "at": at or None, "played": bool(played),
                 "favorite": bool(fav), "progress": round(prog or 0, 2), "entries": n, "rating": rating,
                 "likes": likes, "dropped": bool(dropped)}
+        if backfill:
+            item["backfilled"] = True
         if typ == "series":
             item["episodes_played"] = eps or 0
             if last:
@@ -3312,6 +3547,9 @@ class Unsupported(ValueError):
 
 
 def _player_history(records, profile, cid):
+    minutes = Counter(at // 60_000 for typ, tid, at, played, favorite, progress, episode in records
+                      if typ == "series" and episode is not None and played and at is not None)
+    backfill = {minute for minute, count in minutes.items() if count >= BACKFILL_PLAYS}
     items, dropped = {}, 0
     for typ, tid, at, played, favorite, progress, episode in records:
         if type(tid) not in (str, int) or not re.fullmatch(r"[0-9]+", str(tid)) or int(tid) <= 0:
@@ -3321,7 +3559,10 @@ def _player_history(records, profile, cid):
         item = items.setdefault(key, {"profile": profile, "type": typ, "id": key[1], "at": None,
             "played": False, "favorite": False, "progress": 0, "entries": 0, "rating": None,
             "likes": None, "dropped": False})
-        item["at"] = max(item["at"] or 0, at or 0) or None
+        if at is not None and at // 60_000 in backfill:
+            item["backfilled"] = True
+        else:
+            item["at"] = max(item["at"] or 0, at or 0) or None
         item["played"] |= played
         item["favorite"] |= favorite
         item["progress"] = max(item["progress"], round(progress, 2))
@@ -3608,7 +3849,7 @@ def _trakt_import_history(data, now, *, unknown_dates=False):
     minutes = Counter(minute for movie in data["movies"] for minute in movie["plays"])
     minutes.update(episode[2] for show in data["shows"] for episode in show["eps"])
     # shortcut: same-minute batches of >=5 are backfill; add burst detection if imports spread out.
-    backfill = {minute for minute, count in minutes.items() if count >= 5 and minute is not None}
+    backfill = {minute for minute, count in minutes.items() if count >= BACKFILL_PLAYS and minute is not None}
     items = []
     for kind in ("movies", "shows"):
         for row in data[kind]:
@@ -5045,6 +5286,8 @@ def build_profile(items, searches, trakt=(), remote=True):
     """Household TV history plus the owner's Trakt history, folded in source precedence order."""
     now = time.time()
     entries, by_key, extra_seen = fold_events(event_stages(now, items, trakt, remote), now)
+    if CONFIG["history"]["source"] in HISTORY_ADAPTERS:
+        extra_seen |= {it["id"] for it in items if (it.get("played") or it.get("episodes_played")) and attribute(it)[0] != GUEST}
     entries.sort(key=lambda e: (-(e["weight"] / (1 + min(e["age"], 365) / 60)), e["age"]))
     genre_w = {}
     for e in entries:
@@ -5164,9 +5407,12 @@ def profile_text(p, you="they"):
 
 
 def taste_hash(name, items):
-    """Changes only when a title's taste signal changes (not on every progress tick while watching)."""
+    """Changes with taste signals and player activity dates, not progress ticks."""
     now = time.time()
     signal = sorted((it["id"], classify(it, now)[0]) for it in items if name != "household" or attribute(it)[0] != GUEST)
+    if CONFIG["history"]["source"] in HISTORY_ADAPTERS:
+        signal.append(sorted((it.get("profile", "household"), it["type"], it["id"], it.get("at") or 0)
+                             for it in items if name != "household" or attribute(it)[0] != GUEST))
     from skald.history import read as history_summaries
     if summaries := history_summaries(DATA):
         signal.append(summaries)
@@ -5246,7 +5492,7 @@ def refresh_profiles():
 
 NEWTOYOU_REJECT = 0.2  # New to You picks change one axis on purpose; a no there counts a fifth of a normal no
 LEARN_ROWS = {rid('foryou'), rid('upcoming'), rid('catchup'), rid('rewatch'), rid('because'), rid('top10'), rid('week'),
-              rid('leap')} | set(ROW_OWNER) | set(DOCS) | set(STUDIO_ROWS)
+              rid('leap')} | set(BECAUSE_ROWS) | set(ROW_OWNER) | set(DOCS) | set(STUDIO_ROWS)
 LEARN_VISIBLE = 20
 LEARN_WINDOW = 21
 LEARN_TIRED = 6
@@ -6690,6 +6936,7 @@ def experience_profile(entries):
 
 
 QUALITY_PRIOR = False
+CALIBRATION_MAX, CALIBRATION_MIN = 800, 200
 
 
 def quality_prior(rec):
@@ -6697,6 +6944,12 @@ def quality_prior(rec):
     if not QUALITY_PRIOR:
         return 0.0
     return .02 * max(0, min(10, (rec or {}).get("vote_average") or 0))/10 * min(1, math.log1p(max(0, (rec or {}).get("vote_count") or 0))/math.log1p(10000))
+
+
+def calibration_pairs(p, store):
+    excluded = p.get("seen", set()) | p.get("negative", set())
+    return {(slot.partition("@")[0], rec.get("kind") or slot.partition("@")[2] or "movie")
+            for slot, rec in store.items() if rec and not rec.get("adult") and slot.partition("@")[0] not in excluded}
 
 
 def build_model(p, enrich=True):
@@ -6735,7 +6988,7 @@ def build_model(p, enrich=True):
             hs[title] = max(hs.get(title, 0), e["weight"])
     holders = {fid: sorted(((w, fkey(key, kind)) for (key, kind), w in hs.items()), reverse=True)[:40]
                for fid, hs in holders.items() if fid in aff}
-    m = {"vec": vec, "aff": aff, "names": names, "npos": npos, "bscale": 1.0, "cal": None, "vbase": 0.0, "bg": [],
+    m = {"vec": vec, "aff": aff, "names": names, "npos": npos, "bscale": 1.0, "cal": None, "cal_reference": None, "vbase": 0.0, "bg": [],
          "kinds": {fkey(e["key"], e["kind"]): e["kind"] for e in p["entries"]}, "holders": holders,
          "ent": {fkey(e["key"], e["kind"]): (e["title"], tuple(e.get("by") or ())) for e in pos_entries},
          "paff": {}, "pvec": {}, "px": {}, "pbscale": {}, "pbg": {}, "nexp": {}, "x": experience_profile(house["entries"])}
@@ -6799,32 +7052,41 @@ def build_model(p, enrich=True):
     own = [b for b in (facet_bonus(m, store.get(fkey(e["key"], e["kind"])))[0] for e in pos_entries[:150]) if b > 0]
     if own:
         m["bscale"] = sorted(own)[len(own) // 2] or 1.0
-    if not enrich:
-        m["taste_line"] = taste_line(m)
-        return m
-    # Calibration: the percentile among this week's ~80 trending titles (median ~70%, top ones 95+).
+    # Rank against known unseen titles; small households still use the trending baseline.
     try:
-        bg = []
-        for kind in ("movie", "tv"):
-            for page in (1, 2):
-                bg += [(f"tmdb:{it['id']}", kind) for it in tmdb(f"trending/{kind}/week", language="en-US", page=page).get("results", [])]
-        ensure_facets(bg)
-        tag_experiences(bg, max_batches=4)
-        try:
-            ensure_emb(bg)
-        except BudgetExceeded:
-            pass
+        excluded = p["seen"] | p.get("negative", set())
+        bg = calibration_pairs(p, store)
+        bg = sorted(bg, key=lambda pair: hashlib.sha256(f"{pair[0]}@{pair[1]}".encode()).digest())
+        if len(bg) >= CALIBRATION_MIN:
+            m["cal_reference"] = "known"
+        elif enrich:
+            bg = []
+            for kind in ("movie", "tv"):
+                for page in (1, 2):
+                    bg += [(f"tmdb:{it['id']}", kind) for it in tmdb(f"trending/{kind}/week", language="en-US", page=page).get("results", [])]
+            ensure_facets(bg)
+            tag_experiences(bg, max_batches=4)
+            try:
+                ensure_emb(bg)
+            except BudgetExceeded:
+                pass
+            bg = [(k, kind) for k, kind in dict(bg).items() if k not in excluded]
+            m["cal_reference"] = "trending"
+        else:
+            bg = []
         # Missing fingerprints contribute no evidence, matching replay blends; percentile uses the full score.
-        m["bg"] = sorted(s for s in (score_key(m, k, kind=kind)[0] for k, kind in dict(bg).items() if k not in p["seen"]) if s is not None)
+        m["bg"] = sorted(s for s in (score_key(m, k, kind=kind)[0] for k, kind in bg[:CALIBRATION_MAX]) if s is not None)
         if len(m["bg"]) >= 20:
             m["cal"] = len(m["bg"])
             for person in (*PEOPLE, "together"):
-                m["pbg"][person] = sorted(s for k, kind in dict(bg).items() if k not in p["seen"]
+                age = kids_age(person)
+                scoped = [(k, kind) for k, kind in bg if age is None or age_ok(frec(k, kind), kind, age)][:CALIBRATION_MAX]
+                m["pbg"][person] = sorted(s for k, kind in scoped
                                           if (s := person_score(m, k, person, kind)[0]) is not None)
                 if person in m.get("mem0", {}):
                     block = m["mem0"][person]
                     strict = {**m, **{name: {**m[name], person: block[name]} for name in ("paff", "pbscale")}}
-                    block["pbg"] = sorted(s for k, kind in dict(bg).items() if k not in p["seen"]
+                    block["pbg"] = sorted(s for k, kind in scoped
                                           if (s := person_score(strict, k, person, kind)[0]) is not None)
     except Exception as e:
         print(f"calibration: {type(e).__name__}: {e}", flush=True)
@@ -7040,7 +7302,7 @@ def reasons(m, key, fids, n=2, person=None, kind=None):
         if a:
             used.add(a[0])
             out.append(t("why.anchor", name=name, title=a[1], person="" if person else who_label(a[2])))
-        else:
+        elif fid[0] not in 'kcn':
             out.append(name)
     return out
 
@@ -7135,6 +7397,8 @@ def get_model(build=True):
         with _memory_lock:
             seq = _memory_read()["seq"]
         sig = (p.get("hash"), len(_learn["hits"]) if HIT_TASTE else 0, local_now().strftime("%Y-%m-%d"), seq, _emb_model, title_fix_stamp())
+        with _facets_lock:
+            sig += (len(calibration_pairs(p, _facets)) >= CALIBRATION_MIN,)
         if len(adult_people()) != len(PEOPLE):
             sig += (adult_people(),)
         if _model["sig"] != sig or _model["m"] is None:
@@ -7146,14 +7410,15 @@ def get_model(build=True):
         return _model["m"]
 
 
-def rank_by_taste(m, items):
+def rank_by_taste(m, items, enrich=True):
     """items: [(key, kind, payload)] -> sorted best first, as [(score, why, key, kind, payload)]; unknowns last."""
-    try:
-        ensure_facets([(k, kind) for k, kind, _ in items])
-        ensure_emb([(k, kind) for k, kind, _ in items])
-    except Exception as e:
-        print(f"rank: {type(e).__name__}: {e}", flush=True)
-    tag_experiences([(k, kind) for k, kind, _ in items[:50]], max_batches=2)
+    if enrich:
+        try:
+            ensure_facets([(k, kind) for k, kind, _ in items])
+            ensure_emb([(k, kind) for k, kind, _ in items])
+        except Exception as e:
+            print(f"rank: {type(e).__name__}: {e}", flush=True)
+        tag_experiences([(k, kind) for k, kind, _ in items[:50]], max_batches=2)
     scored = [(score_key(m, k, kind=kind), i, k, kind, x) for i, (k, kind, x) in enumerate(items)]
     scored.sort(key=lambda t: (t[0][0] is None, -(t[0][0] or 0), t[1]))
     return [(sw[0], sw[1], k, kind, x) for sw, _, k, kind, x in scored]
@@ -8009,27 +8274,41 @@ def seed_phrase(e):
 
 def because_feed(lang):
     p = adult_profile(_profiles.get("household"))
-    seeds = top_seeds(p, 8) if p else []
-    if not seeds:
-        return None
-    seed = because_seed(p)
-    stype, kind = seed["stype"], seed["kind"]
-    genre_names = genres(kind, lang)
-    data, art = [], {}
-    for path in (f"{kind}/{seed['id']}/recommendations", f"{kind}/{seed['id']}/similar"):
-        more, more_art = with_art(path, lang)
-        data += more
-        art.update(more_art)
-    metas, seen = [], set()
-    for it in data:
-        key = f"tmdb:{it['id']}"
-        if key in p["seen"] or key in p["negative"] or key in seen:
+    seeds = because_seeds(p)
+    m = get_model() if seeds else None
+    out, names, anchors = {}, {}, []
+    for seed in seeds:
+        stype, kind = seed["stype"], seed["kind"]
+        rec = frec(seed["key"], kind)
+        anchor = {"id": seed["key"], "type": stype, "name": seed["title"], "_row": {"collection": rec.get("collection")}}
+        universe = universe_key(anchor)
+        if any(franchise_key(anchor) == franchise_key(a) or universe and universe == universe_key(a) or
+               xsim(rec.get("x"), tags) >= BECAUSE_SEED_SIM for a, tags in anchors):
             continue
-        seen.add(key)
-        metas.append(row_meta(it, stype, kind, genre_names, art.get(it["id"], {}), note=t("note.like", title=seed["title"]), lang=lang))
-    rank_by_taste(get_model(), [(x["id"], kind, x) for x in metas])
-    metas = because_rank([x for x in metas if because_ok(x, seed["key"])], seed["key"])
-    return {rid('because'): {stype: metas[:30]}, "_names": {rid('because'): {"title": seed_phrase(seed), "seed": seed["key"]}}}
+        cid = BECAUSE_ROWS[len(anchors)]
+        genre_names = genres(kind, lang)
+        data, art = [], {}
+        for path in (f"{kind}/{seed['id']}/recommendations", f"{kind}/{seed['id']}/similar"):
+            more, more_art = with_art(path, lang)
+            data += more
+            art.update(more_art)
+        metas, seen = [], set()
+        for it in data:
+            key = f"tmdb:{it['id']}"
+            if key in p["seen"] or key in p["negative"] or key in seen:
+                continue
+            seen.add(key)
+            metas.append(row_meta(it, stype, kind, genre_names, art.get(it["id"], {}), note=t("note.like", title=seed["title"]), lang=lang))
+        rank_by_taste(m, [(x["id"], kind, x) for x in metas])
+        metas = because_rank([x for x in metas if row_eligible(x, cid, lang, p, seed=seed["key"])], seed["key"])
+        if not metas:
+            continue
+        anchors.append((anchor, rec.get("x")))
+        out[cid] = {stype: metas[:30]}
+        names[cid] = {"title": seed_phrase(seed), "seed": seed["key"]}
+        if len(anchors) == len(BECAUSE_ROWS):
+            break
+    return {**out, "_names": names}
 
 
 def next_episode(det, last):
@@ -8442,7 +8721,7 @@ def soon_for_taste(p, lang, today, have):
     out = []
     for s_, why, key, kind, (d, meta) in rank_by_taste(m, items):
         pct = match_pct(m, s_)
-        if pct is None or pct < 80:
+        if pct is None or pct < (65 if m.get("cal_reference") == "known" else 80):
             continue
         original, original_overview = card_parts(meta)
         original = [x for x in original if x not in (t("match.strong"), t("match.good"), t("match.wildcard"))]
@@ -8593,10 +8872,6 @@ LANE_KINDS = {"x": "feeling", "k": "theme", "d": "person", "a": "person", "n": "
 LANE_CAP = {"feeling": 2, "theme": 2, "person": 1, "brand": 1}
 MAKER_NEED = 8
 LANE_TEMPLATE = {"d": "row.lane.from", "a": "row.lane.starring", "n": "row.lane.brand", "c": "row.lane.from"}
-LANE_SYS = ("You name rows on a streaming home screen. The row holds movies and series sharing one TMDB keyword. "
-            "Reply with only the row title: 2 to 5 English words that name that theme plainly, Title Case, no quotes, "
-            "no emoji. Examples: 'time travel' -> Time Travel Stories; 'based on manga' -> Manga Adaptations; "
-            "'heist' -> Heists & Big Scores; 'marvel cinematic universe (mcu)' -> More from the MCU.")
 # Brand rows only for names people choose by; a local broadcaster (MBS, Fuji TV) is a reason, not a row.
 LANE_BRANDS = {"HBO", "HBO Max", "Netflix", "Apple TV+", "Disney+", "Prime Video", "Amazon", "Hulu", "FX", "AMC",
                "Showtime", "Paramount+", "Peacock", "Crunchyroll", "BBC One", "BBC Two", "Starz", "A24", "Pixar",
@@ -8620,6 +8895,138 @@ class LaneRow(list):
     def __init__(self, metas, names):
         super().__init__(metas)
         self.names = names
+
+
+THEME_INP = {"kind": ("lane", "mood", "leap"), "theme": str, "source": [str, 40],
+             "date": str, "language": str, "taste": str,
+             "candidates": [{"title": str, "year": (int, None), "type": ("movie", "series"),
+                             "overview": (str, None)}, 40]}
+THEME_OUT = {"fits_now": bool, "keep": [int, 40],
+             "add": [{"title": str, "year": (int, None), "type": ("movie", "series"), "why": str}, 30],
+             "why": {str(i): (str, None) for i in range(40)}}
+THEME_SYS = ("Source one themed streaming row. Judge the theme's meaning, not keyword overlap. "
+             "fits_now is false only when this theme is wrong for today's date, season or holiday. "
+             "Keep only candidates that really fit. Propose up to 30 other fitting movies or series. "
+             "For leap, preserve the seed's emotional experience in a different world. "
+             "Use household taste to guide suggestions. Order keep and add by fit; keep comes before add. "
+             "Return only JSON: {\"fits_now\":true,\"keep\":[0],\"add\":[{\"title\":\"...\","
+             "\"year\":2020,\"type\":\"movie\",\"why\":\"...\"}],\"why\":{\"0\":\"...\"}}. "
+             "Indices are zero-based in candidates. Every kept and added title needs a short real reason "
+             "in language, one sentence under 90 characters explaining how the story fits. "
+             "Never use a bare keyword, tag, facet or theme name as a reason. No markup or dashes.")
+
+
+def theme_request(batch):
+    return {"model": COMMAND_MODEL, "messages": [{"role": "system", "content": THEME_SYS},
+            {"role": "user", "content": json.dumps(batch[0], ensure_ascii=False)}],
+            "response_format": {"type": "json_object"}, "reasoning": {"effort": COMMAND_EFFORT},
+            "max_tokens": 2000, "usage": {"include": True}}
+
+
+def theme_parse(resp, batch):
+    answer = json.loads(resp["choices"][0]["message"]["content"])
+    check(THEME_OUT, answer)
+    inp = batch[0]
+    if len(set(answer["keep"])) != len(answer["keep"]) or any(
+            not 0 <= i < len(inp["candidates"]) for i in answer["keep"]):
+        raise ValueError("keep")
+    labels = {x.casefold().strip(" .,!?:;") for x in [inp["theme"], *inp["source"]]}
+    for reason in [answer["why"].get(str(i)) for i in answer["keep"]] + [x["why"] for x in answer["add"]]:
+        note = clean_note(reason) if reason else ""
+        if len(note.split()) < 3 or note.casefold().strip(" .,!?:;") in labels:
+            raise ValueError("why")
+    return [(answer, 1)]
+
+
+decision("theme_source", ver=1, lane="feed", cap=12, ttl=DAY, serving=False, requires=("OR_KEY",), api=False,
+    inp=THEME_INP, out=THEME_OUT, norm=lambda x: x, rule=None, params={}, min_acc=1,
+    llm={"path": "/api/v1/chat/completions", "model": COMMAND_MODEL, "batch": 1, "timeout": 15,
+         "prompt": theme_request, "parse": theme_parse},
+    fallback=lambda inp, err: ({"fits_now": True, "keep": [], "add": [], "why": {}}, 0))
+
+
+_theme_sources = {}  # Daily source reuse; the persisted decision cap bounds restart spend.
+_row_source_status = {}
+
+
+def themed_row(m, p, theme, items, lang, cid, person=None, seed=None, exclude=(), allow_llm=True):
+    """Own picks with bounded vetting; None means the caller must use its failure policy."""
+    today = local_now().date().isoformat()
+    for key in list(_theme_sources):
+        if key[0] != today:
+            _theme_sources.pop(key, None)
+    cache_key = (today, lang, person, theme["kind"], theme["key"], theme["name"], tuple(theme["source"]))
+    try:
+        metas = _theme_sources.get(cache_key)
+        vetted = True
+        items = list({x["id"]: x for x in items}.values())[:40]
+        rowplan.source_status(SimpleNamespace(**globals()), cid, lang, date=today, reused=metas is not None)
+        if metas is None and not allow_llm:
+            metas, vetted = items, False
+            rowplan.source_status(SimpleNamespace(**globals()), cid, lang, date=today, budget=True)
+        if metas is None:
+            if not items:
+                return []
+            candidates = []
+            for x in items:
+                year = str(x.get("releaseInfo") or (x.get("_row") or {}).get("date") or "")[:4]
+                overview = (x.get("_row") or {}).get("overview") or card_parts(x)[1]
+                candidates.append({"title": x["name"][:500], "year": int(year) if year.isdigit() else None,
+                                   "type": x["type"], "overview": overview[:350] or None})
+            result = decide("theme_source", {"kind": theme["kind"], "theme": theme["name"][:500],
+                            "source": theme["source"][:40], "date": today,
+                            "language": lang, "taste": taste_hint(m, person)[:500] or "none available",
+                            "candidates": candidates})
+            if result["source"] == "fallback":
+                budget = result.get('why') in ('BudgetExceeded', 'lane', 'month', 'cap', 'over')
+                rowplan.source_status(SimpleNamespace(**globals()), cid, lang, date=today, failed=not budget, budget=budget)
+                if result.get("why") != "cap" or theme["kind"] != "lane":
+                    return None
+                metas, vetted = items, False
+            else:
+                rowplan.source_status(SimpleNamespace(**globals()), cid, lang, date=today, reused=result['source'] == 'cache')
+                answer = result["answer"]
+                if not answer["fits_now"]:
+                    _theme_sources[cache_key] = []
+                    return []
+                metas = [{**items[i], "description": " · ".join(x for x in (
+                    clean_note(answer["why"][str(i)]), card_parts(items[i])[1]) if x)} for i in answer["keep"]]
+                jobs = [(x, _outer.submit(resolve_pick, "movie" if x["type"] == "movie" else "tv",
+                                         x["title"], x["year"], lang)) for x in answer["add"]]
+                for pick, job in jobs:
+                    try:
+                        hit = job.result()
+                        if hit:
+                            kind = "movie" if pick["type"] == "movie" else "tv"
+                            metas.append(row_meta(hit[0], pick["type"], kind, genres(kind, lang), hit[1],
+                                                  note=clean_note(pick["why"]), lang=lang))
+                    except Exception:
+                        continue
+        unique = {}
+        for x in metas:
+            unique.setdefault(x["id"], x)
+        metas = list(unique.values())
+        ranked = rank_by_taste(m, [(x["id"], "movie" if x["type"] == "movie" else "tv", x) for x in metas])
+        raw = {key: person_score(m, key, person, kind)[0] if person else sc for sc, _, key, kind, _ in ranked}
+        scores = {key: match_pct(m, sc, person) for key, sc in raw.items()}
+        source = metas
+        metas = [x for x in metas if x["id"] not in p["seen"] | p["negative"] | set(exclude)
+                 and not NO_TALK & set((x.get("_row") or {}).get("genre_ids") or [])
+                 and quality_ok(x) and tone_ok(x, seed, animation=theme["kind"] == "leap", person=person)
+                 and (theme["kind"] != "lane" or scores[x["id"]] is None or scores[x["id"]] >= 55)
+                 and row_eligible(x, cid, lang, p, seed=seed)]
+        if not vetted:
+            return sorted(metas, key=lambda x: (raw[x["id"]] is None, -(raw[x["id"]] or 0)))
+        values = {x["id"]: raw[x["id"]] for x in metas if raw[x["id"]] is not None}
+        low, high = min(values.values(), default=0), max(values.values(), default=0)
+        blended = [(0.2 * (1 - i / len(metas)) + 0.8 * ((values.get(x["id"], low) - low) / (high - low) if high > low else 0),
+                    {**x, "_row": {**(x.get("_row") or {}), "theme": theme["key"]}}) for i, x in enumerate(metas)]
+        _theme_sources[cache_key] = source
+        return [x for _, x in sorted(blended, key=lambda r: -r[0])]
+    except Exception as e:
+        rowplan.source_status(SimpleNamespace(**globals()), cid, lang, date=today, failed=True)
+        print(f"theme {theme['kind']}: {type(e).__name__}: {e}", flush=True)
+        return None
 
 
 def lane_titles(fid, lang, makers_only=False):
@@ -8677,14 +9084,8 @@ def lane_titles(fid, lang, makers_only=False):
 def lane_title(fid, name, examples):
     if fid[0] == "x":
         return EXPERIENCES[fid[2:]][1]
-    if fid[0] != "k" or not OR_KEY:
+    if fid[0] != "k":
         return t(LANE_TEMPLATE[fid[0]], name=name) if fid[0] in LANE_TEMPLATE else name
-    try:
-        raw = llm_text(LANE_SYS, f"Keyword: '{name}'", 30, 20, "feed", "lane-title").strip().strip('"\'').splitlines()[0].strip()
-        if 3 <= len(raw) <= 40:
-            return raw
-    except Exception as e:
-        print(f"lane title: {type(e).__name__}: {e}", flush=True)
     return " ".join(w if w in ("on", "of", "a", "the", "and", "in") else w[:1].upper() + w[1:] for w in name.split())
 
 
@@ -8764,12 +9165,16 @@ def lanes_feed(lang):
         themes = maker_themes + [(pr, fid, person) for pr, fid, person in themes if not fid.startswith("d:")]
     exclude = p["seen"] | p["negative"]
     front = set()
+    moods = 0
+    cap = rowplan.family_caps(CONFIG)['mood'] if 'rows' not in CONFIG['household'] else len(MOODS_ROWS)
     for cid in DEDUPE_ORDER[:DEDUPE_ORDER.index(LANES[0])]:
-        if not row_enabled(cid):
+        if not row_enabled(cid) or cid in MOODS_ROWS and moods >= cap:
             continue
         for typ in (("movie", "series") if cid == rid('top10') else ("movie",) if cid in (rid('digital'), rid('toprated')) else ("tv",) if cid in MIXED else ("series",)):
-            front = mark_above(front, cid, row_list(cid, typ, lang, built=True))
-    chosen, used, tries, taken, hero_lane = [], {}, 0, set(), False
+            metas = row_list(cid, typ, lang, built=True)
+            moods += bool(metas) and cid in MOODS_ROWS
+            front = mark_above(front, cid, metas)
+    chosen, used, tries, vetted, taken, hero_lane = [], {}, 0, 0, set(), False
     maker_members, hidden = set(), remote_masks()[0] if makers else set()
     local = list(row_pool(lang))
     for pr, fid, person in themes:
@@ -8797,19 +9202,27 @@ def lanes_feed(lang):
         tired = tired_keys({f"lane:{fid}"})
         items = [x for x in items if x[0] not in tired]
         need = MAKER_NEED if fid in makers else 16  # Snapshot lanes lost 4-6 cards after build; keep ten beyond that loss.
-        if len(items) < need:
-            print(f"lane {fid}: only {len(items)} unseen", flush=True)
-            continue
-        ranked = [(sc, x) for sc, _, _, _, x in rank_by_taste(m, items)]
-        metas = [with_match(x) for sc, x in ranked if (sc is None or match_pct(m, sc) is None or match_pct(m, sc) >= 55)
-                 and lane_member(x, fid) and row_eligible(x, LANES[0], lang, p)]
+        title = t("row.maker", name=makers[fid]) if fid in makers else \
+                (lanes.get(fid) or {}).get("title") or lane_title(fid, m["names"][fid], [x["name"] for _, _, x in items])
+        candidates = [x for _, _, x in items if x["id"] not in taken | front]
+        source_cid = LANE_ROWS[len(chosen)]
+        metas = themed_row(m, p, {"kind": "lane", "name": title, "key": fid,
+                           "source": [fid, makers.get(fid) or m["names"][fid]]},
+                           candidates, lang, source_cid, person=person, allow_llm=vetted < len(LANE_ROWS) + 1,
+                           exclude=taken | front | set(tired) | (hidden if fid in makers else set()))
+        status = _row_source_status.get((source_cid, lang))
+        vetted += bool(candidates)
+        if metas is None:
+            previous = [x for cid in LANE_ROWS for x in source_metas(cid, lang, built=True)
+                        if ((_feeds.get((cid, lang)) or {}).get("names") or {}).get("lane") == fid
+                        and (x.get("_row") or {}).get("theme") == fid]
+            metas = list({x["id"]: x for x in previous if x["id"] not in exclude | set(tired) | hidden}.values())
+        metas = [x for x in metas if row_eligible(x, LANES[0], lang, p)]
         reserve = list(metas)
         superhero = sum(is_hero(x) for x in metas) > len(metas) / 2
         if len(chosen) < len(LANES) and superhero and hero_lane:
             continue
         fresh = list({x["id"]: x for x in metas if x["id"] not in taken | front}.values())[:ROW_MAX]
-        title = t("row.maker", name=makers[fid]) if fid in makers else \
-                (lanes.get(fid) or {}).get("title") or lane_title(fid, m["names"][fid], [x["name"] for x in fresh])
         if len(fresh) < need or not lane_allowed(fresh, title):
             print(f"lane {fid}: {len(fresh)} fresh of {len(metas)}", flush=True)
             continue
@@ -8818,22 +9231,25 @@ def lanes_feed(lang):
         if person is not None:
             maker_members.add(person)
         taken |= {x["id"] for x in fresh}
-        chosen.append((fid, fresh, reserve, title))
+        chosen.append((fid, fresh, reserve, title, status))
     slots, free = {}, [c for c in LANES]
-    for fid, metas, reserve, title in chosen[:len(LANES)]:  # a lane keeps its row position while it stays
+    for fid, metas, reserve, title, status in chosen[:len(LANES)]:  # a lane keeps its row position while it stays
         if cur.get(fid) in free:
-            slots[cur[fid]] = (fid, metas, reserve, title)
+            slots[cur[fid]] = (fid, metas, reserve, title, status)
             free.remove(cur[fid])
-    for fid, metas, reserve, title in chosen[:len(LANES)]:
+    for fid, metas, reserve, title, status in chosen[:len(LANES)]:
         if fid not in [f for f, *_ in slots.values()]:
-            slots[free.pop(0)] = (fid, metas, reserve, title)
+            slots[free.pop(0)] = (fid, metas, reserve, title, status)
     slots.update(zip(LANE_BENCH, chosen[len(LANES):]))
     out, names = {}, {}
     for cid in LANE_ROWS:
+        _row_source_status.pop((cid, lang), None)
         if cid not in slots:
             out[cid] = {"tv": []}
             continue
-        fid, metas, reserve, title = slots[cid]
+        fid, metas, reserve, title, status = slots[cid]
+        if status:
+            _row_source_status[cid, lang] = status
         st = lanes.get(fid) or {}
         if not st.get("title"):
             st["title"] = title
@@ -8847,7 +9263,7 @@ def lanes_feed(lang):
     return {**out, "_names": names}
 
 
-# --- feeling rows (experience tags, no LLM beyond the one-off tagging) ---------------------------------------
+# --- feeling rows ------------------------------------------------------------------------------
 # Same Feeling, New World: one loved title a day (rotating members / together), and titles that give the same
 # experience from a different world. For each member: their loves and the shared TV. Four mood shelves: experience bundles,
 # chosen once per evening by Luna (what fits tonight: day, season, recent plays, what they respond to), blended
@@ -8933,6 +9349,15 @@ def leap_feed(lang):
     top = [x for x, _ in sorted(ax.items(), key=lambda kv: -kv[1])][:3]
     pool = feeling_pool(m, p, top, lang, seeds=8, extra=[fkey(a["key"], a["kind"])], seed=a["key"])
     pool = [x for x in pool if tone_ok(x[2], a["key"], animation=True)]
+    reserve = themed_row(m, p, {"kind": "leap", "name": t("row.feeling", title=a["title"]), "key": a["key"],
+                         "source": [a["title"], *(f"{x}: {v}" for x, v in ax.items())]},
+                         [x for _, _, x in pool], lang, rid('leap'), person=who if who in PEOPLE else None, seed=a["key"])
+    if reserve is not None:
+        metas = polish_row(balance_row(reserve))[:30]
+        if len(metas) < 8:
+            return {rid('leap'): {"tv": []}}
+        return {rid('leap'): {"tv": metas, "pool": reserve},
+                "_names": {rid('leap'): {"title": t("row.feeling", title=a["title"]), "seed": a["key"]}}}
     av = femb(a["key"], a["kind"])
     try:
         ensure_emb([(k, kind) for k, kind, _ in pool])
@@ -9087,17 +9512,21 @@ def mood_feed(lang):
             break
         title, xs, _ = MOODS[mood]
         pool = [x for x in feeling_pool(m, p, xs, lang, seeds=6) if x[0] not in taken]
-        pool = [x for x in pool if x[0] not in tired_keys({f"mood:{mood}"})]
-        ranked_pool = rank_by_taste(m, pool)
-        scored = []
-        for sc, why, key, kind, meta in ranked_pool:
-            tags = frec(key, kind).get("x") or {}
-            hit = max(xs, key=lambda x: tags.get(x, 0))
-            strength = sum(tags.get(x, 0) for x in xs)
-            label = t("experience." + hit)
-            scored.append((strength * 0.15 + (match_pct(m, sc) or 50) / 100, key,
-                           {**meta, "description": " · ".join(y for y in (label[:1].upper() + label[1:], meta.get("description")) if y)}))
-        reserve = [x for _, _, x in sorted(scored, key=lambda t: -t[0])]
+        tired = set(tired_keys({f"mood:{mood}"}))
+        pool = [x for x in pool if x[0] not in tired]
+        reserve = themed_row(m, p, {"kind": "mood", "name": title, "key": mood, "source": xs},
+                             [x for _, _, x in pool], lang, free[0], exclude=taken | tired)
+        if reserve is None:
+            ranked_pool = rank_by_taste(m, pool)
+            scored = []
+            for sc, why, key, kind, meta in ranked_pool:
+                tags = frec(key, kind).get("x") or {}
+                hit = max(xs, key=lambda x: tags.get(x, 0))
+                strength = sum(tags.get(x, 0) for x in xs)
+                label = t("experience." + hit)
+                scored.append((strength * 0.15 + (match_pct(m, sc) or 50) / 100, key,
+                               {**meta, "description": " · ".join(y for y in (label[:1].upper() + label[1:], meta.get("description")) if y)}))
+            reserve = [x for _, _, x in sorted(scored, key=lambda t: -t[0])]
         metas = reserve[:25]
         if len(metas) < 10:
             continue
@@ -9444,8 +9873,83 @@ def week_feed(lang):
 
 # --- LLM rows ------------------------------------------------------------------
 
-def candidate_pool(p, n=40, metas=False, trending_only=None):
-    """TMDB recommendations of their strongest titles plus this week's trending: real candidates the LLM can rerank.
+POOL_SEEDS = 16
+POOL_PER_SEED = 6
+POOL_DETAILS = 50
+POOL_AREA_SIM = 0.8  # Near-identical experience mixes wait, while overlapping tastes can still seed different areas.
+
+
+def pool_seeds(p, report=None):
+    eligible, trace = [], {}
+    for e in p['entries']:
+        item = e.get('item') or {}
+        backfill = (item.get('backfilled') or item.get('_summary', {}).get('origin') == 'history.json') and not item.get('at')
+        reason = ('negative' if e['key'] in p.get('negative', ()) or e.get('weight', 0) < 0 else
+                  'backfill' if backfill and e.get('signal') != 'loved' else
+                  'not positive' if e.get('weight', 0) <= 0 else None)
+        identity = (e['key'], e['kind'])
+        trace.setdefault(identity, {'key': e['key'], 'kind': e['kind'], 'title': e['title'],
+                                    'chosen': False, 'reason': reason or 'limit', 'candidates': 0, 'kept': 0})
+        if reason is None:
+            eligible.append(e)
+    recent = top_seeds({'entries': eligible}, len(eligible))
+    head = recent[:POOL_SEEDS]
+    tv = top_seeds({'entries': [e for e in eligible if e.get('who') in ('tv', 'both')]}, 3)
+    tv = [e for e in tv if e not in head][:2]
+    seeded = {(e['key'], e['kind']) for e in head + tv}
+    favorites = [e for e in eligible if (e['key'], e['kind']) not in seeded
+                 and (e['signal'] in ('loved', 'liked') or
+                      e['signal'] == 'watched' and (e.get('item', {}).get('episodes_played') or 0) >= 20)]
+    unique = {}
+    for e in sorted(favorites, key=lambda e: -e['weight'] / (1 + e['age'] / 365)):
+        unique.setdefault((e['key'], e['kind']), e)
+    favorites = list(unique.values())[:min(3, max(0, len(head) - 1))]
+    cut = max(0, len(head) - len(favorites) - len(tv))
+    choices = [(e, 'recent') for e in head[:cut]] + [(e, 'favourite') for e in favorites] + \
+              [(e, 'shared TV') for e in tv] + [(e, 'recent') for e in recent[cut:]]
+    chosen, franchises, universes, areas, deferred, visited = [], set(), set(), [], [], set()
+    for e, source in choices:
+        identity = (e['key'], e['kind'])
+        if identity in visited:
+            continue
+        visited.add(identity)
+        rec = frec(e['key'], e['kind'])
+        meta = {'id': e['key'], 'type': e['stype'], 'name': e['title'], '_row': {'collection': rec.get('collection')}}
+        franchise, universe = franchise_key(meta), universe_key(meta)
+        area = rec.get('x') or {}
+        reason = ('duplicate franchise' if franchise in franchises else
+                  'duplicate universe' if universe and universe in universes else
+                  'similar area' if any(xsim(area, a) >= POOL_AREA_SIM for a in areas) else None)
+        if reason:
+            trace[identity]['reason'] = reason
+            if reason == 'similar area':
+                deferred.append((e, franchise, universe, area))
+            continue
+        if len(chosen) >= POOL_SEEDS:
+            continue
+        chosen.append(e)
+        franchises.add(franchise)
+        if universe:
+            universes.add(universe)
+        areas.append(area)
+        trace[identity].update(chosen=True, reason=source)
+    for e, franchise, universe, area in deferred:
+        identity = (e['key'], e['kind'])
+        if franchise in franchises or universe and universe in universes:
+            trace[identity]['reason'] = 'duplicate franchise' if franchise in franchises else 'duplicate universe'
+        elif len(chosen) < POOL_SEEDS:
+            chosen.append(e)
+            franchises.add(franchise)
+            if universe:
+                universes.add(universe)
+            trace[identity].update(chosen=True, reason='similar area fallback')
+    if report is not None:
+        report['seeds'] = list(trace.values())
+    return chosen
+
+
+def candidate_pool(p, n=40, metas=False, trending_only=None, report=None):
+    """Recommendations and similar titles from spread seeds, plus this week's trending.
     Trending must meet the median recommendation score; without a model it only fills a pool below 20.
     With the taste model, a wider pool is ranked by match; without, the first n in TMDB order."""
     try:
@@ -9453,20 +9957,20 @@ def candidate_pool(p, n=40, metas=False, trending_only=None):
     except Exception as e:
         print(f"taste model: {type(e).__name__}: {e}", flush=True)
         m = None
-    vec = m and m["vec"]
-    seeds, per = (top_seeds(p, 10), 20) if m else (top_seeds(p, 4), 15)
-    tv = top_seeds({"entries": [e for e in p["entries"] if e.get("who") in ("tv", "both")]}, 3)
-    seeds += [e for e in tv if e not in seeds][:2]  # activity on the shared TV account always seeds the pool
-    jobs = [(e, _pool.submit(tmdb, f"{e['kind']}/{e['id']}/recommendations", language="en-US")) for e in seeds]
+    seeds, per = pool_seeds(p, report), 20 if m else 15
+    # Each background personal_feed calls this twice: at most 34 lists and 50 candidate details per invocation.
+    jobs = [(e, _pool.submit(tmdb, f"{e['kind']}/{e['id']}/{endpoint}", language="en-US"))
+            for e in seeds for endpoint in ('recommendations', 'similar')]
     jobs += [({"kind": k, "title": None}, _pool.submit(tmdb, f"trending/{k}/week", language="en-US")) for k in ("movie", "tv")]
     cands, seen = [], set(p["seen"]) | set(p["negative"]) | set(tired_keys({rid('foryou')}))
     if trending_only is None:
         trending_only = set()
-    recommended = set()
+    recommended, unavailable = set(), 0
     for e, job in jobs:
         try:
             data = job.result().get("results", [])
         except Exception:
+            unavailable += 1
             continue
         for it in data[:per]:
             key = f"tmdb:{it['id']}"
@@ -9481,15 +9985,52 @@ def candidate_pool(p, n=40, metas=False, trending_only=None):
     trending_only.difference_update(recommended)
     why = {}
     if m:
-        ranked = rank_by_taste(m, [(key, kind, (it, e)) for key, kind, it, e in cands])
+        ranked = rank_by_taste(m, [(key, kind, (it, e)) for key, kind, it, e in cands], enrich=False)
+        ranked.sort(key=lambda x: (x[0] is None, -(x[0] or 0),
+                                   -(x[4][0].get('vote_average') or 0) if x[0] is None else 0,
+                                   -(x[4][0].get('vote_count') or 0) if x[0] is None else 0))
+        missing = [(key, kind) for _, _, key, kind, _ in ranked if not frec(key, kind)][:POOL_DETAILS]
+        try:
+            ensure_facets(missing)
+            known = [(key, kind) for _, _, key, kind, _ in ranked if frec(key, kind).get('title')]
+            if _emb_model == EMB_MODEL:  # The feed worker starts global embedding migrations separately.
+                ensure_emb(known)
+            tag_experiences([(key, kind) for key, kind in known if 'o' in frec(key, kind)][:50],
+                            max_batches=2, fetch_facets=False)
+        except Exception as e:
+            print(f"rank: {type(e).__name__}: {e}", flush=True)
+        ranked = rank_by_taste(m, [(key, kind, payload) for _, _, key, kind, payload in ranked], enrich=False)
         rec_scores = [sc for sc, _, _, _, (_, e) in ranked if e.get('title') and sc is not None]
         floor = statistics.median(rec_scores) if rec_scores else None
         cands = [(key, kind, it, e) for sc, _, key, kind, (it, e) in ranked
                  if e.get('title') or floor is not None and sc is not None and sc >= floor]
         why = {key: (match_pct(m, sc), reasons(m, key, w, kind=kind)) for sc, w, key, kind, _ in ranked}
         n = 50
-    elif sum(bool(e.get('title')) for _, _, _, e in cands) >= 20:
+    counts, kept, spread = Counter(), Counter(), []
+    for key, kind, it, e in cands:
+        identity = (e.get('key'), kind)
+        if e.get('title'):
+            counts[identity] += 1
+            if kept[identity] >= POOL_PER_SEED:
+                continue
+            kept[identity] += 1
+        spread.append((key, kind, it, e))
+    cands = spread
+    if not m and sum(bool(e.get('title')) for _, _, _, e in cands) >= 20:
         cands = [c for c in cands if c[3].get('title')]
+    if report is not None:
+        for e in report['seeds']:
+            identity = (e['key'], e['kind'])
+            e.update(candidates=counts[identity], kept=kept[identity])
+        report.update(pool_size=len(cands), distinct_seeds=len(seeds), cap=POOL_PER_SEED,
+                      cap_removed=sum(counts.values()) - sum(kept.values()),
+                      max_seed_share=max(kept.values(), default=0) / len(cands) if cands else 0,
+                      distinct_franchises=len({franchise_key({'id': key, 'type': 'movie' if kind == 'movie' else 'series',
+                                                             'name': it.get('title') or it.get('name'),
+                                                             '_row': {**it, 'collection': it.get('collection') or frec(key, kind).get('collection') or
+                                                                      (it.get('belongs_to_collection') or {}).get('id')}})
+                                               for key, kind, it, _ in cands}),
+                      unavailable_endpoints=unavailable)
     if metas:
         out = [row_meta(it, "movie" if kind == "movie" else "series", kind, genres(kind, "en-US"), it, lang="en-US")
                for _, kind, it, _ in cands]
@@ -9580,11 +10121,14 @@ def personal_feed(lang):
         exclude = p["seen"] | p["negative"] | set(tired)
         foryou = picks_to_rows(sec.get("FOR YOU", []), lang, exclude)
         mixed = interleave(foryou.get("movie", []), foryou.get("series", []))
-        mixed = interleave(mixed, candidate_pool(p, n=100, metas=True, trending_only=trending_only))
+        pool_report = {}
+        mixed = interleave(mixed, candidate_pool(p, n=100, metas=True, trending_only=trending_only, report=pool_report))
         out[rid('foryou')] = {"tv": polish_row(balance_row([x for x in mixed if quality_ok(x) and tone_ok(x)], foryou=True))[:40]}
+        pool_report['seeds'] = [e for e in pool_report.get('seeds', []) if e['chosen']]
+        out['_names'] = {rid('foryou'): {'pool': pool_report}}
         # Derived feed provenance also covers AI picks and borrowed refills outside the filtered pool.
         if trending_only:
-            out['_names'] = {rid('foryou'): {'trending_only': sorted(trending_only)}}
+            out['_names'][rid('foryou')]['trending_only'] = sorted(trending_only)
     if rewatch_enabled:
         recent = {e["key"] for e in p["entries"] if e["age"] < 60}
         out[rid('rewatchai')] = picks_to_rows(sec.get("REWATCH", []), lang, recent)
@@ -10335,14 +10879,14 @@ def job_specs(d, hashes):
     day, hh = ld.strftime("%Y-%m-%d"), hashes.get("household", "")
     specs = [
         ("episodes", [rid('episodes')], f"{day}/{d.hour // 3}/{hh}{hashes.get('episodes', '')}", 1800, lambda l: {rid('episodes'): episodes_feed(l)}),
-        ("because", [rid('because')], f"{day}/{hh}", 1800, because_feed),
+        ("because", BECAUSE_ROWS, f"r2/{day}/{hh}", 1800, because_feed),
         ("rewatch", [rid('rewatch')], f"{day}/{hh}", 1800, lambda l: {rid('rewatch'): rewatch_feed(l)}),
         ("upcoming", [rid('upcoming')], f"{day}/{d.hour // 6}/{hh}", 1800, lambda l: {rid('upcoming'): upcoming_feed(l)}),
         ("catchup", [rid('catchup')], f"{day}/{hh}{hashes.get('episodes', '')}", 1800, lambda l: {rid('catchup'): catchup_feed(l)}),
-        ("lanes", LANE_ROWS, f"r3/{day}/{hh}", 3600, lanes_feed),
-        ("leap", [rid('leap')], f"{day}/{hh}", 3600, leap_feed),
+        ("lanes", LANE_ROWS, f"source1/{day}/{hh}", 3600, lanes_feed),
+        ("leap", [rid('leap')], f"source1/{day}/{hh}", 3600, leap_feed),
         *((person, [cid], f"{day}/{hh}", 3600, lambda l, p=person: member_feed(l, p)) for cid, person in ROW_OWNER.items()),
-        ("moods", MOODS_ROWS, f"{day}/{hh}", 3600, mood_feed),
+        ("moods", MOODS_ROWS, f"source1/{day}/{hh}", 3600, mood_feed),
         ("docs", DOCS, f"nzb/{day}/{(_feeds.get((rid('docsai'), LANG)) or {}).get('built', 0)}/{hh}", 3600, docs_feed),
         ("studios", STUDIO_ROWS, f"{day}/{hh}", 3600, studios_feed),
         ("top10", [rid('top10')], f"{day}/{d.hour // 12}", 0, lambda l: {rid('top10'): top10_feed(l)}),
@@ -10376,7 +10920,7 @@ def job_specs(d, hashes):
 
 # AIOStreams caches our manifest (with the row names) for hours but fetches rows fresh. Rows whose name changes
 # (because, lanes) are therefore served as they were when the manifest was last fetched, so name and content agree.
-DYNAMIC = [rid('because'), rid('leap'), rid('newtoyou')] + MOODS_ROWS + LANE_ROWS + SHELF_ROWS
+DYNAMIC = BECAUSE_ROWS + [rid('leap'), rid('newtoyou')] + MOODS_ROWS + LANE_ROWS + SHELF_ROWS
 _shown = {}
 _shown_scoped = {}
 _scoping = threading.local()
@@ -10408,12 +10952,18 @@ def pin_decision(lang):
         _pinning.feeds = records
         try:
             above = {who: set() for who in masks_by}
+            moods = {who: 0 for who in above}
+            cap = rowplan.family_caps(CONFIG)['mood'] if 'rows' not in CONFIG['household'] else len(MOODS_ROWS)
             for cid in DEDUPE_ORDER[:DEDUPE_ORDER.index(LANES[0])]:
                 if not row_enabled(cid):
                     continue
                 for typ in ("movie", "series") if cid == rid('top10') else ("movie",) if cid in (rid('digital'), rid('toprated')) else ("tv",) if cid in MIXED else ("series",):
                     for who in above:
-                        above[who] = mark_above(above[who], cid, served_row(cid, typ, lang, p or {}, above[who], masks_by[who], who=who))
+                        if cid in MOODS_ROWS and moods[who] >= cap:
+                            continue
+                        metas = served_row(cid, typ, lang, p or {}, above[who], masks_by[who], who=who)
+                        moods[who] += bool(metas) and cid in MOODS_ROWS
+                        above[who] = mark_above(above[who], cid, metas)
             used = set()
             for cid in LANES:
                 primary = records.get((cid, lang)) or {}
@@ -10585,7 +11135,7 @@ def load_state():
         pass
     load_emb()
     load_facets()
-    keep = {cid for cid, _, _ in feed_rows()} | set(LANE_BENCH) | {rid('rewatchai'), *{rid(p) for p in ARCHIVED}, rid('docsai')}
+    keep = {cid for cid in DEDUPE_ORDER if row_enabled(cid)} | set(SHELF_ROWS) | set(LANE_BENCH) | {rid('family'), rid('rewatchai'), *{rid(p) for p in ARCHIVED}, rid('docsai')}
     keep |= set(SHELF_ROWS) | {rid(f"shelfraw_{p}_{n}") for p in (*PEOPLE, "together") for n in range(1, 11)}
     for key in [k for k in _feeds if k[0] not in keep]:  # retired rows (gems, season, now, short)
         _feeds.pop(key)
@@ -10593,6 +11143,14 @@ def load_state():
 
 def feed_pass(d, retry):
     global _feed_started, _defer_enrichment
+    requested = rowplan.consume_refresh(command_context())
+    if requested:
+        hashes = {name: p.get('hash', '') for name, p in _profiles.items()}
+        for job, cids, _, _, _ in job_specs(d, hashes):
+            if requested.intersection(cids):
+                for key in list(retry):
+                    if key[0] == job:
+                        retry.pop(key)
     if not _feed_started:
         _feed_started = True
         _defer_enrichment = not bool(_feeds or _profiles)
@@ -10624,10 +11182,11 @@ def build_feeds(d, hashes, retry, only=None, *, force=False):
                 try:
                     stamp = f"v{STAMP_V}/{stamp}"
                     cur = _feeds.get((cids[0], lang))
-                    if not force and ((cur and cur.get("stamp") == stamp) or retry.get((job, lang), 0) > time.time()):
+                    stale = any((cid, lang) in _feeds and 'stamp' not in _feeds[cid, lang] for cid in cids)
+                    if not force and ((cur and cur.get("stamp") == stamp and not stale) or retry.get((job, lang), 0) > time.time()):
                         continue
                     # Same time window, only the taste changed: rebuild at most every min_gap seconds.
-                    if not force and cur and min_gap and cur.get("stamp", "").split("/")[:-1] == stamp.split("/")[:-1] \
+                    if not force and not stale and cur and min_gap and cur.get("stamp", "").split("/")[:-1] == stamp.split("/")[:-1] \
                             and time.time() - cur.get("built", 0) < min_gap:
                         continue
                     try:
@@ -10661,6 +11220,9 @@ def build_feeds(d, hashes, retry, only=None, *, force=False):
                             rec = {"stamp": stamp, "built": int(time.time()), "metas": rows.get(cid) or {}}
                             if names.get(cid):
                                 rec["names"] = names[cid]
+                            source = rowplan.source_names(SimpleNamespace(**globals()), cid, lang)
+                            if source:
+                                rec.setdefault('names', {}).update(source)
                             _feeds[(cid, lang)] = rec
                             _feeds_empty.discard((cid, lang))
                     print(f"job {job} {lang} built: " + ", ".join(
@@ -10750,12 +11312,12 @@ def update_row_metrics(now, *, cleanup=False):
     return {"inputs": len(plays)}
 
 
-def interleave(*lists):
+def interleave(*lists, key=lambda m: m["id"]):
     out, seen = [], set()
     for group in zip(*(lst + [None] * (max(map(len, lists)) - len(lst)) for lst in lists)):
         for m in group:
-            if m and m["id"] not in seen:
-                seen.add(m["id"])
+            if m and key(m) not in seen:
+                seen.add(key(m))
                 out.append(m)
     return out
 
@@ -10766,6 +11328,7 @@ ROW_GENRES = {14: "Fantasy", 16: "Animation", 80: "Crime", 99: "Documentary", 96
 REASON_STOP = {"ghost", "cop", "las vegas", "thanksgiving", "christmas", "halloween", "scotland", "holiday",
                "holidays", "new york city", "london", "paris", "witch", "coming of age"}
 BECAUSE_CUTOFF = 0.28
+BECAUSE_SEED_SIM = .65  # Below .65 cosine, shared experience tags leave room for a different taste area.
 WEEK_SEED_FLOOR = .64
 WEEK_TAIL_FLOOR = .45
 WEEK_PENALTY = .25
@@ -10936,14 +11499,12 @@ def human_cards(metas, person=None):
             a = re.search(r"^(.*?)\b(?:like|loved|love)\s+(.+)$", part, re.I)
             if a:
                 head, a = a[1].strip(), a[2]
+                if head and not clean_note(head):
+                    continue
                 if head and not reason_ok(head, meta["id"], kind="movie" if meta["type"] == "movie" else "tv"):
                     continue
                 if norm_title(re.sub(r"\s*\([^)]*\)$", "", a)) == title:
                     continue
-                if i >= 2:
-                    part = head
-                    if re.search(r"\bbecause\b", part, re.I):
-                        continue
             elif i >= 2 and re.search(r"\b(because|loved|feels like)\b", part, re.I):
                 continue
             if not reason_ok(part, meta["id"], kind="movie" if meta["type"] == "movie" else "tv"):
@@ -10954,7 +11515,7 @@ def human_cards(metas, person=None):
             notes.append(part)
             counts[part.casefold()] = counts.get(part.casefold(), 0) + 1
             break  # one warm reason is enough beside an overview
-        card = {k: v for k, v in meta.items() if k not in ("_row", "_memory")}
+        card = {k: v for k, v in meta.items() if k not in ("_row", "_memory", "_borrowed")}
         # shortcut: pre-upgrade pins lack vote counts; omit their rating until their builder refreshes.
         if ((meta.get("_row") or {}).get("votes") or 0) < 50:
             card.pop("imdbRating", None)
@@ -11069,7 +11630,7 @@ def member_pick(meta, person):
         return False
     s = score_key(m, meta["id"], person, "movie" if meta["type"] == "movie" else "tv")[0]
     pct = match_pct(m, s, person)
-    return pct >= 70 if pct is not None else s is not None and s > 0
+    return pct >= (65 if m.get("cal_reference") == "known" else 70) if pct is not None else s is not None and s > 0
 
 
 def procedural(meta):
@@ -11106,14 +11667,16 @@ def balance_row(metas, foryou=False, anime=False):
     return out
 
 
-def polish_row(metas, cap=2, anime=False, universe_cap=4):
+def polish_row(metas, cap=2, anime=False, universe_cap=4, own_ids=()):
+    if own_ids:
+        metas = sorted(metas, key=lambda x: x['id'] not in own_ids)
     groups = {}
     for meta in metas:
         key = franchise_key(meta)
         groups.setdefault(key, []).append(meta)
-    # Originals lead their sequels even when taste ranked the sequel higher.
+    # Own picks reserve space before filler; originals otherwise lead their sequels.
     for key, group in groups.items():
-        group.sort(key=lambda x: row_facts(x).get("date") or "9999")
+        group.sort(key=lambda x: (x['id'] not in own_ids, row_facts(x).get("date") or "9999"))
         groups[key] = group[:cap]
     kept = [groups[franchise_key(x)].pop(0) for x in metas if groups[franchise_key(x)]]
     art = lambda x: bool(x.get("poster") and x.get("background"))
@@ -11188,13 +11751,27 @@ def row_list(cid, typ, lang, built=False):
     return (full if typ == "tv" else [m for m in full if m["type"] == typ])[:ROW_MAX]
 
 
-def because_seed(p):
+def because_seeds(p):
     p = adult_profile(p)
-    seeds = top_seeds(p, 8) if p else []
-    if not seeds:
-        return None
-    rng = random.Random(f"{day_index()}:because")
-    return rng.choices(seeds, weights=[max(.1, e["weight"]) / (1 + e["age"] / 90) for e in seeds])[0]
+    if not p:
+        return []
+    positive = [e for e in p["entries"] if e["weight"] > 0 and e["signal"] in ("loved", "liked", "watched")]
+    # Bulk marks (an import or a player backfill with no real play time) seed only when nothing else can.
+    positive = [e for e in positive if "backfill_only" not in e.get("flags", ()) and not (
+        (e.get("item") or {}).get("backfilled") and not (e.get("item") or {}).get("at"))] or positive
+    recent = [e for e in top_seeds(p, 8) if e in positive]
+    favourites = sorted((e for e in positive if e["signal"] in ("loved", "liked")), key=lambda e: -e["weight"])[:8]
+    pools = []
+    for seeds in (recent, favourites):
+        start = day_index() % len(seeds) if seeds else 0
+        pools.append(seeds[start:] + seeds[:start])
+    if day_index() % 2:
+        pools.reverse()
+    return interleave(*pools, key=lambda e: (e["key"], e["kind"]))
+
+
+def because_seed(p):
+    return next(iter(because_seeds(p)), None)
 
 
 def soon_date(meta):
@@ -11425,7 +12002,7 @@ def preference_order(metas, cid, who):
     return metas
 
 
-def row_eligible(meta, cid, lang, p, animation=None):
+def row_eligible(meta, cid, lang, p, animation=None, *, seed=None):
     viewer, kind = _viewer.get(), "movie" if meta["type"] == "movie" else "tv"
     if not preference_ok(meta, cid, viewer):
         return False
@@ -11449,17 +12026,17 @@ def row_eligible(meta, cid, lang, p, animation=None):
         return upcoming_ok(meta)
     if cid in DOCS:
         return doc_ok(meta, cid)
-    curated = cid in {rid('foryou'), rid('week'), rid('because'), rid('leap'), rid('newtoyou')} | set(ROW_OWNER) | set(MOODS_ROWS + LANE_ROWS + STUDIO_ROWS)
+    curated = cid in {rid('foryou'), rid('week'), rid('leap'), rid('newtoyou')} | set(BECAUSE_ROWS) | set(ROW_OWNER) | set(MOODS_ROWS + LANE_ROWS + STUDIO_ROWS)
     if curated:
         if animation is None:
             animation = row_animation(cid)
-        if "Documentary" in row_facts(meta)["g"] or not quality_ok(meta) or not tone_ok(meta, row_seed(cid, lang) if cid == rid('leap') else None, animation=animation, person=ROW_OWNER.get(cid)):
+        if "Documentary" in row_facts(meta)["g"] or not quality_ok(meta) or not tone_ok(meta, (seed or row_seed(cid, lang)) if cid == rid('leap') or cid in BECAUSE_ROWS else None, animation=animation, person=ROW_OWNER.get(cid)):
             return False
         d = soon_date(meta)
         if d and d > local_now().date():
             return False
-    if cid == rid('because'):
-        return because_ok(meta, row_seed(cid, lang))
+    if cid in BECAUSE_ROWS:
+        return because_ok(meta, seed or row_seed(cid, lang))
     return cid != rid('top10') or quality_ok(meta)
 
 
@@ -11483,11 +12060,16 @@ def row_related(meta, cid, lang, seeds=None):
     rec = frec(meta["id"], "movie" if meta["type"] == "movie" else "tv")
     tags = rec.get("x") or {}
     names = feed(cid, lang).get("names") or {}
+    if cid in MOODS_ROWS + LANE_ROWS + [rid('leap')] and (meta.get("_row") or {}).get("theme") in (
+            names.get("lane"), names.get("mood"), names.get("seed")) and (meta.get("_row") or {}).get("theme"):
+        if any(x["id"] == meta["id"] for typ, xs in (feed(cid, lang).get("metas") or {}).items()
+               if typ in ("movie", "series", "tv", "pool") for x in xs):
+            return True
     if cid in (rid('foryou'), rid('week')) or cid in ROW_OWNER:
         if "Documentary" in row_facts(meta)["g"]:
             return False
         return week_ok(meta, seeds) if cid == rid('week') else cid == rid('foryou') or member_pick(meta, ROW_OWNER[cid])
-    if cid == rid('because'):
+    if cid in BECAUSE_ROWS:
         return because_ok(meta, row_seed(cid, lang))
     if cid == rid('leap'):
         seed = row_seed(cid, lang)
@@ -11545,7 +12127,7 @@ def fill_row(metas, cid, lang, p, above, masks, tail=None):
     own_ids = {x["id"] for x in own}
     animation = row_animation(cid)
     seeds = {person: week_seeds(person) for person in PEOPLE} if cid == rid('week') else None
-    candidates = [x for x in own + list(row_pool(lang)) if x["id"] not in ids
+    candidates = [x for x in own + ([] if cid in THEMED_ROWS else list(row_pool(lang))) if x["id"] not in ids
                   and not row_member(x, p, "negative") and (cid == rid('episodes') or not row_member(x, p, "seen"))
                   and (cid == rid('week') or x["id"] in own_ids or cid in ROW_OWNER and not is_hero(x) or row_related(x, cid, lang))
                   and (cid not in LANE_ROWS or row_related(x, cid, lang))
@@ -11571,7 +12153,7 @@ def fill_row(metas, cid, lang, p, above, masks, tail=None):
     if cid in ROW_OWNER:
         more = more[:ROW_MAX]  # R1 ranks a bounded refill after the animation guard thins the member's own pool.
     # Own refills keep their context; borrowed cards carry only their overview.
-    more = [x if x["id"] in own_ids else {**x, "description": card_parts(x)[1]} for x in more]
+    more = [x if x["id"] in own_ids else {**x, "description": card_parts(x)[1], "_borrowed": True} for x in more]
     return metas + more
 
 
@@ -11608,9 +12190,10 @@ def week_tail(metas, lang, p, above, masks, candidates=None):
         seeds = {person: week_seeds(person) for person in PEOPLE}
         candidates = [x for x in row_pool(lang) if x["id"] not in ids and row_eligible(x, rid('week'), lang, p)
                       and week_tail_ok(x, seeds)]
-    # A weaker Week tail must not consume the two established personal shelves.
-    protected = {x["id"] for cid in (rid('because'), *ROW_OWNER) for x in row_list(cid, "tv", lang)}
-    protected.update(x["id"] for x in served_row(rid('because'), "tv", lang, p, ids, masks))
+    # A weaker Week tail must not consume the because and personal shelves.
+    because = [cid for cid in BECAUSE_ROWS if row_enabled(cid)]
+    protected = {x["id"] for cid in (*because, *ROW_OWNER) for x in row_list(cid, "tv", lang)}
+    protected.update(x["id"] for cid in because for x in served_row(cid, "tv", lang, p, ids, masks))
     candidates = [x for x in candidates if x["id"] not in ids | protected and not any(member_pick(x, person) for person in MEMBER_ROWS)]
     scores = week_scores(candidates)
     candidates.sort(key=lambda x: week_score(x, scores)[1], reverse=True)
@@ -11633,7 +12216,7 @@ def week_tail(metas, lang, p, above, masks, candidates=None):
             continue
         heroes += is_hero(x)
         ids.add(x["id"])
-        tail.append({**x, "description": card_parts(x)[1]})
+        tail.append({**x, "description": card_parts(x)[1], "_borrowed": True})
     return tail
 
 
@@ -11642,16 +12225,40 @@ class RowAbove(set):
         super().__init__(ids)
         self.deep = set(ids)
         self.lanes = set()
+        self.franchises = {}
 
 
 def mark_above(above, cid, metas):
     if not isinstance(above, RowAbove):
         above = RowAbove(above)
     above.deep.update(x["id"] for x in metas)
+    for key in {franchise_key(x) for x in metas}:
+        above.franchises[key] = above.franchises.get(key, 0) + 1
     above.update(x["id"] for x in (metas if cid in MOODS_ROWS + LANES else metas[:ROW_WINDOW]))
     if cid in LANES and isinstance(metas, LaneRow) and metas:
         above.lanes.add(metas.names.get("lane"))
     return above
+
+
+def row_variety(metas, cid, lang, franchises, who=None, p=None):
+    if cid not in THEMED_ROWS | set(ROW_OWNER) | {rid('foryou'), rid('week'), rid('newtoyou'), rid('digital'), rid('toprated'), rid('airing'), rid('nextseason')} or who == GUEST or kids_age(safety_subject(who)) is not None:
+        return metas
+    source = row_list(cid, 'tv', lang)
+    worlds = {universe_key(x) for x in source}
+    hero_theme = cid in LANE_ROWS + STUDIO_ROWS and bool(source) and (
+        all(is_hero(x) for x in source) or len(worlds) == 1 and None not in worlds)
+    heroes, kept = 0, []
+    for x in metas:
+        if cid in (rid('airing'), rid('nextseason')) and row_member(x, p or {}, 'seen'):
+            kept.append(x)
+            continue
+        hero = is_hero(x)
+        if franchises.get(franchise_key(x), 0) >= HOME_FRANCHISE_ROWS or hero and not hero_theme and heroes >= ROW_HERO_MAX:
+            rowplan.removed(cid, [x], [], 'franchise_cap' if franchises.get(franchise_key(x), 0) >= HOME_FRANCHISE_ROWS else 'superhero_cap')
+            continue
+        heroes += hero
+        kept.append(x)
+    return kept
 
 
 def mood_heroes(metas):
@@ -11720,25 +12327,40 @@ def memory_reserve(metas, who):
 def served_row(cid, typ, lang, p, above, masks, who=None):
     token = _viewer.set(who) if who is not None else None
     try:
+        if not row_scope_ok(cid):
+            rowplan.observe(cid, code='unsafe')
+            return []
+        franchises = getattr(above, 'franchises', {})
         if cid in (rid('digital'), rid('toprated')):
-            blocked = masks[0] | (masks[2] if len(masks) > 2 else set()) | getattr(above, "deep", above)
-            metas = [x for x in row_list(cid, typ, lang) if x['id'] not in blocked
+            raw = row_list(cid, typ, lang)
+            blocked = masks[0] | (masks[2] if len(masks) > 2 else set())
+            corrected = [x for x in raw if x['id'] not in blocked
                      and x['id'] not in p.get('seen', ()) and x['id'] not in p.get('negative', ())
                      and quality_ok(x) and preference_ok(x, cid, _viewer.get())]
+            rowplan.filtered(cid, raw, corrected, p, masks, lang, False)
+            metas = [x for x in corrected if x['id'] not in getattr(above, 'deep', above)]
+            rowplan.removed(cid, corrected, metas, 'overlap')
             metas = preference_order(metas, cid, _viewer.get())
+            metas = row_variety(metas, cid, lang, franchises, who, p)
+            rowplan.observe(cid, metas, None if len(metas) >= ROW_MIN else 'too_few_own', typ=typ)
             return metas[:20] if len(metas) >= ROW_MIN else []
         if cid == rid('family'):
             scope = getattr(_scoping, "scope", None)
             if scope in PEOPLE and kids_age(scope) is None:
                 return []
-            metas = [x for x in row_list(cid, typ, lang) if x["id"] not in masks[0]
+            raw = row_list(cid, typ, lang)
+            metas = [x for x in raw if x["id"] not in masks[0]
                      and (len(masks) < 3 or x["id"] not in masks[2]) and x["id"] not in p.get("seen", ())
                      and x["id"] not in p.get("negative", ()) and preference_ok(x, cid, who)]
+            rowplan.filtered(cid, raw, metas, p, masks, lang, False)
+            rowplan.observe(cid, metas[:20], None if len(metas) >= ROW_MIN else 'too_few_own', typ=typ)
             return metas[:20] if len(metas) >= ROW_MIN else []
         if len(masks) > 2 and masks[2] and cid not in VETO_EXEMPT: masks = (masks[0] | masks[2], masks[1])
         if cid not in MOODS_ROWS + LANE_ROWS:
             above = getattr(above, "deep", above)
         metas = row_list(cid, typ, lang)
+        own_order = {x['id']: i for i, x in enumerate(metas)} if cid == rid('foryou') else {}
+        own_ids = set(own_order) | {x['id'] for x in source_metas(cid, lang)} if cid == rid('foryou') else set()
         if cid == rid('rewatch') and metas:
             entries = p.get("entries", [])
             if entries and who in PEOPLE: entries = person_entries(p, who)
@@ -11750,6 +12372,7 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
             metas = [x for x in metas if (x["id"], "movie" if x["type"] == "movie" else "tv") in watched]
         names = feed(cid, lang).get("names") or {}
         if cid in LANE_ROWS and not maker_view(names, p, who):
+            rowplan.observe(cid, code='unsafe')
             return LaneRow([], names)
         animation = row_animation(cid)
         if cid == rid('episodes') and len(metas) < 12:
@@ -11778,7 +12401,9 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
             if x["id"] not in masks[0] and row_eligible(x, cid, lang, p, animation) and (cid not in LANE_ROWS or row_related(x, cid, lang)):
                 corrected.append(x)
         # Chart ranks survive; all other shelves use the actual served rows above.
+        rowplan.filtered(cid, metas, corrected, p, masks, lang, animation)
         metas = corrected if cid == rid('top10') else [x for x in corrected if x["id"] not in above]
+        rowplan.removed(cid, corrected, metas, 'overlap')
         tail_candidates = []
         metas = fill_row(metas, cid, lang, p, above, masks, tail_candidates) if cid == rid('week') else fill_row(metas, cid, lang, p, above, masks)
         if cid not in MIXED | set(LANE_BENCH):
@@ -11786,8 +12411,7 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
         if cid == rid('foryou'):
             reserved = {x["id"] for x in row_list(rid('week'), "tv", lang)}
             metas = [x for x in metas if x["id"] not in reserved]
-            metas.sort(key=lambda x: score_key(get_model(False), x["id"], kind="movie" if x["type"] == "movie" else "tv")[0] or 0, reverse=True)
-        if cid == rid('because'):
+        if cid in BECAUSE_ROWS:
             metas = because_rank(metas, row_seed(cid, lang))
         if cid in ROW_OWNER:
             scores = member_scores(metas, ROW_OWNER[cid])
@@ -11809,38 +12433,46 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
         title = names.get("title", "").casefold()
         if cid in LANE_ROWS and not lane_allowed(metas, title):
             metas = []
-        anime = cid in (rid('airing'), rid('nextseason')) or any(w in title for w in ("anime", "manga"))
-        metas = balance_row(metas, foryou=cid == rid('foryou'), anime=anime)
+        anime = (cid in (rid('airing'), rid('nextseason')) or any(w in title for w in ("anime", "manga")) or
+                 cid in BECAUSE_ROWS and 'Animation' in frec(row_seed(cid, lang), profile_kind(row_seed(cid, lang))).get('g', ()))
+        metas = balance_row(metas, anime=anime)
         lid = f"lane:{names['lane']}" if cid in LANE_ROWS and names.get("lane") else None if cid in LANE_ROWS else learn_id(cid, lang)
         tired = tired_keys({lid}) if lid and cid not in (rid('episodes'), rid('upcoming'), rid('catchup')) else {}
         metas = [x for x in metas if x["id"] not in tired] + [x for x in metas if x["id"] in tired]
         # A universe is the point of some lanes; keep the franchise cap within it.
-        metas = polish_row(metas, anime=anime, universe_cap=None) if cid in LANE_ROWS else polish_row(
-            metas, cap=1 if cid == rid('upcoming') else 2, anime=anime)
+        before_polish = metas
+        metas = polish_row(metas, cap=1 if cid == rid('upcoming') else 2, anime=anime,
+            universe_cap=None if cid in LANE_ROWS else 4, own_ids=own_ids)
+        rowplan.polished(cid, before_polish, metas, 1 if cid == rid('upcoming') else 2)
         if len(metas) < 5:
             metas = balance_row(metas, anime=anime)
-        if cid == rid('foryou'):
-            metas = polish_row(balance_row(metas, foryou=True))
-        if cid == rid('because'):
-            metas = polish_row(because_balance(metas, row_seed(cid, lang)))
+        if cid in BECAUSE_ROWS:
+            before_polish = metas
+            metas = polish_row(because_balance(metas, row_seed(cid, lang)), anime=anime)
+            rowplan.polished(cid, before_polish, metas, 2)
         if cid in ROW_OWNER:
             metas = member_balance(metas, ROW_OWNER[cid], strict=True)
         if who in PEOPLE and cid == rid('foryou'):
             metas = person_animation_sink(memory_reserve(metas, who), who)
         if (cid in MOODS_ROWS or cid == rid('top10') and kids_age(safety_subject(who)) is not None) and len(metas) < ROW_MIN:
+            rowplan.observe(cid, metas, 'too_few_own')
             return []
         limit = 10 if cid == rid('top10') else 12 if cid == rid('episodes') else 24 if cid == rid('foryou') else 20
-        metas = metas[:limit]
+        if cid != rid('foryou'):
+            metas = row_variety(metas, cid, lang, franchises, who, p)
+            metas = metas[:limit]
         if cid in MOODS_ROWS + LANE_ROWS:
             if not anime:
                 cap = int(sum(not is_anime(x) for x in metas) * 2 / 3)
                 allowed = {x["id"] for x in [x for x in metas if is_anime(x)][:cap]}
                 metas = [x for x in metas if not is_anime(x) or x["id"] in allowed]
             if len(metas) < ROW_MIN and cid not in LANE_ROWS:
+                rowplan.observe(cid, metas, 'too_few_own')
                 return []
         if cid in LANE_ROWS and not lane_allowed(metas, title):
             metas = []
         if cid in LANE_ROWS and len(metas) < ROW_MIN:
+            rowplan.observe(cid, metas, 'too_few_own')
             return LaneRow([], names)
         if cid in MOODS_ROWS:
             metas = mood_heroes(metas)
@@ -11849,13 +12481,16 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
             head_ids = {x["id"] for x in metas}
             rotated = rotate_row(metas + tail, cid)
             # Franchise ordering during rotation must not pull a tail original into the head.
-            return remote_order([x for x in rotated if x["id"] in head_ids], masks) + remote_order(
+            metas = remote_order([x for x in rotated if x["id"] in head_ids], masks) + remote_order(
                 [x for x in rotated if x["id"] not in head_ids], masks)
         else:
             metas = rotate_row(metas, cid)
-        metas = remote_order(metas, masks)
+            metas = remote_order(metas, masks)
         metas = person_animation_sink(metas, who) if who in PEOPLE and cid in PERSON_ROWS | set(LANE_BENCH) else metas
         if cid == rid('foryou'):
+            metas.sort(key=lambda x: (x['id'] not in own_ids, own_order.get(x['id'], ROW_MAX),
+                -(score_key(get_model(False), x['id'], kind='movie' if x['type'] == 'movie' else 'tv')[0] or 0)))
+            metas = row_variety(metas, cid, lang, franchises, who, p)
             trending_only = {tuple(x) for x in names.get('trending_only', [])}
             kept, trending = [], 0
             for x in metas:
@@ -11864,6 +12499,16 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
                 if not is_trending or trending <= 2:
                     kept.append(x)
             metas = kept
+            own = remote_order([x for x in metas if x['id'] in own_ids], masks)
+            more = remote_order([x for x in metas if x['id'] not in own_ids], masks)
+            metas = (own + more[:max(0, 12-len(own))])[:limit]
+        if cid == rid('week'):
+            metas = row_variety(metas, cid, lang, franchises, who, p)
+        if cid in THEMED_ROWS and len(metas) < ROW_MIN:
+            rowplan.observe(cid, metas, 'too_few_own')
+            metas = []
+        if metas:
+            rowplan.observe(cid, metas, typ=typ)
         return LaneRow(metas, names) if cid in LANE_ROWS else metas
     finally:
         if token is not None: _viewer.reset(token)
@@ -11872,6 +12517,8 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
 def _row_metas_uncached(cid, typ, lang, who=None):
     """Reference composition for non-home rows and cache identity checks."""
     who = who_watching()[0] if who is None else who
+    if cid in DEDUPE_ORDER:
+        return build_home(lang, _profiles.get('household') or {}, row_masks(who), who).get((cid, typ), [])
     masks = row_masks(who)
     p = _profiles.get("household") or {}
     above = set()
@@ -11893,14 +12540,34 @@ _home_cache = {}
 _home_lock = threading.Lock()
 
 
-def build_home(lang, p, masks, who):
+def build_home(lang, p, masks, who, *, caps=None):
     above, rows = set(), {}
+    lean, counts, docs = default_rows(), {'moods': 0, 'lanes': 0}, None
+    caps = rowplan.family_caps(CONFIG) if caps is None else caps
+    capped = 'rows' not in CONFIG['household']
     for cid in DEDUPE_ORDER:
         if not row_enabled(cid):
             continue
         types = ("movie", "series") if cid == rid('top10') else ("movie",) if cid in (rid('digital'), rid('toprated')) else ("tv",) if cid in MIXED else ("series",)
         for typ in types:
-            metas = served_row(cid, typ, lang, p, above, masks, who=who)
+            group = 'moods' if cid in MOODS_ROWS else 'lanes' if cid in LANES else None
+            if lean and cid in DOCS:
+                if docs is None:
+                    candidates = [(other, served_row(other, 'tv', lang, p, above, masks, who=who)) for other in DOCS if row_enabled(other)]
+                    candidates = [(other, xs) for other, xs in candidates if len(xs) >= ROW_MIN]
+                    docs = dict([candidates[day_index() % len(candidates)]]) if candidates else {}
+                metas = docs.get(cid, [])
+                if not metas:
+                    rowplan.observe(cid, code='not_today' if cid in dict(candidates) else None)
+            elif capped and group and counts[group] >= caps['mood' if group == 'moods' else 'lane']:
+                rowplan.observe(cid, code='family_cap')
+                metas = []
+            else:
+                metas = served_row(cid, typ, lang, p, above, masks, who=who)
+            if group and metas:
+                counts[group] += 1
+            if metas:
+                rowplan.observe(cid, metas, typ=typ)
             for out_type in MIX if cid in MIXED else (typ,):
                 selected = metas if out_type == typ else [x for x in metas if x["type"] == out_type]
                 rows[cid, out_type] = human_cards(LaneRow(selected, metas.names) if isinstance(metas, LaneRow) else selected, who)
@@ -11935,7 +12602,7 @@ def refresh_preferences():
             CONFIG.pop('metrics', None)
         if not row_metrics.settings(CONFIG)['enabled']:
             row_metrics.disable(DATA)
-        for key in ('rows', 'row_labels', 'row_order'):
+        for key in ('rows', 'row_labels', 'row_order', 'home'):
             if key in cfg['household']:
                 CONFIG['household'][key] = cfg['household'][key]
             else:
@@ -11967,7 +12634,7 @@ def row_metas(cid, typ, lang, who=None):
 
 def _row_metas_current(cid, typ, lang, who=None):
     refresh_preferences()
-    if not row_enabled(cid):
+    if not row_enabled(cid) or cid in THEMED_ROWS and not feed(cid, lang):
         return []
     if cid in SHELF_ROWS:
         return shelf_items(cid, typ, lang, who)
@@ -11975,8 +12642,12 @@ def _row_metas_current(cid, typ, lang, who=None):
         if who is None:
             return _row_metas_uncached(cid, typ, lang)
         return _row_metas_uncached(cid, typ, lang, who=who)
+    who = who_watching()[0] if who is None else who
+    return _home_rows(lang, who).get((cid, typ), [])
+
+
+def _home_rows(lang, who):
     with _home_lock:
-        who = who_watching()[0] if who is None else who
         masks = row_masks(who)
         p, m = _profiles.get("household"), get_model(False)
         scope = getattr(_scoping, "scope", None)
@@ -11993,7 +12664,7 @@ def _row_metas_current(cid, typ, lang, who=None):
                 _home_cache.pop(next(iter(_home_cache)))
             # Retain source identities so replacements cannot reuse an older cache key.
             _home_cache[key] = (rows, [p, m, *refs])
-        return _home_cache[key][0][cid, typ]
+        return _home_cache[key][0]
 
 
 def stats():
@@ -12694,7 +13365,7 @@ def interview_answer(body):
 
 REMOTE_PORT = int(os.environ.get("REMOTE_PORT", "8081"))
 REMOTE_ROWS = set(ROW_OWNER) | {rid('foryou'), rid('week'), rid('upcoming'), rid('because'), rid('leap'),
-               rid('rewatch'), rid('interview'), rid('newtoyou')} | set(MOODS_ROWS) | set(LANES) | set(STUDIO_ROWS) | set(DOCS)
+               rid('rewatch'), rid('interview'), rid('newtoyou')} | set(BECAUSE_ROWS) | set(MOODS_ROWS) | set(LANES) | set(STUDIO_ROWS) | set(DOCS)
 REMOTE_ACTIONS = {"love", "like", "meh", "not_for_us", "not_tonight", "seen"}
 REMOTE_REASONS = ("too dark", "too slow", "too violent", "too silly", "not my genre", "seen enough of these")
 REMOTE_CSP = ("default-src 'none'; img-src https://image.tmdb.org data:; style-src 'self'; "
@@ -13155,7 +13826,7 @@ decision("interview_next", ver=2, lane=None, cap=None, ttl=DAY, serving=True,
     fallback=lambda x, err: ({"v": 2, "person": x["person"], "maturity": (member := maturity(get_model(False), x["person"])),
         "progress": {"positives": 0, "need": 20, "negatives_with_reason": 0, "need_neg": 5},
         "done": member["state"] == "ready", "done_reason": "ready" if member["state"] == "ready" else None, "anchors": []}, 0))
-decision("explain_pick", ver=2, lane=None, cap=None, ttl=DAY, serving=True, llm=None, requires=(),
+decision("explain_pick", ver=3, lane=None, cap=None, ttl=DAY, serving=True, llm=None, requires=(),
     min_acc=1, api=True, inp={"key": TKEY, "kind": KIND, "person": (*PEOPLE, "together", GUEST, None)},
     out={"why": (str, None), "match": (int, None), "confidence": ("Strong fit", "Good fit", "Wildcard", None),
          "rung": ("seed", "facet", None), "reasons": [str, 3], "maturity": MATURITY}, norm=lambda x: x, rule=explain_pick_rule, params={},
@@ -13269,7 +13940,7 @@ def rows_view(req):
     person = api_person(req["query"].get("person"), viewer)
     who = viewer or (person if person in PEOPLE else "both")
     rows = []
-    for cid, types, name in feed_rows(lang, profiles=False):
+    for cid, types, name in feed_rows(lang, profiles=False, who=who):
         if cid not in API_ROWS or req["query"].get("row", cid) != cid:
             continue
         if viewer and (cid == rid('week') or ROW_OWNER.get(cid, viewer) != viewer):

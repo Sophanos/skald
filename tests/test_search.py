@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from threading import Event
 from unittest.mock import patch
 
@@ -28,6 +29,7 @@ class SearchTests(unittest.TestCase):
         self.s._ai.clear()
         self.s._last_search.clear()
         self.s._profiles.clear()
+        self.s._facets.clear()
         self.model = {"aff": {"x:cozy": 3, "k:detective": 2, "t:hope": 1,
                               "d:1": 5, "a:2": 4, "n:3": 3, "c:4": 2, "s:novel": 1},
                       "names": {"x:cozy": "Cozy comfort", "k:detective": "detective", "t:hope": "hope",
@@ -37,16 +39,24 @@ class SearchTests(unittest.TestCase):
         self.s._model["m"] = self.model
         for name, kwargs in [("urllib.request.urlopen", {"side_effect": AssertionError("network forbidden")}),
                              ("openrouter", {"return_value": {"answers": {"route": {"choice": "request"}}}}),
+                             ("search_rules", {"return_value": {"from": None, "to": None, "exclude": []}}),
+                             ("ensure_facets", {}),
                              ("llm_text", {"return_value": ""}), ("tmdb", {"return_value": {"results": []}})]:
             mock = patch(name, **kwargs) if name.startswith("urllib.") else patch.object(self.s, name, **kwargs)
             setattr(self, name.rsplit(".", 1)[-1], mock.start())
             self.addCleanup(mock.stop)
+
+    def legacy_picker(self):
+        legacy = patch.object(self.s, "search_picks", partial(self.s.search_picks, wide=False))
+        legacy.start()
+        self.addCleanup(legacy.stop)
 
     def route(self, watched="any", listing="taste"):
         self.openrouter.return_value = {"answers": {"route": {"choice": "request"},
                                                    "watched": {"choice": watched}, "list": {"choice": listing}}}
 
     def test_consensus_prompt_labels_household_hint(self):
+        self.legacy_picker()
         self.s.ai_plan("best all times")["picks"].result(timeout=2)
         system, prompt, tokens, *_ = self.llm_text.call_args.args
         self.assertTrue(prompt.startswith("best all times\nHousehold taste"))
@@ -60,6 +70,7 @@ class SearchTests(unittest.TestCase):
         self.assertGreaterEqual(tokens, 600)
 
     def test_per_type_prompt_replacements_match_shared_prompt(self):
+        self.legacy_picker()
         for text in (
                 "You pick movies and series for", "30 lines",
                 "Title|Year|m or s (m=movie, s=series)",
@@ -103,6 +114,7 @@ class SearchTests(unittest.TestCase):
                 self.assertTrue(all(p[2] == row["in"]["stype"] for p in picks))
 
     def test_none_picker_is_cached_without_fallback_or_retry(self):
+        self.legacy_picker()
         self.llm_text.return_value = " \nNONE\n "
         self.assertEqual(self.s.llm_picks(self.s.PICK_SYS, "dark movies", 850, 6, "search", "picks"), [])
         for order in ("parallel", "router_first"):
@@ -121,7 +133,8 @@ class SearchTests(unittest.TestCase):
                         self.assertEqual(self.s.search(stype, "dark movies", "en-US"), {"metas": []})
                     self.assertTrue(self.s._ai)
                     self.llm_text.assert_called_once()
-                    self.assertEqual(titles.call_count, 2 if order == "parallel" else 0)
+                    if order == "router_first":
+                        titles.assert_not_called()
 
     def test_sentence_picker_reply_still_raises(self):
         for reply in ("No series match this request.", "none", "NONE\nNo series match."):
@@ -199,7 +212,9 @@ class SearchTests(unittest.TestCase):
                 for stype in ("movie", "series"):
                     with self.subTest(scope=scope, stype=stype), self.s.addon_scope(scope):
                         plan = self.s.ai_future("something cozy for tonight", stype=stype)
-                        plan.result(timeout=2)["picks"].result(timeout=2)
+                        picks = plan.result(timeout=2)["picks"]
+                        picks.result(timeout=2)
+                        picks.search_fallback.result(timeout=2)
                         self.assertIs(plan, self.s.ai_future("something cozy for tonight", stype=stype))
                         prompt = self.llm_text.call_args.args[1]
                         self.assertIn("Romance" if scope == "ben" else "Action", prompt)
@@ -209,7 +224,7 @@ class SearchTests(unittest.TestCase):
             with self.s.addon_scope("ben"):
                 for stype, plan in ben_plans.items():
                     self.assertIs(plan, self.s.ai_future("something cozy for tonight", stype=stype))
-        self.assertEqual(self.llm_text.call_count, 12)
+        self.assertEqual(self.llm_text.call_count, 24)
 
     def test_scoped_taste_rerank_uses_personal_scores_and_calibration(self):
         self.opposite_tastes()
@@ -246,12 +261,15 @@ class SearchTests(unittest.TestCase):
                         plan = self.s.ai_future("more like this " + previous)
                     with self.s.addon_scope("ana"):
                         release.set()
-                        plan.result(timeout=2)["picks"].result(timeout=2)
+                        picks = plan.result(timeout=2)["picks"]
+                        picks.result(timeout=2)
+                        picks.search_fallback.result(timeout=2)
                     prompt = self.llm_text.call_args.args[1]
                     self.assertIn("Romance", prompt)
                     self.assertNotIn("Action", prompt)
 
     def test_router_title_still_skips_picks(self):
+        self.legacy_picker()
         self.openrouter.return_value = {"answers": {"route": {"choice": "title", "confidence": 0.9}}}
         with patch.object(self.s, "_pool") as pool:
             picks = pool.submit.return_value
@@ -262,6 +280,7 @@ class SearchTests(unittest.TestCase):
         self.llm_text.assert_not_called()
 
     def test_same_type_shares_eighteen_line_picker(self):
+        self.legacy_picker()
         self.llm_text.return_value = "\n".join(f"Title {i}|2000|m" for i in range(18))
         first = self.s.ai_future("best all times")
         self.assertIs(first, self.s.ai_future("BEST ALL TIMES"))
@@ -286,6 +305,7 @@ class SearchTests(unittest.TestCase):
             return self.s.search(stype, query, "en-US")["metas"]
 
     def test_seen_and_negative_for_both_intents_and_catalogs(self):
+        self.legacy_picker()
         self.s._profiles["household"] = {"seen": {"tmdb:1", "tmdb:3", "tmdb:4", "tmdb:6", "tmdb:8", "tmdb:9"},
                                          "negative": {"tmdb:3", "tmdb:8"}}
         for query in ("best all times", "something cozy"):
@@ -294,6 +314,7 @@ class SearchTests(unittest.TestCase):
                     self.assertEqual([m["id"] for m in self.search_results(query, stype)], [f"tmdb:{i}" for i in ids])
 
     def test_canon_skips_rerank_and_taste_only_reranks_unseen(self):
+        self.legacy_picker()
         self.s._profiles["household"] = {"seen": {"tmdb:1", "tmdb:4"}, "negative": {"tmdb:3"}}
         with patch.object(self.s, "taste_rerank", side_effect=lambda metas: metas[::-1]) as rerank:
             self.assertEqual([m["id"] for m in self.search_results("best all times", "movie", listing="best")],
@@ -378,11 +399,12 @@ class SearchTests(unittest.TestCase):
         for scope, ids in [("ana", [1]), ("ben", [4]), ("together", [4, 1]), (None, [4, 1])]:
             with self.subTest(scope=scope):
                 self.assertEqual([m["id"] for m in self.seen_results(scope)], [f"tmdb:{i}" for i in ids])
-        self.assertEqual(self.llm_text.call_count, 4)
+        self.assertEqual(self.llm_text.call_count, 8)
         self.seen_results("ana")
-        self.assertEqual(self.llm_text.call_count, 4)
+        self.assertEqual(self.llm_text.call_count, 8)
 
     def test_scoped_unseen_and_neutral(self):
+        self.legacy_picker()
         self.history()
         with patch.object(self.s, "SCOPES", {"ana": "ana", "ben": "ben", "together": "both"}), \
                 patch.object(self.s, "PEOPLE", ("ana", "ben")):
@@ -461,7 +483,7 @@ class SearchTests(unittest.TestCase):
             self.route("unseen")
             with patch.object(self.s, "resolve_pick", return_value=({"id": 1205, "title": "Title 1205"}, {})) as resolve:
                 self.assertEqual(self.s.search("movie", "anime I haven't watched", "en-US")["metas"], [])
-                resolve.assert_called_once()
+                self.assertEqual(resolve.call_count, 2)
 
     def test_seen_plain_fallbacks(self):
         self.history()

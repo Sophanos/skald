@@ -85,8 +85,8 @@ class PrefsRows(unittest.TestCase):
         xs = [{**x, 'releaseInfo': '1980', 'genres': [g]} for x, g in zip(cards(3), ['Horror', 'Comedy', 'Drama'])]
         with self.prefs(ana={'years': [2000, None], 'discovery': 'gems', 'excluded_genres': {'movie': ['Horror']}},
                         ben={'excluded_genres': {'movie': ['Comedy']}}), patch.object(s, 'frec', return_value={}):
-            self.assertEqual(self.served(s.rid('leap'), xs, who='both'), xs[2:])
-            self.assertEqual(self.served(s.rid('leap'), xs, who=s.GUEST), xs)
+            self.assertEqual(self.served(s.rid('newtoyou'), xs, who='both'), xs[2:])
+            self.assertEqual(self.served(s.rid('newtoyou'), xs, who=s.GUEST), xs)
 
     def test_discovery_reorders_and_filters_before_minimum(self):
         s = self.s
@@ -95,7 +95,7 @@ class PrefsRows(unittest.TestCase):
         with patch.object(s, 'frec', return_value={}):
             for style, expected in [('mainstream', xs[::-1]), ('gems', xs)]:
                 with self.prefs(ana={'discovery': style}):
-                    self.assertEqual(self.served(s.rid('leap'), xs, who='ana'), expected)
+                    self.assertEqual(self.served(s.rid('newtoyou'), xs, who='ana'), expected)
             with self.prefs(ana={'excluded_genres': {'movie': ['Drama']}}):
                 self.assertEqual(self.served(s.MOODS_ROWS[0], xs * 4, who='ana'), [])
 

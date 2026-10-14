@@ -257,7 +257,8 @@ def doctor(args, state):
                 # Use the captured count because the loader has already removed mixed records.
                 count = sum(int(m[1]) for line in engine.diagnostics if (m := re.search(r"keys: dropped (\d+) mixed", line)))
                 finding("facets.mixed_keys", "warning" if count else "info", f"{count} mixed facet records ignored", "refresh snapshot facets" if count else None)
-                finding("calibration.no_bg", "info", "no % offline", None)
+                finding("calibration.no_bg", "info", f"{engine._model['cal_reference']} reference: {engine._model['cal']} titles"
+                        if engine._model.get("cal") else "no % offline", None)
                 for person in engine._server.PEOPLE:
                     cid = "maturity." + person
                     checks.append(cid)

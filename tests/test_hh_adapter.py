@@ -94,7 +94,7 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(stages['curated'], pin if selected_scope is None else scoped)
             self.assertTrue(stages['pool'])
             self.assertIn('ranked', stages)
-            self.assertGreater(len(stages['backfilled']), len(stages['curated']))
+            self.assertTrue({x['id'] for x in stages['backfilled']} <= {x['id'] for x in stages['curated']})
             hbo = next(r for r in got['rows'] if r['id'] == s.rid('hbo'))
             self.assertNotIn(base[0]['id'], [m['id'] for m in hbo['metas'][:5]])
             self.assertFalse({m['id'] for m in hbo['metas'][:s.ROW_WINDOW]} &
