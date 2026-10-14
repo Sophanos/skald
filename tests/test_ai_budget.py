@@ -379,7 +379,10 @@ with patch('urllib.request.OpenerDirector.open', side_effect=request):
         marker = self.data / '.skald-format'
         marker.write_text(json.dumps({'format': 5, 'release': members.VERSION}))
         before = {name: (self.data / name).read_bytes() for name in ('usage.json', 'skald.json', '.skald-format')}
-        source = subprocess.run(['git', 'show', '5fc2a33:server.py'], cwd=ROOT, check=True, capture_output=True, text=True).stdout
+        try:
+            source = subprocess.run(['git', 'show', '5fc2a33:server.py'], cwd=ROOT, check=True, capture_output=True, text=True).stdout
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest('the 1.4.7 source (5fc2a33) is not in this checkout')
         spec = importlib.util.spec_from_file_location('budget_previous_server', ROOT / 'server.py')
         old = importlib.util.module_from_spec(spec)
         with patch.dict(os.environ, {'OPENROUTER_API_KEY': '', 'API_PORT': ''}), redirect_output():

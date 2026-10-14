@@ -369,7 +369,10 @@ class SearchTests(unittest.TestCase):
         self.history()
         self.assertEqual([m["id"] for m in self.search_results("anime which i have not watched", "movie", watched="unseen")],
                          ["tmdb:2", "tmdb:5"])
-        self.assertIn("not watched", self.llm_text.call_args.args[1])
+        # A picker left running by an earlier test can land in this mock; check this query's own prompt.
+        prompts = [c.args[1] for c in self.llm_text.call_args_list if c.args[1].startswith("anime which i have not watched")]
+        self.assertTrue(prompts)
+        self.assertTrue(all("not watched" in prompt for prompt in prompts))
 
     def seen_results(self, scope=None):
         self.route("seen", "best")
