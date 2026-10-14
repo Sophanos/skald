@@ -375,7 +375,10 @@ class RoundOne(Household):
         raw = (self.root / 'memory.json').read_bytes()
         c.apply(self.s, self.plan('member_remove', 'kim'))
         root = Path(__file__).resolve().parents[1]
-        source = subprocess.run(['git', 'show', 'df66a3f:server.py'], cwd=root, check=True, capture_output=True, text=True).stdout
+        try:
+            source = subprocess.run(['git', 'show', 'df66a3f:server.py'], cwd=root, check=True, capture_output=True, text=True).stdout
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest('the 1.4.8 source (df66a3f) is not in this checkout')
         old = types.ModuleType('rollback_server')
         old.__file__, old._CONFIG_READONLY = str(root / 'server.py'), True
         exec(compile(source, old.__file__, 'exec'), old.__dict__)
