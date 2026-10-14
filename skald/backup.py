@@ -12,12 +12,23 @@ from skald import members as config_module
 
 CONNECTOR_BACKUP = os.environ.get("SKALD_CONNECTOR_BACKUP", "1") != "0"
 BACKUP_FILES = ("commands.json", "skald.json", "legacy.json", ".skald-household", ".skald-format", "feedback.jsonl", "imports.jsonl", "sessions.jsonl", "taste.json", "trakt.json",
-                "history.json", "history-summary.json", "history-forgotten.json", "health-settings.json", "learn.json", "online.json", "metrics.json", "decisions.jsonl", "usage.json",
+                "history.json", "history-summary.json", "history-forgotten.json", "health-settings.json", "learn.json", "online.json", "metrics.json", "lab.json", "decisions.jsonl", "usage.json",
                 "searches.jsonl", "emb.json", "facets.json", "memory.json", "memory.log.jsonl", "memory.prev.json", "interview.json", "shelves.json", "undo.jsonl", "wishes.jsonl", "shelf_rules.json",
                 "title_fixes.json", "archetypes.json") + (("connectors.json",) if CONNECTOR_BACKUP else ())
 _NAME = re.compile(r"state-(\d{4}-\d{2}-\d{2})\.tar\.gz")
 _MIGRATION_NAME = re.compile(r"pre-migrate-\d+-\d+-(\d+)-[0-9a-f]{32}\.tar\.gz")
 _MB = 1024 * 1024
+
+
+def before_people(s, cfg):
+    """Keep a private config copy before a people change; evidence stays in place."""
+    from .intake import write_private
+    import uuid
+    root = Path(s.DATA) / 'backups'
+    root.mkdir(mode=0o700, exist_ok=True)
+    path = root / ('pre-people-' + uuid.uuid4().hex + '.json')
+    write_private(path, json.dumps(cfg, ensure_ascii=False) + '\n')
+    return path
 
 
 def retain(days):

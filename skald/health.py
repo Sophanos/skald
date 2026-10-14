@@ -28,7 +28,11 @@ def read_json(path, default):
 
 
 def settings(data):
-    return {**DEFAULTS, **read_json(Path(data) / 'health-settings.json', {})}
+    cfg = {**DEFAULTS, **read_json(Path(data) / 'health-settings.json', {})}
+    for field in ('cooldown', 'max_attempts', 'disk_min_bytes', 'connector_failures'):
+        if type(cfg[field]) not in (int, float) or not 0 <= cfg[field] < float('inf'):
+            cfg[field] = DEFAULTS[field]
+    return cfg
 
 
 def key(kind, value):

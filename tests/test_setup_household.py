@@ -75,6 +75,14 @@ class HouseholdTests(unittest.TestCase):
         self.assertEqual(json.loads(creds.read_text())['sam']['uuid'], self.uid)
         self.assertTrue(any(c[2] and c[2]['config']['accessKey'] == 'PRIVATE-ACCESS' for c in self.fake.calls if c[0] == 'PUT'))
 
+    def test_row_language_is_part_of_initial_household_config(self):
+        self.flags[self.flags.index('--member') + 1] = 'ana'
+        code, output = self.run_setup('--row-lang', 'en-US')
+        self.assertEqual(code, 0, output)
+        region = json.loads((self.data/'skald.json').read_text())['region']
+        self.assertEqual(region['lang'], 'de-DE')
+        self.assertEqual(region.get('row_lang'), 'en-US')
+
     def test_defaults_and_configured_refusal(self):
         self.assertEqual(self.run_setup()[0], 0)
         before = (self.data/'skald.json').read_bytes()

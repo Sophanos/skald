@@ -116,7 +116,7 @@ def member_data(data, person, cfg, skip=()):
     return False
 
 
-def household(data, names, lang, timezone, country, *, existing=None, prepare=False):
+def household(data, names, lang, timezone, country, *, existing=None, prepare=False, row_lang=None):
     data = Path(data)
     path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
     existing = path.exists() if existing is None else existing
@@ -139,6 +139,10 @@ def household(data, names, lang, timezone, country, *, existing=None, prepare=Fa
             hh['trakt_member'] = names[0] if names else ''
         cfg['taste']['people'] = {p: cfg['taste']['people'].get(p, {}) for p in names}
     cfg['region'].update({k: v for k, v in {'lang': lang, 'tz': timezone, 'country': country}.items() if v is not None})
+    if row_lang == 'same':
+        cfg['region'].pop('row_lang', None)
+    elif row_lang is not None:
+        cfg['region']['row_lang'] = row_lang
     return members.validate_config(cfg, data=str(data)) if prepare else publish(data, cfg, replace=existing)
 
 
@@ -225,8 +229,10 @@ def keep_catalog_places(s, config, manifest, person, *, first_added=False):
     rows += [(prefix + s.rid('search'), typ) for typ in ('movie', 'series')]
     original = modifications
     shelf_ids = {prefix + cid for cid in s.SHELF_ROWS}
+    retired_ids = {prefix + cid for cid in s.CONFIG['household'].get('retired_rows', [])}
     modifications = [entry for entry in modifications
-                     if entry['id'] not in shelf_ids or (entry['id'], entry['type']) in home_rows]
+                     if entry['id'] in retired_ids or entry['id'] not in shelf_ids and not entry['id'].startswith(prefix+s.rid('lab_'))
+                     or (entry['id'], entry['type']) in home_rows]
     existing = {(entry['id'], entry['type']): entry for entry in modifications
                 if entry['id'].startswith(prefix)}
     groups, leading = [], []
@@ -472,6 +478,7 @@ def status(data):
     saved = state(data)
     path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
     config = members.validate_config(json.loads(path.read_text()), data=str(data)) if path.exists() else None
+    people = members.active_people(config) if config else []
     legacy = (data/'legacy.json').exists() and config is None
     steps = {'checks': bool(saved.get('tmdb_checked') and os.environ.get('TMDB_API')),
              'household': bool(config) or legacy, 'address': bool(saved.get('base')),
@@ -484,6 +491,7 @@ def status(data):
         notes.append('AIOStreams: ' + str(skipped) + ' profiles skipped')
     if legacy:
         config, _ = members.load_config(str(data), readonly=True)
+        people = members.active_people(config)
         if os.environ.get('TMDB_API') and not saved.get('tmdb_checked'):
             steps.pop('checks')
             notes.append('TMDB key present (not checked)')
@@ -500,7 +508,7 @@ def status(data):
         notes.append('taste: ' + '; '.join(config['household']['labels'][p] + ': ' + str(n) + ' rated' for p, n in rated.items()))
     connections = {cid: {p: bool(config['connectors'].get(cid, {}).get('enabled') and
                                      p in config['connectors'].get(cid, {}).get('accounts', {}))
-                         for p in (config['household']['members'] if config else [])}
+                         for p in people}
                    for cid in ('mdblist', 'stremio', 'pmdb')}
     missing = [k for k, done in steps.items() if not done]
     commands = {'checks': 'skald setup', 'household': 'skald setup', 'address': 'skald setup --base YOUR_ADDRESS',
@@ -511,6 +519,8 @@ def status(data):
         missing[missing.index('checks')] = ('TMDB_API not set; put it in .env, then docker compose up -d (engine) or docker compose -f compose.stack.example.yaml up -d (skald); without Docker: export TMDB_API=...'
                                             if not os.environ.get('TMDB_API') else 'TMDB key not checked; run skald setup')
     logins = aiostreams_logins(data)
+    if config:
+        logins = {p: login for p, login in logins.items() if p in (*people, 'household')}
     if saved.get('watch') in ('aiostreams', 'jellyfin-app') and not logins and all(steps.get(k, False) for k in ('checks', 'household', 'address', 'watch')):
         next_command = 'skald setup aiostreams'
     if config and not legacy and restart_required(data, config):
@@ -524,8 +534,10 @@ def status(data):
             'next': next_command, 'ok': not missing,
             'legacy_readonly': legacy, 'aiostreams_login': 'made for ' + ', '.join(logins) if logins else 'not made',
             'notes': notes, 'connections': connections,
+            'lang': (config or members.CONFIG)['region']['lang'],
+            'row_lang': (config or members.CONFIG)['region'].get('row_lang', (config or members.CONFIG)['region']['lang']),
             'ai_credit': ai_text(ai_status(read_usage(data), {}, 0, config or {}), (config or members.CONFIG)['region']['lang']),
-            'prefs': [prefs_line(config, p) for p in config['household']['members']] if config else []}
+            'prefs': [prefs_line(config, p) for p in people] if config else []}
 
 
 def link(s, name, person, scopes, base):
@@ -725,6 +737,7 @@ def prefs_line(cfg, person):
 
 
 def select_rows(cfg, keys):
+    cfg['household'].pop('rows_from_default', None)
     if keys == 'all':
         cfg['household'].pop('rows', None)
     else:
@@ -757,7 +770,7 @@ def setup_household(data, args):
     saved = state(data)
     if not args.member or args.member in ('all', 'household', 'together'):
         raise ValueError('supply one household member with --member')
-    cfg = household(data, [args.member], args.lang or 'en-US', args.timezone or 'UTC', args.country or 'United States', prepare=True)
+    cfg = household(data, [args.member], args.lang or 'en-US', args.timezone or 'UTC', args.country or 'United States', prepare=True, row_lang=args.row_lang)
     if args.rows is not None:
         select_rows(cfg, args.rows)
         cfg = members.validate_config(cfg, data=str(data))
@@ -1021,7 +1034,7 @@ def run(args):
     lang = args.lang if existing else ask(args.lang, 'Language', 'en-US', '--lang')
     tz = args.timezone if existing else ask(args.timezone, 'Timezone', 'UTC', '--timezone')
     country = args.country if existing else ask(args.country, 'Country', 'United States', '--country')
-    cfg = household(data, names, lang, tz, country, existing=existing) if not existing or names is not None or any((lang, tz, country)) else members.validate_config(json.loads(path.read_text()), data=str(data))
+    cfg = household(data, names, lang, tz, country, existing=existing, row_lang=args.row_lang) if not existing or names is not None or args.row_lang is not None or any((lang, tz, country)) else members.validate_config(json.loads(path.read_text()), data=str(data))
     if not args.yes and not args.json and not saved.get('children_asked'):
         if ask(None, 'Any children watching?', 'no', '').lower() in ('y', 'yes'):
             person = ask(None, 'Which member is the child?', None, '--person')
@@ -1034,7 +1047,9 @@ def run(args):
             cfg = publish(data, cfg, replace=True)
         saved['children_asked'] = True
         write_private(data/'setup.json', json.dumps(saved) + '\n')
-    lines.append('Household: ' + ', '.join(cfg['household']['members']) + '; ' + cfg['region']['lang'] + '; ' + cfg['region']['tz'] + '; ' + cfg['region']['country'] + '.')
+    lines.append('Household: ' + ', '.join(members.active_people(cfg)) + '; ' + cfg['region']['lang'] + '; ' + cfg['region']['tz'] + '; ' + cfg['region']['country'] + '.')
+    if args.row_lang is not None:
+        lines.append('Row names and card labels: ' + cfg['region'].get('row_lang', cfg['region']['lang']) + '; ' + RESTART + ' to apply.')
     internal_base = args.internal_base or saved.get('internal_base') or os.environ.get('SKALD_INTERNAL_BASE')
     if internal_base:
         internal_base = remote.validate_base(internal_base)
@@ -1132,6 +1147,7 @@ def add_parser(commands):
         'secret-stdin': 'read the secret from stdin instead of a prompt',
         'members': 'comma-separated household member names, e.g. alex,sam',
         'lang': 'language for titles, e.g. en-US',
+        'row-lang': 'language for row names and card labels, e.g. en-US; same follows --lang',
         'timezone': 'timezone for dates, e.g. Europe/Berlin',
         'country': 'country for AI context, e.g. United States',
         'base': 'the address your watching apps use, e.g. https://skald.example.org',
@@ -1151,7 +1167,7 @@ def add_parser(commands):
     }
     for name in ('yes', 'json', 'status', 'check', 'secret-stdin', 'password-stdin'):
         p.add_argument('--' + name, action='store_true', default=False if name != 'json' else argparse.SUPPRESS, help=helps[name])
-    for name in ('members', 'lang', 'timezone', 'country', 'base', 'internal-base', 'watch', 'connect', 'disconnect', 'name', 'person',
+    for name in ('members', 'lang', 'row-lang', 'timezone', 'country', 'base', 'internal-base', 'watch', 'connect', 'disconnect', 'name', 'person',
                  'source-url', 'source-path', 'user-id', 'auth-env', 'client-id-env', 'aio-url', 'uuid', 'member'):
         p.add_argument('--' + name, help=helps[name])
     p.add_argument('--key-stdin', dest='secret_stdin', action='store_true', help='read the source key from stdin (same as --secret-stdin)')

@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from decide_kit import load_server, close_server
+from decide_kit import load_server, close_server, ReplayLLM
 from skald import commands as c, members, setup, migrate
 
 
@@ -29,7 +29,7 @@ class SettingsCommands(unittest.TestCase):
 
     def test_glm_fallback_and_override(self):
         spec = self.s.DECISIONS['parse_command']
-        self.assertEqual(spec['ver'], 13)
+        self.assertEqual(spec['ver'], 15)
         fallback = spec['llm']['fallback']
         self.assertEqual(fallback['timeout'], 6)
         body = fallback['prompt']([{'query': 'hide anime'}])
@@ -325,9 +325,14 @@ class SettingsCommands(unittest.TestCase):
                  ('mach eine neue Liste mit Krimis für uns', 'Krimis', 'together')]
         for query, theme, person in cases:
             with self.subTest(query=query):
-                answer = c.parse_shelf(query, self.s)
-                self.assertEqual(answer, dict(op='shelf_add', kind=None, values=[theme, 'always'], person=person))
-                self.assertEqual(self.s.DECISIONS['parse_command']['rule']({'query': query}, {})[0], answer)
+                answer = dict(op='shelf_add', kind=None, values=[theme, 'always'], person=person)
+                self.assertEqual(c.parse_shelf(query, self.s), answer)
+                self.assertIsNone(self.s.DECISIONS['parse_command']['rule']({'query': query}, {}))
+                with ReplayLLM(self.s) as llm:
+                    self.assertIsNone(self.s.DECISIONS['parse_command']['rule']({'query': query}, {}))
+                    llm.arm({'choices': [{'message': {'content': json.dumps(answer)}}]})
+                    self.assertEqual(self.s.decide('parse_command', {'query': query})['answer'], answer)
+                    self.assertEqual(llm.calls, 1)
         for query in ('best catalog of crime movies', 'a list of crime movies', 'catalog about crime', 'something about crime tonight'):
             self.assertEqual(c.parse_shelf(query, self.s), c.NONE)
 
@@ -347,9 +352,12 @@ class SettingsCommands(unittest.TestCase):
         self.assertEqual(answer['source'], 'llm')
         request.assert_called_once()
 
-    def test_phone_creation_query_previews_without_router_or_search(self):
-        with patch.object(self.s, 'who_watching', return_value=('ana', None)), patch.object(self.s, 'ai_future', side_effect=AssertionError('rule should handle creation')), patch.object(self.s, 'search_both', side_effect=AssertionError('not a one-off search')):
+    def test_phone_creation_query_uses_structured_command_and_previews(self):
+        answer = dict(op='shelf_add', kind=None, values=['psygoloy crime', 'always'], person=None)
+        with ReplayLLM(self.s) as llm, patch.object(self.s, 'who_watching', return_value=('ana', None)), patch.object(self.s, 'ai_future', side_effect=AssertionError('command previews directly')), patch.object(self.s, 'search_both', side_effect=AssertionError('not a one-off search')):
+            llm.arm({'choices': [{'message': {'content': json.dumps(answer)}}]})
             card = self.s.search('movie', 'Create a new catalog about psygoloy crime', 'en-US')['metas'][0]
+            self.assertEqual(llm.calls, 1)
         self.assertIn('shelf', card['name'])
         self.assertIn('Nothing changes', card['description'])
         self.assertEqual(self.s.shelf_list()['wishes'], [])

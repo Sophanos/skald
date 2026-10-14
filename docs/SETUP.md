@@ -210,6 +210,23 @@ a language such as `en-US`; a timezone such as `Europe/Berlin`.
 **Worked when:** setup prints your names and settings and DATA contains `skald.json`.
 It writes atomically. A rerun keeps existing settings and asks only for missing steps.
 You can add a member. Setup refuses to remove or rename someone who has data.
+
+Titles, plots, artwork and the install URL follow `--lang` (`region.lang`). To read
+row names, card labels and reasons in another language, set `--row-lang`:
+
+```sh
+python -m skald setup --lang de-DE --row-lang en-US
+```
+
+This keeps German titles with English labels. Label languages need a bundled
+locale: English (`en-US`), German (`de-DE`) or Serbian (`sr-Latn-RS` or `sr-Cyrl-RS`).
+Missing translations fall back to English per label. Run
+`python -m skald setup --row-lang same` to make labels follow the title language
+again. Omitted `--row-lang` keeps the saved choice; existing households without
+`region.row_lang` behave as before. Restart Skald after a change, just as with
+`--lang`: `docker compose restart engine`. `setup --status --json` and
+`rows names --json` show both languages. `rows names --lang en-US` only previews
+labels and saves nothing. These optional settings keep the existing DATA format.
 The optional `row_prefix` in household config sets catalog ids, for example
 `skald.foryou`. It defaults to `skald` and accepts 2–16 lowercase letters and
 digits, starting with a letter. Existing households keep their prefix in

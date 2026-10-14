@@ -223,7 +223,8 @@ class ShelfRules(Household):
             self.assertIsNone(self.parse(text)['op'], text)
 
     def test_filter_applies_and_undoes(self):
-        wish = self.add_shelf('create a shelf about classics')
+        c.apply(self.s, c.preview(self.s, '', 'ana', 'ana', answer=dict(op='shelf_add', values=['classics', 'always'])))
+        wish = shelves.read(self.s)['wishes'][-1]
         self.say('Limit my Classics shelf to movies under 90 minutes')
         self.confirm()
         self.assertEqual(shelves.rules(self.s)[wish['id']]['filters'], {'kind': 'movie', 'runtime': 90})
@@ -357,7 +358,7 @@ class ReviewFixes(Household):
         self.assertEqual(shelves.rules(self.s)[wish['id']]['months'], [12])
 
     def test_excluding_a_whole_type_keeps_the_other(self):
-        c.apply(self.s, c.preview(self.s, 'create a shelf about classics', 'ana', 'ana'))
+        c.apply(self.s, c.preview(self.s, 'create a shelf about classics', 'ana', 'ana', answer=dict(op='shelf_add', values=['classics', 'always'])))
         plan = c.preview(self.s, 'Exclude movies from my Classics shelf', 'ana', 'ana')
         self.assertEqual(plan['rule']['after']['filters'], {'kind': 'series'})
 

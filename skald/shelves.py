@@ -28,6 +28,25 @@ def rules(s):
 def save_rules(s, doc):
     write_private(Path(s.DATA) / 'shelf_rules.json', json.dumps(doc, ensure_ascii=False) + '\n')
 
+def validate_filters(s, filters):
+    if not isinstance(filters, dict) or not filters or set(filters) - {'kind', 'runtime', 'years', 'languages', 'exclude_genres', 'hide'}:
+        raise ValueError('invalid shelf filter')
+    kind = filters.get('kind', 'movie')
+    if kind not in ('movie', 'series'):
+        raise ValueError('invalid shelf filter kind')
+    prefs = {k: copy.deepcopy(v) for k, v in filters.items() if k in ('years', 'hide')}
+    if 'runtime' in filters:
+        prefs['runtime'] = {kind: filters['runtime']}
+    if 'languages' in filters:
+        prefs['focus'] = {'languages': filters['languages']}
+    if 'exclude_genres' in filters:
+        prefs['excluded_genres'] = {kind: filters['exclude_genres']}
+    cfg, person = copy.deepcopy(s.CONFIG), s.PEOPLE[0]
+    cfg['taste'].setdefault('people', {}).setdefault(person, {})['prefs'] = prefs
+    prefs = s.validate_config(cfg, data=s.DATA)['taste']['people'][person]['prefs']
+    return {**filters, **({'languages': prefs['focus']['languages']} if 'languages' in filters else {}),
+            **({'exclude_genres': prefs['excluded_genres'][kind]} if 'exclude_genres' in filters else {})}
+
 def rule_ok(s, meta, rule):
     f = (rule or {}).get('filters') or {}
     if not f:
@@ -35,7 +54,7 @@ def rule_ok(s, meta, rule):
     facts, kind = s.row_facts(meta), meta['type']
     low, high = f.get('years') or [None, None]
     year = (facts.get('date') or '')[:4]
-    if f.get('kind') and kind != f['kind'] or f.get('runtime') and (not facts.get('runtime') or facts['runtime'] > f['runtime']):
+    if f.get('kind') and kind != f['kind'] or not s.runtime_ok(facts, f.get('runtime') or None):
         return False
     if (low or high) and (not year.isdigit() or low and int(year) < low or high and int(year) > high):
         return False
@@ -43,7 +62,7 @@ def rule_ok(s, meta, rule):
         return False
     if f.get('exclude_genres') or f.get('hide'):
         names, hide = s.preference_genres(facts, kind), set(f.get('hide') or ())
-        if names & {g.casefold() for g in f.get('exclude_genres') or ()} or 'documentaries' in hide and 'documentary' in names:
+        if s.genre_excluded(facts, kind, f.get('exclude_genres') or ()) or 'documentaries' in hide and 'documentary' in names:
             return False
         if 'animation' in hide and 'animation' in names or 'anime' in hide and s.is_anime(meta):
             return False
@@ -58,7 +77,8 @@ def counts(cfg):
 
 def slots(s, scope=None, *, doc=None):
     scopes = [scope, 'together'] if scope in s.PEOPLE else ['together']
-    occupied = {(w['scope'], w['slot']) for w in (read(s) if doc is None else doc)['wishes']}
+    occupied = {(w['scope'], w['slot']) for w in (read(s) if doc is None else doc)['wishes']
+                if w.get('with_person') is None or w['with_person'] in s.PEOPLE}
     return [(s.rid(f'shelf_{p}_{n}'), p, n) for p in scopes for n in range(1, slot_count(s, p) + 1)
             if (p, n) in occupied]
 
@@ -134,10 +154,12 @@ def consume_undo(s, scope, before, op):
         events.pop(index)
         write_private(journal, ''.join(json.dumps(e) + '\n' for e in events))
 
-def _change(s, scope, op, *, text='', name='', when='always', slot=None, count=None, apply=False, plan=None, expected=None):
+def _change(s, scope, op, *, text='', name='', when='always', slot=None, count=None, apply=False, plan=None, expected=None, with_person=None):
     with LOCK:
         if scope not in (*s.PEOPLE, 'together'):
             raise ValueError('unknown shelf scope')
+        if with_person is not None and (scope not in s.PEOPLE or with_person not in s.PEOPLE or with_person == scope):
+            raise ValueError('Name two different people for this shelf')
         s.refresh_preferences()
         doc = read(s)
         before = {'wishes': copy.deepcopy([w for w in doc['wishes'] if w['scope'] == scope]), 'count': slot_count(s, scope)}
@@ -193,6 +215,8 @@ def _change(s, scope, op, *, text='', name='', when='always', slot=None, count=N
         else:
             raise ValueError('unknown shelf operation')
         action = dict(op=op, text=text, name=name, when=when, slot=slot, count=count)
+        if with_person is not None:
+            action['with_person'] = with_person
         digest = hashlib.sha256(json.dumps([scope, before, action], sort_keys=True).encode()).hexdigest()[:20]
         if not apply:
             doc['plans'][digest] = {'scope': scope, 'before': before, 'change': action}
@@ -211,13 +235,15 @@ def _change(s, scope, op, *, text='', name='', when='always', slot=None, count=N
         else:
             doc['wishes'] = [w for w in doc['wishes'] if (w['scope'], w['slot']) != (scope, slot)]
             if op != 'stop':
-                doc['wishes'].append(dict(id=uuid.uuid4().hex, scope=scope, slot=slot, text=text.strip(), name=name, when=when))
+                doc['wishes'].append(dict(id=uuid.uuid4().hex, scope=scope, slot=slot, text=text.strip(), name=name, when=when,
+                                         **({'with_person': with_person} if with_person is not None else {})))
         doc['plans'].clear()
         save(s, doc)
         journal = Path(s.DATA) / 'undo.jsonl'
         events = [json.loads(line) for line in journal.read_text().splitlines()] if journal.exists() else []
         events.append({'scope': scope, 'op': op, 'before': before})
-        kept = [e for p in (*s.PEOPLE, 'together') for e in [x for x in events if x['scope'] == p][-20:]]
+        active = (*s.PEOPLE, 'together')
+        kept = [e for i, e in enumerate(events) if e['scope'] not in active or sum(x['scope'] == e['scope'] for x in events[i+1:]) < 20]
         write_private(journal, ''.join(json.dumps(e) + '\n' for e in kept))
         s.aio_rows_changed()
         return listing(s, scope)
@@ -290,15 +316,28 @@ def fill(s, lang, now=None, build=True):
                 try:
                     with s.addon_scope(scope):
                         profile = s.search_profile()
+                        tonight = set(s.remote_masks()[1])
+                    partner = wish.get('with_person')
                     if build:
                         s.ensure_facets([(x['id'], 'movie' if x['type'] == 'movie' else 'tv') for x in raw['candidates']])
-                    metas = list({x['id']: x for x in raw['candidates'] if (pinned or x['id'] not in profile.get('seen', ())) and x['id'] not in profile.get('negative', ()) and s.preference_ok(x, cid, who) and rule_ok(s, x, rule)}.values())
+                    metas = list({x['id']: x for x in raw['candidates'] if (pinned and partner is None or x['id'] not in profile.get('seen', ())) and x['id'] not in profile.get('negative', ()) and s.preference_ok(x, cid, who) and rule_ok(s, x, rule)}.values())
+                    if partner is not None:
+                        shared_token = s._safety_context.set(('shelf', partner))
+                        try:
+                            with s.addon_scope(partner):
+                                other = s.search_profile()
+                                tonight.update(s.remote_masks()[1])
+                            excluded = set(other.get('seen', ())) | set(other.get('negative', ())) | s.deferred_keys(partner)
+                            metas = [x for x in metas if x['id'] not in excluded and s.preference_ok(x, cid, partner)]
+                        finally:
+                            s._safety_context.reset(shared_token)
                     scores = s.member_scores(metas, who) if who in s.PEOPLE else s.week_scores(metas)
                     metas.sort(key=lambda x: scores.get(x['id'], 0), reverse=True)
                     metas = s.preference_order(metas, cid, who)[:s.ROW_MAX]
                     if pinned:
                         order = {x['id']: i for i, x in enumerate(raw['candidates'])}
                         metas.sort(key=lambda x: order[x['id']])
+                    metas = s.remote_order(metas, (set(), tonight))
                     out[cid]['tv'] = metas if pinned or len(metas) >= s.ROW_MIN else []
                 finally:
                     s._safety_context.reset(token)

@@ -126,7 +126,7 @@ class EmbeddingSwitchTests(unittest.TestCase):
                 patch.object(s, 'pool_seeds', return_value=[{'key': 'tmdb:1', 'id': 1, 'kind': 'movie', 'title': 'Synthetic Seed'}]), \
                 patch.object(s, 'tmdb', side_effect=detail), patch.object(s, 'tired_keys', return_value={}), \
                 patch.object(s, 'themed_row', return_value=None), patch.object(s, 'feeling_pool', return_value=items), \
-                patch.object(s, 'polish_row', side_effect=lambda xs: xs), patch.object(s, 'balance_row', side_effect=lambda xs: xs), \
+                patch.object(s, 'polish_row', side_effect=lambda xs, **kw: xs), patch.object(s, 'balance_row', side_effect=lambda xs: xs), \
                 patch.object(s, 'tone_ok', return_value=True), patch('builtins.print') as logged:
             with self.subTest(caller='rank_by_taste'):
                 self.assertEqual(len(s.rank_by_taste({}, items)), 9)

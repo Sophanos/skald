@@ -41,23 +41,89 @@ Cost is capped: AI calls stop at 3 US dollars a month by default (`AI_MONTHLY_US
 
 ### 3. Quickstart
 
-Use Docker and Docker Compose on your data machine. Get a free [TMDB API key](https://www.themoviedb.org/settings/api).
+This is the setup we run: Skald and AIOStreams together in Docker. You need Docker with Compose and a free [TMDB API key](https://www.themoviedb.org/settings/api).
 
-1. Clone: `git clone https://github.com/Sophanos/skald skald && cd skald`
-2. Make the private data folder: `mkdir -p data && sudo chown 65534 data && sudo chmod 700 data`
-3. Copy the private env files: `cp .env.example .env && cp .env.aiostreams.example .env.aiostreams && chmod 600 .env .env.aiostreams`
-4. Edit them: `${EDITOR:-vi} .env .env.aiostreams`. In `.env`, put `TMDB_API=YOUR_KEY` and optional `OPENROUTER_API_KEY=YOUR_KEY`, and delete the `SKALD_MEMBERS`, `SKALD_LANG` and `SKALD_TZ` lines (setup asks for these).
-   In `.env.aiostreams`, set a secret made with `openssl rand -hex 32` and your public HTTPS address.
-5. Start: `docker compose -f compose.stack.example.yaml up -d --build`. The empty Skald container waits for setup.
-6. Set up your household: `docker compose -f compose.stack.example.yaml exec skald skald setup`
-7. Make your watching login: `docker compose -f compose.stack.example.yaml exec skald skald setup aiostreams`
+```text
+Odin or Stremio ──HTTPS──▶ AIOStreams ──inside Docker──▶ Skald
+```
 
-Setup makes your AIOStreams login with Skald and TMDB title details. Add the printed server, user and password in Odin, or install the printed Stremio link. Then configure your stream addons in AIOStreams and [connect your taste sources](#sources). [AIOStreams](https://github.com/Viren070/AIOStreams) is a separate project with its own docs and licence. We use its published image.
+**Only AIOStreams needs a public HTTPS address.** Skald has no public port. In this stack AIOStreams listens on `127.0.0.1:3000`; point your HTTPS reverse proxy or tunnel there.
 
-Stremio only, without AIOStreams: copy only `.env`, edit it as above, then run `docker compose up -d --build`.
-Run `docker compose exec engine skald setup --watch stremio` and install the printed link.
+Other cases have their own [Compose setup](examples/README.md):
 
-The first row build takes several minutes; `skald setup --status` shows progress. [Setup and network configuration](docs/SETUP.md#after-the-quickstart) covers the rest.
+| Your situation | Use |
+|---|---|
+| You already run AIOStreams | [existing-aiostreams](examples/README.md#existing-aiostreams): joins Skald to your AIOStreams Docker network |
+| Home network only, no HTTPS | [odin-jellyfin](examples/README.md#odin-jellyfin): AIOStreams on `http://YOUR-LAN-IP:3000` |
+| Stremio without AIOStreams | [stremio](examples/README.md#stremio), [reverse-proxy](examples/README.md#reverse-proxy) or [tunnel](examples/README.md#tunnel) |
+
+**1. Get the code and make the private data folder**
+
+```sh
+git clone https://github.com/Sophanos/skald skald && cd skald
+mkdir -p data && sudo chown 65534 data && sudo chmod 700 data
+```
+
+**2. Make the private env files** (the last line writes a fresh AIOStreams secret)
+
+```sh
+cp .env.example .env
+sed '/^SECRET_KEY=/d' .env.aiostreams.example > .env.aiostreams
+chmod 600 .env .env.aiostreams
+openssl rand -hex 32 | sed 's/^/SECRET_KEY=/' >> .env.aiostreams
+```
+
+**3. Add your keys and address**
+
+```sh
+${EDITOR:-vi} .env .env.aiostreams
+```
+
+| File | Line | Value |
+|---|---|---|
+| `.env` | `TMDB_API=` | your TMDB key |
+| `.env` | `OPENROUTER_API_KEY=` | your OpenRouter key (optional) |
+| `.env` | `SKALD_MEMBERS`, `SKALD_LANG`, `SKALD_TZ` | delete these lines; setup asks for them |
+| `.env.aiostreams` | `BASE_URL=` | AIOStreams' public HTTPS address, like `https://aio.example.org` |
+
+**4. Start**
+
+```sh
+docker compose -f compose.stack.example.yaml up -d --build
+```
+
+The empty Skald container waits for setup.
+
+**5. Set up your household and your watching login**
+
+```sh
+docker compose -f compose.stack.example.yaml exec skald skald setup
+docker compose -f compose.stack.example.yaml exec skald skald setup aiostreams
+```
+
+The second command makes your AIOStreams login with Skald and TMDB title details. Add the printed server, user and password in Odin, or install the printed Stremio link. Then configure your stream addons in AIOStreams and [connect your taste sources](#sources). [AIOStreams](https://github.com/Viren070/AIOStreams) is a separate project with its own docs and licence. We use its published image.
+
+**6. Wait for the first rows** (several minutes)
+
+```sh
+docker compose -f compose.stack.example.yaml exec skald skald setup --status
+```
+
+**7. Learn from Odin plays** (after your first play in Odin)
+
+```sh
+docker compose -f compose.stack.example.yaml exec skald skald setup --connect aiostreams-db --source-path /aio-data/db.sqlite
+docker compose -f compose.stack.example.yaml restart skald
+```
+
+**Stremio only, without AIOStreams:** make and edit only `.env` as above, then run the commands below and install the printed link. Skald then listens on `127.0.0.1:8080`; the stremio, reverse-proxy and tunnel setups above give it a LAN or HTTPS address.
+
+```sh
+docker compose up -d --build
+docker compose exec engine skald setup --watch stremio
+```
+
+[Setup and network configuration](docs/SETUP.md#after-the-quickstart) covers the rest.
 
 ## How Skald learns
 

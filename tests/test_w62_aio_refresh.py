@@ -309,7 +309,7 @@ class AIORefresh(unittest.TestCase):
 
     def test_count_change_card_omits_manual_refresh_hint(self):
         plan = commands.preview(self.s, 'show 3 shelves', 'ana')
-        self.assertEqual(plan['name'], 'Count 3 shelves for ' + self.s.LABELS['ana'] + '; always on')
+        self.assertEqual(plan['name'], 'Count 3 shelves for ' + self.s.LABELS['ana'] + '; always on; hidden wishes are kept')
 
     def test_clear_prefs_and_undo_refresh_only_when_count_changes(self):
         self.background()

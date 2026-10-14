@@ -30,9 +30,12 @@ Ask Commander “how much AI credit is left?” to read the same saved numbers.
 | `rows reach [--person NAME] [--top N]` | Check how many best unseen known matches appear on each profile's Home, with row ids and the first drop reason for missing titles: `skald --snapshot /path/copy rows reach --top 20 --json`. Omit `--person` for the household and every member. Reads stored data offline; it does not source or rebuild feeds. `--top` defaults to 20 and accepts 1..10000. |
 | `rows plan` | Explain every registered home row, including hidden rows: `skald rows plan --person household --lang en-US --json`. Top Rated cards include type, position, TMDB rating, relative taste match (0..100) and blend score. Feeling rows include `candidate_sources`: catalog and recommendation counts before vetting or balancing, and `missing_cards` skipped because stored artwork is missing. Themed vetting examines the first 40 cards. Counts appear after a rebuild. Themed rows include `season.months` (month numbers, `"any"`, or `null` when unknown) and `season.hidden` for the household's local date. Reads local `DATA_DIR` or `--snapshot`; `--person` also accepts `together`, a member or `guest`. |
 | `rows why ROW` | Explain one row and its kept and dropped cards: `skald rows why mood1 --person ana --json`. Use `skald rows why toprated --person ana --json` to list ranked movies and series with rating and taste. Commander can read the same list through its Home plan operation, or hide and show the row with `hide top rated` and `show top rated series`. Both types share the `toprated` control. Uses the same read-only build as `rows plan`. |
-| `rows prefer` | Preview a household mood or lane limit change: `skald rows prefer --theme mood --more` or `--theme lane --fewer`. Defaults are three each; limits are 0..8. Apply with `--plan HASH` from the preview or `--yes`. Preview and apply refuse a reduction below six populated rows, or the current count if already lower, and never allow zero. Changes use the existing atomic `skald.json` write; the server reloads them on its next row request or worker pass. An explicit household `rows` list bypasses these limits. |
+| `rows prefer` | Preview a household mood or lane limit change: `skald rows prefer --theme mood --more` or `--theme lane --fewer`. Automatic Home defaults to three each; Home can show at most four mood rows and five lane rows. Apply with `--plan HASH` from the preview or `--yes`. Preview and apply refuse a reduction below six populated rows, or the current count if already lower, and never allow zero populated rows. Changes use the existing atomic `skald.json` write; the server reloads them on its next row request or worker pass. Hiding or showing a row preserves both family limits. An explicit household `rows` selection bypasses these limits. |
 | `rows refresh ROW` | Preview refreshing one row: `skald rows refresh mood1`. Apply with `--plan HASH` or `--yes`; the CLI atomically queues row ids in `DATA_DIR/row_refresh.json`, without writing feeds or calling upstream services. The worker clears those rows' stamps and deletes the request at the start of its next feed pass. Older servers ignore the request. A grouped mood or lane build can also rebuild its siblings. Queued CLI refreshes have no undo. |
 | `rows week [--weeks N] [--person NAME] [--json]` | Read saved weekly picks offline, including on an older snapshot. Defaults to the latest saved week; `--weeks 1..8` includes that week and earlier calendar weeks. For example: `skald --snapshot /path/copy rows week --weeks 4 --person ana --json`. |
+| `rows lab [--json]` | Read new row ideas, their state, play moments, showing days and keep or retirement reasons offline. With row metrics off, it says the lab is paused. Supports `--snapshot` for reads. |
+| `rows lab --keep ID`, `--retire ID`, `--off` or `--on` | Preview one household lab control. Repeat with `--yes` or `--plan HASH` to apply to local `DATA_DIR`. Use `command --person ana --undo` to undo the last control. Keep promotes an idea; manual retirement is final unless undone. |
+| `rows moments [--json]` | Read showings and attributed plays per row and moment offline. Old evidence stays unknown. Imports without usable play times are excluded and counted separately. Supports `--snapshot`. |
 | `learn` | Inspect viewing signals: `skald --snapshot /path/copy learn` |
 | `suggest` | Read your weekly habits: `skald suggest --person alex`. Use `--dismiss ID` to hide a theme for 90 days in private DATA_DIR. Listing writes nothing; a read-only copy also works with `--snapshot`. |
 | `memory` | Inspect saved preferences: `skald --snapshot /path/copy memory` |
@@ -131,6 +134,7 @@ See [connector credentials and limits](CONNECTORS.md).
 | `--member` | Make an AIOStreams login for NAME, together or all; default: household |
 | `--members` | Comma-separated household member names, e.g. alex,sam |
 | `--lang` | Language for titles, e.g. en-US |
+| `--row-lang` | Language for row names, card labels and reasons, e.g. en-US; `same` follows `--lang`. Restart Skald to apply. |
 | `--timezone` | Timezone for dates, e.g. Europe/Berlin |
 | `--country` | Country for AI context, e.g. United States |
 | `--base` | The address your watching apps use, e.g. https://skald.example.org |
@@ -197,7 +201,7 @@ Shelves accept any weekday list and whole clock hours, for example `every monday
 
 Commander also answers `why these rows?`, `why does Because show this` and `why don't I see mood rows` from the home plan (`home_plan`). Ask for `more mood rows` (`home_more`), `fewer lane rows` (`home_fewer`) or `new picks in the cozy row` (`row_refresh`) to preview a household change. Confirm with the exact `yes NN` shown in the preview, then use `undo` to revert. `Refresh this row` asks which row when there is no row context. These operations use the same model decision path and support English, German and Serbian. Undo a Commander refresh inside Commander; the CLI refuses to restore worker stamps. A refresh undo refuses to overwrite a newer background build.
 
-The family limits live in `household.home.family_caps`, for example `{"mood": 3, "lane": 3}`. Missing limits default to three, including when only row order or labels are configured. Plan counts describe the stored feeds under the current viewer's filters, including Family and active archived rows. Inspection uses cached metadata only and never enriches records, pins rows or records exposures. Metrics, when enabled, add shown and play counts from the last four weeks.
+The family limits live in `household.home.family_caps`, for example `{"mood": 3, "lane": 3}`. Missing limits default to three on automatic Home, including when only row order or labels are configured. An explicit household row selection bypasses these limits. Hiding or showing rows from the default set keeps them. Plan counts describe the stored feeds under the current viewer's filters, including Family and active archived rows. Inspection uses cached metadata only and never enriches records, pins rows or records exposures. Metrics, when enabled, add shown and play counts from the last four weeks.
 
 Search `every sunday morning a classic for us` or `weekday evenings something light for me` for a scheduled shelf in the household timezone (Sunday 05-12 or weekdays 18-24). Use `for MEMBER` for a named person, or `for us`, `for both`, `for both of us`, `for everyone` or `for together` for a Together shelf. `make me a row of heist films` creates an always-on shelf. `stop Classics` or `stop the sunday shelf` previews stopping an existing shelf with that name; unmatched names stay title searches; `undo` restores it. `show 6 shelves` or `fewer shelves` previews a slot count change (0..10). After shelf changes Skald asks AIOStreams to reload row names for logins made by `skald setup aiostreams`; Stremio installed with Skald's own link may need the link reinstalled to show new names. Full shelves ask you to stop one first. `my settings` or `settings` lists personal and Together shelves. `what do you know about NAME` answers for a named member. A member id or full label also works in `my settings for NAME`, `NAME settings`, `NAME's settings`, `settings NAME` or `settings for NAME`. `help` shows five search examples. `ideas` and `suggest` offer at most two habit suggestions; `yes NN` creates one and `no NN` dismisses it for 90 days. The exact `yes NN` code comes first in each preview or suggestion card name. Card names stay short (24 characters); open a card to read its details. Command cards appear once, in movie search results; paired series requests return no command cards. Shared links ask for a member. Children can manage their own shelves; fills keep their age filter, and they cannot change Together or other people's shelves.
 
@@ -207,6 +211,55 @@ The API previews with `POST /api/v1/decide/parse_command`, body `{"in":{"query":
 Bound tokens can change only their own person. Guest and child tokens cannot change settings.
 
 `skald command --person ana "history"` lists settings changes with their age.
+
+Manage household people with `skald members list --json`. It lists display names,
+optional ages, member or guest status, own Home rows and shelf counts. The limit
+is six active people, including guests; retired profiles do not count. Nothing
+in this list contains connector secrets. Undo refuses to reactivate someone
+if it would put the household above six active profiles.
+
+`skald members add marko --guest --person ana --json` previews a named guest.
+Add `--age 12` for a child, `--label Marko` for a display name, or `--own-row`
+when they want a Home row. Guests have no own Home row by default. Repeat the
+same command with `--yes` or `--plan HASH` to apply the preview.
+`skald members update marko --member --person ana` promotes a guest;
+`--guest` changes them back. Neither change adds a row implicitly.
+`skald members rows kim on --person ana --json` previews Kim's own Home row;
+use `off` to hide it. Repeat with `--yes` or `--plan HASH` to apply, and use
+`skald members --undo --person ana` to restore the previous row setting.
+
+`skald members remove ben --person ana` previews their rows, shelves, likes,
+hides, Together label and connector links. Apply it with `--yes` or `--plan HASH`.
+A private config backup is saved first. Evidence, history, imports and shelves
+stay saved, including clients and AIOStreams settings. Retired people cannot
+authenticate or receive rows, and refresh skips their saved logins.
+Use the separate forget command to erase evidence. Connector links keep their
+original owner and stop syncing that person's inputs until removal is undone.
+Ask another adult to remove you. The last adult cannot be removed, and children and guests
+cannot change people. Use `skald members --undo --person ana` or
+`skald command --undo --person ana` to restore the last change. Undo keeps
+unrelated changes and refuses conflicting changes before restoring anything.
+
+Commander accepts these changes in English, German and Serbian, including
+`Add my best friend Marko as a guest`, `Entferne Ben` and `Ukloni Bena`.
+Confirm the exact `yes NN` preview code. `Undo that` reverses the last change.
+`Add a catalog for Marko and me with heist movies` creates a shelf on the
+requesting member's Home, with both people's hides, excluded genres, seen and
+negative filters. Guests' reactions never shape household taste or the Together
+label. Pronouns are used to understand speech and are never stored as profile fields.
+
+Data format stays unchanged: guests, ages, retired people and row ids and the optional
+second person on a shelf are optional fields older servers ignore. Keep the
+current server when using guest isolation and retirement. Retired identities
+remain in the saved members list so older servers can load their client records.
+Rolling back to df66a3f makes saved retired people active again, removes guest
+isolation and reactivates their scopes and tokens. It ignores retired row ids
+and shared-shelf partner filters. Ages alone are ignored, while existing
+`prefs.kids_age` still applies.
+That release also refuses configs with more than six saved member ids. After
+adding a replacement for a retired person, direct rollback is only possible
+while the saved member list still has at most six ids. Removing another person
+does not shorten that list; it keeps their evidence too.
 
 `skald command --person ana "rename Ana to Anja"` previews a display name change.
 On a shared watching link, a named adult can rename themselves without choosing Who's watching;
@@ -255,9 +308,12 @@ Plain `undo` reverts a title command; `undo` with a phrase does not target them.
 `skald shelf list [--person ana]` lists wishes. `skald shelf stop --person ana NAME` stops one; a slot number also works. `skald shelf replace --person ana --slot 1 --yes "another wish"` replaces it.
 `skald shelf count --person ana 6` or `skald shelf count --together 3` changes the number of slots. These commands use local DATA_DIR. GET `/api/v1/shelves` lists a bound member's own wishes plus Together; POST accepts `{ "plan": "HASH" }` from a local preview. Child and guest tokens cannot use this API.
 
+Lowering the shelf count keeps hidden wishes saved. Raise the count to show them again. Shelf filters use the same runtime bounds (1..600 minutes), year bounds (1..9999), two-letter language codes and TMDB genre names as personal preferences.
+
 `python -m skald rows names --json` lists every row ID, its label key, the label shown
-in the household language, its source (`fixed`, `template`, `ai`, or `custom`), and
-missing translation keys. `--lang de-DE` previews another UI language. It reads
+in the row language, its source (`fixed`, `template`, `ai`, or `custom`), and
+missing translation keys. JSON includes `lang` (titles), `row_lang` (labels) and
+`language` (the preview language). `--lang de-DE` only previews another label language. It reads
 only local config and cached row names, including hidden rows. Use `--snapshot DIR`
 for a copied directory. It never builds rows or contacts a service.
 
@@ -268,8 +324,19 @@ Review the preview, then repeat it with `--plan HASH` to confirm. Commander also
 previews row renames and waits for confirmation. Custom names use the existing
 `household.row_labels` setting and take priority over translated or AI names.
 
-Fixed row names and card labels use `region.lang`, with English fallback per key.
-Serbian scripts can be set with `sr-Latn-RS` or `sr-Cyrl-RS`.
+Row names, card labels and reasons use optional `region.row_lang`, with English
+fallback per key. Without it they follow `region.lang`, as before.
+`python -m skald setup --lang de-DE --row-lang en-US` gives English labels with
+German titles and plots. TMDB requests, artwork and install URLs keep using
+`region.lang`. `python -m skald setup --row-lang same` removes the override.
+Label languages need a bundled locale: English, German or Serbian. Serbian scripts
+can be set with `sr-Latn-RS` or `sr-Cyrl-RS`. Restart Skald after changing the setting,
+just as with `--lang`; `setup --status --json` shows both languages. Cached card
+labels rebuild after restart. Current weekly picks use factual reasons in the new
+language without another weekly model call.
+Commander also understands “show my row names in English”, “Reihennamen auf Deutsch”
+and “Prikaži nazive redova na engleskom”. Review and confirm the preview, then
+restart Skald. Undo restores the previous setting and also needs a restart.
 Keyword lanes get one naming call per lanes pass, batching only lanes without a
 name in that language. Successful names stay in `learn.json` under each lane's
 `titles` map. No AI, a failed response, or a spent feed cap keeps the old name.
@@ -280,3 +347,34 @@ adds no daily calls. Names survive retirement and restarts. Existing cached card
 reasons refresh on their next feed build. New episode and season details appear
 in the card description. The optional cache keys keep DATA at FORMAT 5, so the
 previous build can still load it without a migration.
+
+Row Lab tries at most two new ideas and shows at most three lab rows after the
+personal rows. It uses cached, unseen titles already known to Skald, excluding
+Home picks. A household gets at most one proposal call on each local calendar
+date, including failures. Failed calls leave Home working. Names and catalog IDs
+stay with an idea when its picks are refilled; retired catalogs return no picks.
+Each daily call can also refill up to three kept ideas. Commander receives current
+and recent lab names within its row context limit; use the ID from `rows lab` for
+an older idea.
+
+Row metrics must be enabled for Row Lab. The optional `lab` configuration defaults
+to `enabled: true`, `trial_showing_days: 10` and `kept_showing_days: 30`. Turning
+metrics off pauses proposals, learning and lab rows. The optional private
+`lab.json` file is backed up; older servers ignore it. DATA FORMAT stays 5.
+
+A trial is kept after its first attributed play. Trials expire after ten distinct
+showing dates without a play. Kept ideas expire after thirty showing dates since
+the last credited play or manual keep. Fetching twice on one date counts once;
+a date with no fetch does not count. A delayed credit can revive an automatic
+retirement. Kept ideas appear only in their recorded play moments, or in any
+moment while they have none. Calendar month restrictions also apply.
+
+Moments use `region.tz`, with exclusive end times and late checked first: late
+is 22:00 to 04:00, weekend is Friday 17:00 to Sunday 22:00, evening is Monday to
+Thursday 17:00 to 22:00, and day is everything else.
+
+Commander understands “what is Skald trying out?”, “which rows work on weekends?”,
+“keep the Quiet Puzzles row”, “drop the Quiet Puzzles row” and “stop/start trying
+new rows”, including German and Serbian. Row names resolve through the supplied
+ID and name context. Ambiguous names ask for an ID. Controls use the usual preview,
+exact `yes NN` confirmation and undo. These mechanics do not establish taste lift.

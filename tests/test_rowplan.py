@@ -584,7 +584,7 @@ class RowPlan(unittest.TestCase):
 
     def test_cap_bounds_unsafe_writes_and_refresh_undo_conflict(self):
         s = self.s
-        for op, count in (('home_more', 8), ('home_fewer', 0)):
+        for op, count in (('home_more', 4), ('home_fewer', 0)):
             cfg = commands.config(s)
             cfg['household']['home'] = {'family_caps': {'mood': count}}
             setup.publish(self.data, cfg, replace=True)

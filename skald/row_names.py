@@ -130,7 +130,9 @@ def read(path):
 
 def view(data, config=None, lang=None):
     config = config or members.load_config(str(data), readonly=True)[0]
-    lang = lang or config['region']['lang']
+    row_lang = config['region'].get('row_lang', config['region']['lang'])
+    lang = lang or row_lang
+    cache_lang = config['region']['lang'] if 'row_lang' in config['region'] else lang
     cached = {**read(Path(data) / 'feeds.json'), **read(Path(data) / 'shown.json')}
     lanes = read(Path(data) / 'learn.json').get('lanes', {})
     keys = [*FIXED, 'top10', 'because2', 'because3', *[f'mood{i}' for i in range(1, 5)],
@@ -140,8 +142,16 @@ def view(data, config=None, lang=None):
     for wish in wishes if isinstance(wishes, list) else []:
         key = f"shelf_{wish['scope']}_{wish['slot']}"
         keys.append(key)
-        cached.setdefault(members.rid(key, config) + '|' + lang, {'names': {'title': wish['name'] or wish['text'][:100]}})
-    rows = [describe(members.rid(key, config), mapping(cached.get(members.rid(key, config) + '|' + lang) or
+        cached.setdefault(members.rid(key, config) + '|' + cache_lang, {'names': {'title': wish['name'] or wish['text'][:100]}})
+    rows = [describe(members.rid(key, config), mapping(cached.get(members.rid(key, config) + '|' + cache_lang) or
                      cached.get(members.rid(key, config) + '|' + config['region']['lang'])).get('names'),
                      config, lang, lanes) for key in dict.fromkeys(keys)]
-    return {'language': lang, 'rows': rows}
+    from . import lab
+    ideas = lab.read(data)['ideas']
+    rows.extend(dict(id=members.rid('lab_'+i['id'], config), key=None, label=i['name'], source='ai', missing=[])
+                for i in ideas)
+    out = {'language': lang, 'lang': config['region']['lang'], 'row_lang': row_lang, 'rows': rows}
+    if ideas:
+        reason = lab.paused(config)
+        out['lab_paused_reason'] = i18n.t('lab.paused' if reason == 'metrics' else 'lab.disabled', lang) if reason else None
+    return out

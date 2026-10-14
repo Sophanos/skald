@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 _trace = ContextVar('rowplan', default=None)
 REFRESH_REQUEST = 'row_refresh.json'
+FAMILY_MAX = {'mood': 4, 'lane': 5}
 REASONS = {
     'disabled': 'Disabled by the household row selection or default set.',
     'unsafe': 'Unavailable for this viewer under the row scope or safety policy.',
@@ -21,6 +22,10 @@ REASONS = {
 
 def family_caps(cfg):
     return {'mood': 3, 'lane': 3, **cfg['household'].get('home', {}).get('family_caps', {})}
+
+
+def capped(cfg):
+    return 'rows' not in cfg['household'] or cfg['household'].get('rows_from_default', False)
 
 
 def validate_home(home):
@@ -96,6 +101,7 @@ def polished(cid, before, after, cap):
 
 
 def registered(s):
+    s.lab_catalogs()
     return list(dict.fromkeys([*s.DEDUPE_ORDER, *s.LANE_BENCH, *s.SHELF_ROWS,
                               s.rid('family'), *[s.rid(p) for p in s.ARCHIVED]]))
 
@@ -130,6 +136,9 @@ def row_id(s, name, lang=None):
 
 
 def label(s, cid, lang):
+    if cid.startswith(s.rid('lab_')):
+        from . import lab
+        return next((i['name'] for i in lab.read(s.DATA)['ideas'] if s.rid('lab_'+i['id']) == cid), cid)
     key = cid.removeprefix(s.rid(''))
     if cid in s.ROW_OWNER:
         fallback = s.t('row.member', person=s.LABELS[s.ROW_OWNER[cid]])
@@ -147,6 +156,8 @@ def label(s, cid, lang):
 
 
 def source_kind(s, cid):
+    if cid.startswith(s.rid('lab_')):
+        return 'lab'
     if cid in s.SHELF_ROWS:
         return 'shelf'
     if cid in s.ROW_OWNER or cid in {s.rid(p) for p in s.ARCHIVED}:
@@ -191,7 +202,7 @@ def candidate_sources(metas, missing=0):
 
 
 def plan(s, person='household', lang=None, *, cards=False, caps=None):
-    from . import shelves
+    from . import shelves, lab
     person = 'together' if person == 'both' else person
     lang = lang or s.LANG
     if not s.LANG_RE.fullmatch(lang):
@@ -269,8 +280,16 @@ def plan(s, person='household', lang=None, *, cards=False, caps=None):
                 if cid in wishes and not unsafe and not shelves.window(wishes[cid], s.local_now(), rules.get(wishes[cid]['id'])) and code != 'disabled':
                     code = 'not_today'
                 kind = source_kind(s, cid)
+                reason = REASONS[code] if code else 'Selected for this home.'
+                if kind == 'lab':
+                    paused = lab.paused(s.CONFIG)
+                    if paused:
+                        reason = s.t('lab.paused' if paused == 'metrics' else 'lab.disabled')
+                    elif code == 'not_today':
+                        idea = next(i for i in lab.read(s.DATA)['ideas'] if s.rid('lab_'+i['id']) == cid)
+                        reason = s.t('lab.retired' if idea['state'] == 'retired' else 'lab.reason.not_today')
                 row = {'id': cid, 'label': labels.get(cid, label(s, cid, lang)), 'position': position,
-                       'rejection': code, 'reason': REASONS[code] if code else 'Selected for this home.', 'source': kind,
+                       'rejection': code, 'reason': reason, 'source': kind,
                        'own_cards': sum(not x.get('_borrowed') for x in xs), 'borrowed_cards': sum(bool(x.get('_borrowed')) for x in xs),
                        'superhero_removed': sum(rule == 'superhero_cap' for _, rule in drops.values()),
                        'franchise_removed': sum(rule == 'franchise_cap' for _, rule in drops.values()),
@@ -323,8 +342,8 @@ def prefer(cfg, theme, more):
     if theme not in ('mood', 'lane'):
         raise ValueError('theme must be mood or lane')
     count = family_caps(cfg)[theme] + (1 if more else -1)
-    if not 0 <= count <= 8:
-        raise ValueError('family cap must stay between 0 and 8')
+    if not 0 <= count <= FAMILY_MAX[theme]:
+        raise ValueError(f'{theme} rows: Home maximum is {FAMILY_MAX[theme]}; use a limit from 0')
     cfg['household'].setdefault('home', {}).setdefault('family_caps', {})[theme] = count
     return count
 
@@ -433,24 +452,19 @@ def preview(s, query, change, viewer, bound, *_):
             ids = s.row_groups().get(values[0]) or [row_id(s, values[0])]
             rows = [r for r in rows if r['id'] in ids]
         hidden = next((r for r in rows if r['rejection']), None)
-        lang = s.LANG[:2]
-        message = {'en': '{n} rows are selected for this home.', 'de': 'Für diese Startseite sind {n} Reihen ausgewählt.',
-                   'sr': 'Za ovu početnu stranu izabrano je {n} redova.'}.get(lang, '{n} rows are selected for this home.').format(n=sum(r['position'] is not None for r in rows))
+        # Preserve legacy Home replies when no label override is configured.
+        lang = s.CONFIG['region'].get('row_lang') or {'de': 'de', 'sr': 'sr-latn'}.get(s.LANG[:2], 'en')
+        message = s.t('home.selected', lang=lang, n=sum(r['position'] is not None for r in rows))
         if hidden:
-            reasons = {
-                'de': {'disabled': 'in der Haushaltsauswahl deaktiviert', 'unsafe': 'für diesen Zuschauer nicht verfügbar', 'not_today': 'heute nicht an der Reihe', 'too_few_own': 'zu wenige eigene passende Titel', 'overlap': 'die Titel stehen bereits in früheren Reihen', 'family_cap': 'die Grenze für diese Reihenfamilie ist erreicht', 'not_built': 'noch keine brauchbaren Titel vorhanden'},
-                'sr': {'disabled': 'isključen u izboru domaćinstva', 'unsafe': 'nije dostupan ovom gledaocu', 'not_today': 'danas nije na redu', 'too_few_own': 'premalo sopstvenih odgovarajućih naslova', 'overlap': 'naslovi su već u ranijim redovima', 'family_cap': 'dostignuta je granica za ovu grupu redova', 'not_built': 'još nema upotrebljivih naslova'},
-            }
-            message += ' '+hidden['label']+': '+reasons.get(lang, REASONS)[hidden['rejection']].rstrip('.')+'.'
+            message += ' '+hidden['label']+': '+s.t('home.reason.'+hidden['rejection'], lang=lang).rstrip('.')+'.'
         elif len(rows) == 1:
             row = rows[0]
-            message += {'de': ' {label} hat {own} eigene und {borrowed} ergänzte Titel.',
-                        'sr': ' {label} ima {own} sopstvenih i {borrowed} dopunjenih naslova.'}.get(lang, ' {label} has {own} own and {borrowed} borrowed picks.').format(label=row['label'], own=row['own_cards'], borrowed=row['borrowed_cards'])
+            message += s.t('home.counts', lang=lang, label=row['label'], own=row['own_cards'], borrowed=row['borrowed_cards'])
         elif rows:
             message += ' '+', '.join(r['label'] for r in rows[:3])+'.'
         if values and any(r['id'] == s.rid('toprated') for r in rows):
             message += '\n'+'\n'.join(text({'rows': [r for r in rows if r['id'] == s.rid('toprated')]}))
-        return dict(read_only=True, people=[], name={'de': 'Startseitenplan', 'sr': 'Plan početne strane'}.get(lang, 'Home plan'), description=message, home=result)
+        return dict(read_only=True, people=[], name=s.t('home.plan', lang=lang), description=message, home=result)
     targets = c.people(s, change['person'], viewer, bound)
     if len(targets) != 1:
         raise ValueError('Choose one adult for household rows')
@@ -494,10 +508,26 @@ def source_names(s, cid, lang):
             **({'candidate_sources': rec['candidate_sources']} if 'candidate_sources' in rec else {})}
 
 
-def command_input(s, text, results=None):
+def command_input(s, text, results=None, viewer=None, prior=None):
+    from . import lab
     inp = {'query': text, 'rows': [{'id': cid, 'label': label(s, cid, s.LANG)} for cid in registered(s)
-                                 if s.row_enabled(cid) and s.row_scope_ok(cid) and cid not in s.SHELF_ROWS]}
+                                 if cid not in s.LAB_ROWS and s.row_enabled(cid) and s.row_scope_ok(cid) and cid not in s.SHELF_ROWS]}
     inp['rows'].extend({'id': cid, 'label': name} for cid, _, name in s.shelf_rows())
+    doc = lab.read(s.DATA)
+    names = {s.rid('lab_'+i['id']): i['name'] for i in doc['ideas']}
+    current = [s.rid('lab_'+i['id']) for i in lab.select(s.DATA, s.CONFIG, s.time.time(), doc=doc)]
+    recent = list(dict.fromkeys(current + list(reversed(s.LAB_ROWS))))
+    # Older ideas remain in rows lab; keep the command model's context within its existing limit.
+    inp['rows'].extend({'id': cid, 'label': names[cid]} for cid in recent if s.row_scope_ok(cid))
+    inp['rows'] = inp['rows'][:100]
     if results:
         inp.update(last=results['query'], shown=[x['title'] for x in s.shown_titles(results)])
+    elif prior and prior.get('member') and prior.get('text'):
+        inp['last'] = prior['text']
+    else:
+        from .commands import journal
+        active = [e for e in journal(s).get(viewer, []) if not e.get('undone')]
+        if active and active[-1].get('member') and active[-1].get('text'):
+            inp['last'] = active[-1]['text']
+    inp['people'] = [{'id': p, 'label': s.LABELS[p]} for p in s.PEOPLE]
     return inp

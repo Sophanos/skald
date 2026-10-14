@@ -86,6 +86,32 @@ def parser():
     command.add_argument("--plan", help="apply only this preview hash")
     command.add_argument("--undo", action="store_true", help="revert the last command")
     command.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="print JSON")
+    people = commands.add_parser('members', help='list, preview, add, update or remove household people')
+    people.add_argument('--undo', action='store_true', help='undo the last command for --person')
+    people.add_argument('--person', help='adult household member making the change')
+    people.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
+    actions = people.add_subparsers(dest='members_action')
+    for op in ('list', 'add', 'update', 'remove', 'rows'):
+        action = actions.add_parser(op, help=op+' household people')
+        action.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
+        if op == 'list':
+            continue
+        action.add_argument('name', nargs='?', help='stable person id or current display name')
+        if op == 'rows':
+            action.add_argument('row_state', choices=('on', 'off'), help='show or hide their own Home row')
+        action.add_argument('--person', default=argparse.SUPPRESS, help='adult household member making the change')
+        action.add_argument('--yes', action='store_true', help='apply the preview')
+        action.add_argument('--plan', help='apply only this preview hash')
+        action.add_argument('--undo', action='store_true', default=argparse.SUPPRESS)
+        if op not in ('remove', 'rows'):
+            role = action.add_mutually_exclusive_group()
+            role.add_argument('--guest', action='store_true', default=None, help='named guest, with no household taste learning')
+            role.add_argument('--member', dest='guest', action='store_false', help='full household member')
+            action.add_argument('--age', type=int, help='age in years, 3..120')
+            action.add_argument('--label', help='display name')
+            row = action.add_mutually_exclusive_group()
+            row.add_argument('--own-row', action='store_true', default=None, help='show their own Home row')
+            row.add_argument('--no-own-row', dest='own_row', action='store_false', help='hide their own Home row')
     connect = commands.add_parser("connect", help="link this laptop to the API")
     connect.add_argument("url")
     connect.add_argument("--token-stdin", action="store_true")
@@ -113,7 +139,7 @@ def parser():
     rows = cmd(commands, "rows")
     rows.add_argument("--row")
     rows.add_argument("--n", type=int, default=10)
-    rows.add_argument("--lang", default=members.CONFIG["region"]["lang"])
+    rows.add_argument("--lang")
     row_actions = rows.add_subparsers(dest="rows_action")
     names = row_actions.add_parser("names", help="list cached row names and translation keys")
     names.add_argument("--lang", default=argparse.SUPPRESS, help="inspect this UI language")
@@ -144,6 +170,19 @@ def parser():
     week.add_argument("--weeks", type=int, default=1, help="calendar weeks to read, 1..8")
     week.add_argument("--person", help="member name")
     week.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    from .i18n import t
+    lab_help = lambda key: t('lab.help.'+key, members.CONFIG['region']['lang'])
+    lab = row_actions.add_parser('lab', help=lab_help('title'))
+    lab.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
+    controls = lab.add_mutually_exclusive_group()
+    controls.add_argument('--keep', metavar='ID', help=lab_help('keep'))
+    controls.add_argument('--retire', metavar='ID', help=lab_help('retire'))
+    controls.add_argument('--off', action='store_true', help=lab_help('off'))
+    controls.add_argument('--on', action='store_true', help=lab_help('on'))
+    lab.add_argument('--yes', action='store_true', help=lab_help('yes'))
+    lab.add_argument('--plan', help=lab_help('plan'))
+    moments = row_actions.add_parser('moments', help=lab_help('moments'))
+    moments.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
     react = cmd(commands, "react")
     react.add_argument("action", nargs="?", choices=("love", "loves", "like", "likes", "meh", "seen", "not_for_us", "not_tonight", "interest"))
     react.add_argument("title", nargs="*")
@@ -412,6 +451,10 @@ def execute(args, engine, state, snapshot, out=None):
     if args.command == "explain":
         return engine.trace(title_key(engine, args.title), args.person)
     if args.command == "rows":
+        if args.rows_action == 'lab':
+            return engine.lab()
+        if args.rows_action == 'moments':
+            return engine.moments()
         if args.rows_action == "week":
             return engine.week(args.weeks, args.person)
         if args.rows_action == 'reach':
@@ -849,6 +892,8 @@ def main(argv=None, out=None):
             if args.json:
                 print(json.dumps(data, ensure_ascii=False), file=out)
             else:
+                if data.get('lab_paused_reason'):
+                    print(data['lab_paused_reason'], file=out)
                 for row in data['rows']:
                     print(row['id'] + ': ' + str(row['label']) + ' (' + row['source'] + ')' +
                           ('; missing: ' + ', '.join(row['missing']) if row['missing'] else ''), file=out)
@@ -970,6 +1015,30 @@ def main(argv=None, out=None):
                     data = s.shelf_change(scope, args.shelf_op, apply=getattr(args, "yes", False) or args.shelf_op in ("stop", "count"), **kwargs)
             print(json.dumps(data, ensure_ascii=False, indent=None if args.json else 2), file=out)
             return 0
+        if args.command == 'rows' and args.rows_action in ('lab', 'moments'):
+            from . import commands, lab, metrics, i18n
+            control = next((op for op in ('keep', 'retire', 'on', 'off') if getattr(args, op, None)), None)
+            if args.live or args.snapshot and control:
+                raise ValueError(i18n.t('lab.local_data', members.CONFIG['region']['lang']))
+            data_dir = Path(args.snapshot or os.environ.get('DATA_DIR', '/data'))
+            with Engine(data_dir, offline=True) as engine:
+                s = engine._server
+                if control:
+                    s.aio_rows_changed = lambda: None
+                    answer = dict(op='lab_'+control, kind=None, values=[getattr(args, control)] if control in ('keep', 'retire') else [], person=None)
+                    data = commands.preview(s, '', next(iter(s.adult_people()), None), answer=answer)
+                    data['source'] = 'cli'
+                    if args.plan and args.plan != data.get('plan'):
+                        raise ValueError(s.t('lab.changed'))
+                    if (args.yes or args.plan) and not data.get('read_only'):
+                        with patch.object(s, 'DATA', str(data_dir)):
+                            data = commands.apply(s, data)
+                    output = s.t('lab.preview', name=data['name'], plan=data['plan']) if 'plan' in data else data['name']
+                else:
+                    data = engine.lab() if args.rows_action == 'lab' else engine.moments()
+                    output = '\n'.join(lab.text(data, s.LANG) if args.rows_action == 'lab' else metrics.moments_text(data, s.LANG))
+            print(json.dumps(data, ensure_ascii=False) if args.json else output, file=out)
+            return 0
         if args.command == 'rows' and args.rows_action in ('plan', 'why', 'reach'):
             from . import rowplan
             if args.live:
@@ -992,7 +1061,7 @@ def main(argv=None, out=None):
                     answer = dict(op='row_refresh', kind=None, values=[args.row_name], person=None)
                 else:
                     answer = dict(op='home_more' if args.more else 'home_fewer', kind=None, values=[args.theme], person=None)
-                data = commands.preview(s, '', next((p for p in s.PEOPLE if s.kids_age(p) is None), None), answer=answer)
+                data = commands.preview(s, '', next(iter(s.adult_people()), None), answer=answer)
                 data['source'] = 'cli'
                 if args.plan and args.plan != data['plan']:
                     raise ValueError('Plan changed; preview again')
@@ -1013,14 +1082,27 @@ def main(argv=None, out=None):
                 data = s.ai_status()
                 print(json.dumps(data, ensure_ascii=False) if args.json else ai.text(data, s.LANG, detailed=True), file=out)
             return 0
-        if args.command == "command":
+        if args.command in ('command', 'members'):
             from . import commands, setup
             with setup.server(Path(os.environ.get("DATA_DIR", "/data")),
                               report=lambda line: print(line, file=sys.stderr if args.json else out)) as s:
-                if args.undo:
-                    data = commands.undo(s, commands.people(s, viewer=args.person), source='cli')
+                if args.command == 'members' and args.members_action == 'list':
+                    data = commands.member_list(s)
+                elif args.undo:
+                    data = commands.undo(s, commands.undo_people(s, args.person), actor=args.person, source='cli')
                 else:
-                    data = commands.preview(s, args.text, args.person)
+                    if args.command == 'members':
+                        if args.members_action not in ('add', 'update', 'remove', 'rows') or not args.name:
+                            raise ValueError('Choose members list, add, update, remove, rows or --undo')
+                        answer = dict(op={'add': 'member_create', 'update': 'member_update', 'remove': 'member_remove', 'rows': 'member_rows'}[args.members_action],
+                                      person=args.name, **{k: getattr(args, k, None) for k in ('guest', 'age', 'label', 'own_row')})
+                        if args.members_action == 'add':
+                            answer['label'] = args.label or args.name.title()
+                        if args.members_action == 'rows':
+                            answer['own_row'] = args.row_state == 'on'
+                        data = commands.preview(s, '', args.person, answer=answer)
+                    else:
+                        data = commands.preview(s, args.text, args.person)
                     if data is None:
                         raise ValueError("Skald cannot set this yet")
                     if not data.get('read_only'):
@@ -1029,7 +1111,13 @@ def main(argv=None, out=None):
                         raise ValueError("Plan changed; preview again")
                     if args.yes or args.plan:
                         data = commands.apply(s, data)
-            print(json.dumps(data, ensure_ascii=False) if args.json else data["name"] + ("? Plan: " + data["plan"] if "plan" in data else ""), file=out)
+            if args.command == 'members' and args.members_action == 'list' and not args.json:
+                for person in data['people']:
+                    print(person['id']+': '+person['name']+'; '+('guest' if person['guest'] else 'member')+
+                          '; age '+str(person['age'] or 'unknown')+'; own row '+('yes' if person['own_row'] else 'no')+
+                          '; '+str(person['shelves'])+' shelves', file=out)
+            else:
+                print(json.dumps(data, ensure_ascii=False) if args.json else data["name"] + ("? Plan: " + data["plan"] if "plan" in data else ""), file=out)
             if not args.json and data.get('description'):
                 print(data['description'], file=out)
             return 0

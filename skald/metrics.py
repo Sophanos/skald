@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 DAY = 86400
 MAX_PLAY_CREDITS = 10000
 DEFAULTS = dict(enabled=False, attribution_days=14, shown_retention_days=30, shown_max_items=10000)
+MOMENTS = ('day', 'evening', 'late', 'weekend')
 SOURCES = {'history', 'jellyfin', 'plex', 'aiostreams_db', 'trakt', 'trakt_api', 'stremio', 'mdblist',
            'import:netflix', 'import:trakt', 'import:letterboxd'}
 _lock = threading.RLock()
@@ -22,8 +23,28 @@ def settings(config):
     return {**DEFAULTS, **config.get('metrics', {})}
 
 
+def _people(config):
+    from .members import active_people
+    return [p for p in active_people(config) if p not in config['household'].get('guests', [])]
+
+
 def empty():
     return {'v': 1, 'weeks': {}, 'sources': {}}
+
+
+def moment(config, at):
+    local = dt.datetime.fromtimestamp(at, ZoneInfo(config['region']['tz']))
+    hour, day = local.hour, local.weekday()
+    bucket = ('late' if hour >= 22 or hour < 4 else
+              'weekend' if day == 4 and hour >= 17 or day in (5, 6) else
+              'evening' if day < 4 and hour >= 17 else 'day')
+    return bucket, local.month
+
+
+def context(config, at):
+    bucket, month = moment(config, at)
+    return dict(at=at, moment=bucket, month=month,
+                date=dt.datetime.fromtimestamp(at, ZoneInfo(config['region']['tz'])).date().isoformat())
 
 
 def _week(at, config):
@@ -88,6 +109,19 @@ def _fold(weeks, record):
             plays.append(record['play'])
     for source in record['sources']:
         cell['sources'][source] = cell['sources'].get(source, 0) + 1
+    if record.get('contexts') or record.get('play_context'):
+        extra = cell.setdefault('extra', {})
+        contexts = record.get('contexts', {})
+        extra['contextual_shown'] = extra.get('contextual_shown', 0) + bool(contexts)
+        extra.setdefault('showings', {}).update(contexts)
+        extra['days'] = sorted(set(extra.get('days', [])) | {c['date'] for c in contexts.values()})
+        buckets = extra.setdefault('moments', {})
+        for bucket in {c['moment'] for c in contexts.values()}:
+            buckets.setdefault(bucket, {'shown': 0, 'played': 0})['shown'] += 1
+        if record.get('play_context') and record['sources']:
+            play = record['play_context']
+            extra.setdefault('play_contexts', {})[record['play']] = play
+            buckets.setdefault(play['moment'], {'shown': 0, 'played': 0})['played'] += 1
     return cell
 
 
@@ -121,6 +155,9 @@ def forget(data, config, before, person, *, apply=False):
                 record['times'] = [t for t in record['times'] if t >= cutoff]
                 record['sources'] = []
                 record.pop('play', None)
+                record.pop('play_context', None)
+                if 'contexts' in record:
+                    record['contexts'] = {k: c for k, c in record['contexts'].items() if c['at'] >= cutoff}
             if record['times']:
                 kept.append(record)
         state['shown'] = kept
@@ -132,6 +169,9 @@ def forget(data, config, before, person, *, apply=False):
             cell = _cell(state['folded'], week, row, who)
             cell.update(played=0, sources={}, complete=False)
             cell.setdefault('extra', {})['plays'] = []
+            cell['extra']['play_contexts'] = {}
+            for bucket in cell['extra'].get('moments', {}).values():
+                bucket['played'] = 0
         if touched and apply:
             state['sources'] = {}
             _save(data, state)
@@ -139,7 +179,7 @@ def forget(data, config, before, person, *, apply=False):
 
 
 def _after_forget(config, forgotten, person, at):
-    people = config['household']['members'] if person == 'together' else [person]
+    people = _people(config) if person == 'together' else [person]
     return all(p not in forgotten or at >= dt.datetime.fromisoformat(forgotten[p]).replace(
         tzinfo=dt.timezone.utc).timestamp() for p in people)
 
@@ -179,7 +219,7 @@ def record_shown(data, config, row, person, metas, now=None):
         return
     from .history import locked, cutoffs
     with locked(data), _lock:
-        if person not in (*config['household']['members'], 'together'):
+        if person not in (*_people(config), 'together'):
             return
         if not _after_forget(config, cutoffs(data), person, now):
             return
@@ -204,6 +244,7 @@ def record_shown(data, config, row, person, metas, now=None):
                 index[identity] = record
             if now not in record['times']:
                 record['times'].append(now)
+            record.setdefault('contexts', {})[str(now)] = context(config, now)
         _prune(state, config, now)
         _save(data, state)
 
@@ -221,10 +262,12 @@ def update(data, config, plays, now=None, *, sources=(), cleanup=False):
         seen = set()
         index = {}
         for record in state['shown']:
+            if record['person'] not in (*_people(config), 'together'):
+                continue
             index.setdefault((record['key'], record['kind']), []).append(record)
         for play in plays:
             source, at = play['source'], play['at']
-            if source not in SOURCES:
+            if source not in SOURCES or play['person'] not in (*_people(config), 'together'):
                 continue
             dated = type(at) in (int, float) and math.isfinite(at) and 0 < at <= now
             if not dated and at is not None:
@@ -247,16 +290,20 @@ def update(data, config, plays, now=None, *, sources=(), cleanup=False):
                 if any(0 <= at - shown <= settings(config)['attribution_days']*DAY for shown in record['times']):
                     if source not in record['sources']:
                         record['sources'].append(source)
-                    record.setdefault('play', credit)
+                    if 'play' not in record:
+                        record['play'] = credit
+                        record['play_context'] = context(config, at)
         state['sources'] = coverage
         _prune(state, config, now, daily=cleanup)
         _save(data, state)
 
 
-def report(data, config, now=None, *, weeks=4, days=None):
+def report(data, config, now=None, *, weeks=4, days=None, moment=None):
     now = time.time() if now is None else now
     if days is not None and (type(days) is not int or not 1 <= days <= 35):
         raise ValueError('days must be 1..35')
+    if moment is not None and moment not in MOMENTS:
+        raise ValueError('unknown moment')
     end = _week(now, config)
     start = (dt.date.fromisoformat(end) - dt.timedelta(weeks=weeks-1)).isoformat()
     if days is not None:
@@ -272,6 +319,14 @@ def report(data, config, now=None, *, weeks=4, days=None):
             continue
         for row, people in sorted(rows.items()):
             for person, counts in sorted(people.items()):
+                if person not in (*_people(config), 'together'):
+                    continue
+                if moment is not None:
+                    bucket = counts.get('extra', {}).get('moments', {}).get(moment)
+                    if bucket is None:
+                        continue
+                    counts = {**counts, **bucket, 'sources': {}, 'rate': bucket['played']/bucket['shown']
+                              if bucket['shown'] and counts['complete'] else None}
                 out['rows'].append(dict(week=week, row=row, person=person,
                     shown=counts['shown'], played=counts['played'], sources=counts['sources'],
                     complete=counts['complete'], rate=counts['rate']))
@@ -292,7 +347,7 @@ def row_learning(store, *, scope, now, attribution_days=None, families=None):
         store, scope=scope, now=now, attribution_days=attribution_days, families=families).items()}
 
 
-def row_learning_details(store, *, scope, now, attribution_days=None, families=None):
+def row_learning_details(store, *, scope, now, attribution_days=None, families=None, moment=None):
     """Pure cohort diagnostics behind row_learning; support is mature week count."""
     if not store or not store.get('enabled') or scope == 'guest' or scope.startswith('kid:'):
         return {}
@@ -319,9 +374,17 @@ def row_learning_details(store, *, scope, now, attribution_days=None, families=N
             pool = ('family', family) if family in ('mood', 'lane') else ('row', row)
             for person, cell in sorted(people.items()):
                 if (scope != 'household' and person != scope or not cell.get('complete', False)
+                        or 'people' in extra and person not in (*extra['people'], 'together')
                         or cell.get('extra', {}).get('restored')):
                     continue
                 credits = cell.get('extra', {}).get('plays', [])
+                if moment is not None:
+                    bucket = cell.get('extra', {}).get('moments', {}).get(moment)
+                    if bucket is None:
+                        continue
+                    cell = {**cell, **bucket}
+                    credits = [credit for credit, c in cell.get('extra', {}).get('play_contexts', {}).items()
+                               if c['moment'] == moment]
                 if not cell['shown'] or len(credits) != cell['played']:
                     continue
                 total = pools.setdefault(pool, {'S': 0.0, 'P': 0.0, 'weeks': set()})
@@ -369,7 +432,8 @@ def learning_report(data, config, now=None, *, scope='household'):
             out['neutral'] = 'restored counts have no attribution evidence' if (Path(data)/'metrics.json').exists() else 'metrics are missing'
             return out
         store = {**_totals(_state(data, config, now)), 'enabled': True,
-                 'extra': {'tz': config['region']['tz'], 'attribution_days': settings(config)['attribution_days']}}
+                 'extra': {'tz': config['region']['tz'], 'attribution_days': settings(config)['attribution_days'],
+                           'people': _people(config)}}
     from .members import rid
     families = {rid(name, config): family for family, names in (
         ('utility', ('episodes', 'catchup', 'upcoming', 'rewatch', 'airing', 'nextseason', 'interview')),
@@ -400,9 +464,11 @@ def collect(server, now):
     """Read existing local inputs only, preserving connector provenance before taste merges."""
     plays, sources = [], set()
     cfg = server.CONFIG
-    people = cfg['household']['members']
+    people = _people(cfg)
 
     def add(item, person, source):
+        if person not in (*people, 'together'):
+            return
         key = item.get('id', '')
         kind = 'movie' if item.get('type') == 'movie' else 'tv'
         if not key.startswith('tmdb:'):
@@ -434,6 +500,8 @@ def collect(server, now):
         sources.add(source)
         accounts = connector.get('accounts', {cfg['household']['trakt_member']: None})
         for person in accounts:
+            if person not in people:
+                continue
             name = ('trakt-' + person if 'accounts' in connector else 'trakt') if source == 'trakt_api' else source+'-'+person
             for item in server._drop_read(name):
                 if played(item):
@@ -446,7 +514,7 @@ def collect(server, now):
                 add(item, cfg['household']['trakt_member'], 'trakt')
     for event in server.active_imports():
         source = 'import:' + event['src']
-        if source not in SOURCES or event['action'] != 'seen' or not event['conf']:
+        if source not in SOURCES or event['action'] != 'seen' or not event['conf'] or event['who'] not in (*people, 'both', 'together'):
             continue
         sources.add(source)
         # Stored taste imports cannot distinguish a viewing date from a default import date.
@@ -473,3 +541,44 @@ def text(result):
         yield f"  {source}: {counts['dated']} / {counts['undated']}"
     if not result['sources']:
         yield '  none observed'
+
+
+def moments_report(data, config, now=None):
+    now = time.time() if now is None else now
+    from . import i18n
+    enabled = settings(config)['enabled']
+    out = dict(enabled=enabled, rows=[], undated_imports=0,
+               paused_reason=None if enabled else i18n.t('lab.paused', config['region']['lang']))
+    if not enabled:
+        return out
+    with _lock:
+        saved = _totals(_state(data, config, now))
+    out['undated_imports'] = sum(c['undated'] for source, c in saved['sources'].items() if source.startswith('import:'))
+    rows, credits = {}, {}
+    for cohorts in saved['weeks'].values():
+        for row, people in cohorts.items():
+            entry = rows.setdefault(row, dict(row=row, moments={m: dict(showings=0, plays=0) for m in MOMENTS},
+                                             unknown=dict(showings=0, plays=0)))
+            for cell in people.values():
+                extra = cell.get('extra', {})
+                entry['unknown']['showings'] += cell['shown'] - extra.get('contextual_shown', 0)
+                entry['unknown']['plays'] += cell['played'] - len(extra.get('play_contexts', {}))
+                for bucket, counts in extra.get('moments', {}).items():
+                    entry['moments'][bucket]['showings'] += counts['shown']
+                for credit, context in extra.get('play_contexts', {}).items():
+                    if credit not in credits.setdefault(row, set()):
+                        entry['moments'][context['moment']]['plays'] += 1
+                        credits[row].add(credit)
+    out['rows'] = [rows[row] for row in sorted(rows)]
+    return out
+
+
+def moments_text(result, lang='en'):
+    from . import i18n
+    yield i18n.t('lab.moments', lang)
+    if result['paused_reason']:
+        yield result['paused_reason']
+    for row in result['rows']:
+        for bucket, counts in row['moments'].items():
+            yield i18n.t('lab.moment_counts', lang, row=row['row'], moment=i18n.t('moment.'+bucket, lang), **counts)
+    yield i18n.t('lab.undated', lang, count=result['undated_imports'])

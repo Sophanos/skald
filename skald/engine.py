@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_FILES = (".skald-format", "skald.json", "legacy.json", "profile.json", "emb.json", "facets.json", "learn.json", "taste.json", "trakt.json",
-              "feeds.json", "shown.json", "shown_scopes.json", "history.json", "history-summary.json", "history-forgotten.json", "feedback.jsonl", "imports.jsonl", "online.json", "metrics.json", "memory.json", "interview.json", "taste_ring.json", "connectors.json", "shelves.json", "undo.jsonl", "archetypes.json", "title_fixes.json")
+              "feeds.json", "shown.json", "shown_scopes.json", "history.json", "history-summary.json", "history-forgotten.json", "feedback.jsonl", "imports.jsonl", "online.json", "metrics.json", "memory.json", "interview.json", "taste_ring.json", "connectors.json", "shelves.json", "undo.jsonl", "archetypes.json", "title_fixes.json", "lab.json")
 
 
 def data_files(config):
@@ -330,7 +330,7 @@ class Engine:
         owners = {**s.ROW_OWNER, **{s.rid(f"shelf_{w['scope']}_{w['slot']}"): w['scope'] for w in shelves.read(s)['wishes']}}
         rows = {}
         for (cid, lang), rec in sorted(s._feeds.items()):
-            if lang != s.LANG:
+            if lang != s.LANG or not s.row_enabled(cid):
                 continue
             who = owners.get(cid, person)
             for typ, metas in (rec.get("metas") or {}).items():
@@ -533,6 +533,14 @@ class Engine:
         cards = feed.get('metas', {}).get('tv') or []
         report['unique_foryou_titles'] = len({(x['id'], x['type']) for x in cards})
         return report
+
+    def lab(self):
+        from .lab import view
+        return view(self._work, self._server.CONFIG)
+
+    def moments(self):
+        from .metrics import moments_report
+        return moments_report(self._work, self._server.CONFIG)
 
     def week(self, weeks=1, person=None):
         s = self._server

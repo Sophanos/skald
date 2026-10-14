@@ -10,6 +10,7 @@ services:
     security_opt: [no-new-privileges:true]
     volumes:
       - ./data:/data
+      - aiostreams-data:/aio-data:ro
     env_file: .env
     environment:
       SKALD_INTERNAL_BASE: http://skald:8080

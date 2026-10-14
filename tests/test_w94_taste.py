@@ -253,7 +253,7 @@ class NewToYouRow(Base):
         s = self.s
         cid = s.rid("newtoyou")
         self.assertIn("newtoyou", members.ROW_KEYS)
-        self.assertEqual(members.ROW_KEYS[-1], "newtoyou")
+        self.assertEqual(members.ROW_KEYS[-2:], ("newtoyou", "lab"))
         self.assertFalse(s.row_enabled(cid))
         with patch.dict(s.CONFIG['household'], row_labels={}):
             before = self.cids()
@@ -471,7 +471,7 @@ class ReviewFixes(Base):
         self.assertEqual(items["ben"]["at"], int(NOW))
 
     def test_parse_command_version_bumped(self):
-        self.assertEqual(self.s.DECISIONS["parse_command"]["ver"], 13)
+        self.assertEqual(self.s.DECISIONS["parse_command"]["ver"], 15)
 
 
 if __name__ == "__main__":

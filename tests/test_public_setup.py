@@ -73,6 +73,7 @@ class PublicSetupTests(unittest.TestCase):
         skald, aio = source.split('  skald:', 1)[1].split('  aiostreams:', 1)
         aio = aio.split('\nvolumes:', 1)[0]
         self.assertNotIn('ports:', skald)
+        self.assertIn('aiostreams-data:/aio-data:ro', skald)
         self.assertIn('127.0.0.1:3000:3000', aio)
         self.assertIn('aiostreams-data:/app/data', aio)
         self.assertIn('env_file: .env.aiostreams', aio)

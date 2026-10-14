@@ -252,7 +252,7 @@ def synthetic_model(server):
     return m
 
 
-SETUP = {"explain_pick": synthetic_model, "mood_pick": reset, "theme_source": reset, "theme_season": reset, "rank_titles": synthetic_model}
+SETUP = {"lab_propose": reset, "explain_pick": synthetic_model, "mood_pick": reset, "theme_source": reset, "theme_season": reset, "rank_titles": synthetic_model}
 
 
 def write_legacy(data):

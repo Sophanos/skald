@@ -15,6 +15,10 @@ PEOPLE = []
 CONFIG_ERROR = None
 
 
+def active_people(config):
+    return [p for p in config['household']['members'] if p not in config['household'].get('retired', [])]
+
+
 def configure(data=None, *, readonly=False):
     global CONFIG, CONFIG_SOURCE, CONFIG_ERROR
     if isinstance(data, str) and not data.strip():
@@ -27,7 +31,7 @@ def configure(data=None, *, readonly=False):
         CONFIG, CONFIG_SOURCE = load_config(data, env, readonly=readonly or data is not None)
     except (ConfigError, FormatError) as e:
         CONFIG, CONFIG_SOURCE, CONFIG_ERROR = copy.deepcopy(LEGACY), "invalid", e
-    PEOPLE[:] = CONFIG["household"]["members"]
+    PEOPLE[:] = active_people(CONFIG)
     return CONFIG
 
 

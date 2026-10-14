@@ -50,8 +50,9 @@ class CLIDecideTests(unittest.TestCase):
                 patch("skald.__main__.live.pull", side_effect=AssertionError("eval pulled snapshot")):
             start = time.perf_counter()
             data = self.cli("decide", "--eval")
-            self.assertLess(time.perf_counter() - start, 5)
-            self.assertEqual(len(data), 11)
+            # Full replay includes candidate lists and allocation tracing.
+            self.assertLess(time.perf_counter() - start, 30)
+            self.assertEqual(len(data), 12)
             self.assertTrue(all(m["pass"] for m in data.values()))
             out = io.StringIO()
             self.assertEqual(main(["decide", "rank_titles", "--eval"], out=out), 0)

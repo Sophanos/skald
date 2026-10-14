@@ -154,7 +154,7 @@ def evaluate(cases, models=None, *, transport=None, key='', base='https://openro
                 start = clock() if models is not None else 0
                 answer, error, cost = None, None, 0.0
                 try:
-                    inp = {'query': case['text'], **{k: case[k] for k in ('last', 'shown') if k in case}}
+                    inp = {'query': case['text'], **{k: case[k] for k in ('last', 'shown', 'rows') if k in case}}
                     if models is None:
                         result = spec['rule'](inp, {})
                         if result is None and case.get('recorded'):

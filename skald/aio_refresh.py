@@ -31,6 +31,9 @@ def refresh(data, *, transport=None, server=None):
             return None
         base = setup.remote.validate_base(url)
         url = base + '/api/v1/user'
+        with nullcontext(server) if server is not None else setup.server(data) as s:
+            s.refresh_preferences()
+            logins = {p: login for p, login in logins.items() if p == 'household' or p in s.PEOPLE}
         for person, login in logins.items():
             reply = setup.aiostreams_request(url, login=login, transport=transport)['data']
             config = reply['userData']
