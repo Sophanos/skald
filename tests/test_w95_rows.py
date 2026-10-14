@@ -51,7 +51,7 @@ class W95Rows(unittest.TestCase):
                   'tmdb:5': 3, 'tmdb:6': 4, 'tmdb:7': 9, 'tmdb:8': None}
         cards = self.candidates(recs, trends, scores, {'vec': None})
         self.assertEqual([x['id'] for x in cards],
-                         ['tmdb:7', 'tmdb:4', 'tmdb:3', 'tmdb:6', 'tmdb:2', 'tmdb:1'])
+                         ['tmdb:4', 'tmdb:7', 'tmdb:3', 'tmdb:6', 'tmdb:2', 'tmdb:1'])
 
     def test_trending_without_scored_recommendations_is_not_offered(self):
         self.assertEqual([x['id'] for x in self.candidates([title(1)], [title(2)], {}, {'vec': None})], ['tmdb:1'])
@@ -140,10 +140,11 @@ class W95Rows(unittest.TestCase):
                 lookups.append(i)
                 return {'results': release_dates(i) if release_dates else [
                     {'iso_3166_1': country, 'release_dates': [{'type': 4, 'release_date': '2026-10-01'}]}]}
-            if path == 'genre/movie/list':
+            if path.startswith('genre/'):
                 return {'genres': []}
             page = params.get('page', 1)
-            pages.append(page)
+            if path != 'tv/top_rated':
+                pages.append(page)
             return {'results': [title(i) for i in range((page-1)*per_page+1, page*per_page+1)]}
         with patch.object(s, 'tmdb', side_effect=tmdb), patch.object(s, 'local_now', return_value=today):
             feed = getattr(s, key + '_feed')('en-US')
@@ -158,7 +159,7 @@ class W95Rows(unittest.TestCase):
                     served = s.served_row(s.rid(key), 'movie', 'en-US', {'seen': {'tmdb:1', 'tmdb:2'}},
                                           {'tmdb:4', 'tmdb:5'}, ({'tmdb:1', 'tmdb:2', 'tmdb:3'}, set(), {'tmdb:6'}))
                 self.assertEqual([x['id'] for x in served], [f'tmdb:{i}' for i in range(7, 27)])
-                self.assertEqual(pages, [1, 2, 3])
+                self.assertEqual(sorted(pages), list(range(1, 11)) if key == 'toprated' else [1, 2, 3])
 
     def test_movie_rows_drop_profile_history_and_refill_to_twenty(self):
         s = self.s
@@ -209,13 +210,13 @@ class W95Rows(unittest.TestCase):
         for why in ('A quiet mystery', 'Because you loved Synthetic Seed', 'For your quiet evenings'):
             self.assertEqual(s.clean_note(why), why + '.')
 
-    def test_serving_skips_reason_that_becomes_dangling(self):
+    def test_serving_does_not_interpret_reason_words(self):
         s = self.s
         cards = [s.row_meta(title(i), 'movie', 'movie', {}, {}, lang='en-US') for i in (1, 2, 3)]
         cards[2]['description'] = 'For your loved Synthetic Seed · A quiet mystery · Synthetic overview.'
         cards[2]['_row']['overview'] = 'Synthetic overview.'
         with patch.object(s, 'frec', return_value={}):
-            self.assertEqual(s.human_cards(cards)[2]['description'], 'A quiet mystery. · Synthetic overview.')
+            self.assertEqual(s.human_cards(cards)[2]['description'], 'For your loved Synthetic Seed. · Synthetic overview.')
 
     def test_warm_restart_builds_model_after_first_feed_pass(self):
         s = self.s

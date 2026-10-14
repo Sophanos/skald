@@ -29,12 +29,13 @@ class ThemedSources(unittest.TestCase):
     def setUp(self):
         s = self.s
         reset(s)
+        Path(s.DATA, 'usage.json').unlink(missing_ok=True)
         self.p = {'entries': [], 'seen': set(), 'negative': set()}
         self.m = {'aff': {'x:cozy_case': 1, 'k:1': 1},
                   'names': {'x:cozy_case': 'Gentle puzzles', 'k:1': 'Courtroom stories'}}
         self.theme = {'kind': 'lane', 'name': 'Courtroom stories', 'key': 'k:1',
                       'source': ['k:1', 'lawyer']}
-        self.answer = {'fits_now': True, 'keep': [0], 'add': [],
+        self.answer = {'fits_now': True, 'months': 'any', 'keep': [0], 'add': [],
                        'why': {'0': 'A patient advocate untangles an impossible case.'}}
         self.calls = []
         self.scores = {}
@@ -42,7 +43,7 @@ class ThemedSources(unittest.TestCase):
         for store in (s._feeds, s._shown, s._facets):
             self.enterContext(patch.dict(store, {}, clear=True))
         self.enterContext(patch.dict(s._profiles, {'household': self.p}, clear=True))
-        self.enterContext(patch.dict(s._learn, {'lanes': {}, 'rows': {}, 'moodpicks': {}}, clear=True))
+        self.enterContext(patch.dict(s._learn, {'served': {}, 'lanes': {}, 'rows': {}, 'moodpicks': {}}, clear=True))
         self.rank, self.ensure_facets, self.frec = s.rank_by_taste, s.ensure_facets, s.frec
         for name, value in {'get_model': self.m, 'taste_hint': 'experiences: Gentle puzzles',
                             'genres': {}, 'tired_keys': {}, 'because_seed': None,
@@ -68,7 +69,8 @@ class ThemedSources(unittest.TestCase):
 
     def llm(self, path, body, timeout, lane, name):
         self.calls.append((path, body, timeout, lane, name))
-        return {'choices': [{'message': {'content': json.dumps(self.answer)}}], 'usage': {'cost': .001}}
+        answer = {'months': 'any'} if name == 'theme_season' else self.answer
+        return {'choices': [{'message': {'content': json.dumps(answer)}}], 'usage': {'cost': .001}}
 
     def resolve(self, kind, title, year, lang):
         i = int(title.rsplit(' ', 1)[1])
@@ -84,9 +86,15 @@ class ThemedSources(unittest.TestCase):
     @contextmanager
     def metered(self, persist=False):
         s = self.s
-        reply = lambda req, **kw: io.BytesIO(json.dumps({
-            'choices': [{'message': {'content': json.dumps(self.answer)}}],
-            'usage': {'cost': .001}}).encode())
+        def reply(req, **kw):
+            body = json.loads(req.data)
+            try:
+                inp = json.loads(body['messages'][1]['content'])
+            except ValueError:
+                inp = {}
+            answer = {'months': 'any'} if 'source' in inp and 'candidates' not in inp else self.answer
+            return io.BytesIO(json.dumps({'choices': [{'message': {'content': json.dumps(answer)}}],
+                                         'usage': {'cost': .001}}).encode())
         with patch.object(s, 'openrouter', side_effect=self.transport) as paid, \
                 patch.object(s, '_connector_open', side_effect=reply), \
                 patch.object(s, 'save_usage', wraps=s.save_usage if persist else None):
@@ -129,14 +137,18 @@ class ThemedSources(unittest.TestCase):
                     patch.object(s, 'feeling_pool', return_value=[('tmdb:1', 'movie', card(1))]), \
                     patch.object(s, 'resolve_pick', return_value=None):
                 s.mood_feed('de-DE')
+            fresh = card(7, _row={**card(7)['_row'], 'watchable': '2026-10-10'})
+            # The weekly call needs at least one vetted new release.
             with patch.object(s, 'candidate_pool', return_value=[]), \
                     patch.object(s, 'profile_text', return_value='Synthetic preference'), \
-                    patch.object(s, 'hit_titles', return_value=[]):
+                    patch.object(s, 'hit_titles', return_value=[]), \
+                    patch.object(s, 'week_candidates', return_value=[fresh]), \
+                    patch.object(s, 'week_scope', return_value=[{**fresh, '_week_pct': 80}]):
                 s.personal_feed('de-DE')
                 s.week_feed('de-DE')
                 s.docs_ai_feed('de-DE')
         labels = [c.args[-1] for c in paid.call_args_list]
-        self.assertEqual(s._usage['calls']['feed:theme_source'], 12)
+        self.assertEqual(sum(s._usage['calls'].get('feed:'+n, 0) for n in ('theme_source', 'theme_season')), 12)
         for label in ('personal', 'week', 'docs'):
             self.assertEqual(s._usage['calls'].get('feed:' + label), 1)
             self.assertIn(label, labels)
@@ -162,7 +174,9 @@ class ThemedSources(unittest.TestCase):
                 patch.object(s, 'tmdb', side_effect=detail) as details:
             out = s.lanes_feed('de-DE')
         self.assertEqual(candidates.call_count, 40)
-        self.assertEqual(paid.call_count, 8)
+        self.assertEqual(paid.call_count, 12)
+        self.assertEqual(s._usage['calls']['feed:theme_source'], 8)
+        self.assertEqual(s._usage['calls']['feed:theme_season'], 4)
         s.resolve_pick.assert_not_called()
         self.assertFalse(any(out[cid]['tv'] for cid in s.LANE_ROWS))
         self.assertEqual(details.call_count, 32 * 40)
@@ -172,7 +186,8 @@ class ThemedSources(unittest.TestCase):
         reservations = []
         def fail(req, **kw):
             path = Path(s.DATA, 'usage.json')
-            reservations.append(json.loads(path.read_text())['calls'].get('feed:theme_source', 0) if path.exists() else 0)
+            calls = json.loads(path.read_text())['calls'] if path.exists() else {}
+            reservations.append(sum(calls.get('feed:'+n, 0) for n in ('theme_source', 'theme_season')))
             raise TimeoutError()
         with patch.object(s, 'openrouter', side_effect=self.transport), \
                 patch.object(s, '_connector_open', side_effect=fail) as transport, \
@@ -184,11 +199,12 @@ class ThemedSources(unittest.TestCase):
                 for i in range(15):
                     self.theme.update(key=f'k:{i}', name=f'Synthetic Theme {i}')
                     self.source()
-            self.assertEqual(saved.call_count, 12)
+            self.assertEqual(saved.call_count, 84)  # Each call saves at reservation and exit; failed or capped attempts also save their reason.
             self.assertEqual(transport.call_count, 12)
-            self.assertEqual(reservations, list(range(1, 13)))
-            self.assertEqual(s._usage['calls']['feed:theme_source'], 12)
-            self.assertEqual(json.loads(Path(s.DATA, 'usage.json').read_text())['calls']['feed:theme_source'], 12)
+            self.assertEqual(reservations, list(range(1, 13)))  # Usage is saved when each call is reserved.
+            self.assertEqual(sum(s._usage['calls'].get('feed:'+n, 0) for n in ('theme_source', 'theme_season')), 12)
+            self.assertEqual(sum(json.loads(Path(s.DATA, 'usage.json').read_text())['calls'].get('feed:'+n, 0)
+                                 for n in ('theme_source', 'theme_season')), 12)
 
     def test_daily_theme_cap_survives_source_cache_restart_and_rolls_over(self):
         s = self.s
@@ -200,7 +216,7 @@ class ThemedSources(unittest.TestCase):
                 s._decide_cache.clear()
             self.assertEqual(paid.call_count, 12)
             self.assertEqual(s._usage['calls']['feed:theme_source'], 12)
-            self.assertEqual(s.save_usage.call_count, 12)
+            self.assertEqual(s.save_usage.call_count, 30)  # Two saves per paid call plus one per capped attempt.
             s._usage.update(day='', calls={})
             s.load_state()
             self.source()
@@ -227,10 +243,10 @@ class ThemedSources(unittest.TestCase):
             metas = s.themed_row(self.m, self.p, self.theme, xs, 'de-DE', s.LANES[0], allow_llm=False)
         self.assertEqual([x['id'] for x in metas], ['tmdb:2', 'tmdb:1'])
         self.assertTrue(all('theme' not in x['_row'] for x in metas))
-        self.assertEqual(self.calls, [])
+        self.assertEqual([c[-1] for c in self.calls], ['theme_season'])
         self.assertEqual(s._theme_sources, {})
         self.assertEqual([x['id'] for x in self.source(xs)], ['tmdb:1'])
-        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(len(self.calls), 2)
 
     def test_unvetted_fallback_uses_taste_order_and_never_resolves_cached_decisions(self):
         s = self.s
@@ -260,7 +276,7 @@ class ThemedSources(unittest.TestCase):
         self.assertEqual(body['response_format'], {'type': 'json_object'})
         self.assertLessEqual(body['max_tokens'], 2000)
         inp = json.loads(body['messages'][1]['content'])
-        self.assertEqual((inp['date'], inp['language']), ('2026-10-14', 'de-DE'))
+        self.assertEqual((inp['date'], inp['language']), ('2026-10-14', self.s.LANG))
         self.assertEqual(inp['taste'], 'experiences: Gentle puzzles')
         self.assertEqual(len(inp['candidates']), 40)
         self.assertEqual(inp['candidates'][0]['overview'], 'Synthetic overview.')
@@ -374,7 +390,7 @@ class ThemedSources(unittest.TestCase):
     def test_new_day_or_theme_sources_again_and_failed_attempt_retries(self):
         with patch.object(self.s, 'openrouter', side_effect=TimeoutError()) as failed:
             self.assertIsNone(self.source())
-            failed.assert_called_once()
+            self.assertEqual(failed.call_count, 2)
         self.assertEqual([x['id'] for x in self.source()], ['tmdb:1'])
         self.assertEqual(len(self.calls), 1)
         with patch.object(self.s, 'local_now', return_value=datetime.datetime(2026, 10, 15, 18)):
@@ -403,7 +419,7 @@ class ThemedSources(unittest.TestCase):
                 self.assertIsNone(self.source())
         for reason in ('lawyer', 'Courtroom stories', 'Gentle puzzles'):
             reset(self.s)
-            self.answer = {'fits_now': True, 'keep': [0], 'add': [], 'why': {'0': reason}}
+            self.answer = {'fits_now': True, 'months': 'any', 'keep': [0], 'add': [], 'why': {'0': reason}}
             self.assertIsNone(self.source())
 
     def build_lane(self):
@@ -505,7 +521,7 @@ class ThemedSources(unittest.TestCase):
         for name in ('lanes', 'moods', 'leap'):
             self.assertTrue(stamps[name].startswith('source1/'), stamps[name])
 
-    def test_new_lane_uses_only_the_source_llm_call(self):
+    def test_new_lane_batches_one_naming_call_after_sourcing(self):
         s = self.s
         self.m['aff'] = {'k:1': 1}
         self.answer['keep'], self.answer['why'] = [], {}
@@ -515,7 +531,7 @@ class ThemedSources(unittest.TestCase):
                 patch.object(s, 'llm_text') as naming:
             out = s.lanes_feed('de-DE')
         naming.assert_not_called()
-        self.assertEqual(len(self.calls), 1)
+        self.assertEqual([c[4] for c in self.calls], ['theme_source', 'name_lanes'])
         self.assertEqual(len(out[s.LANES[0]]['tv']), 20)
 
     def test_leap_filters_use_this_builds_seed(self):

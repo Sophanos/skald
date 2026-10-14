@@ -132,7 +132,7 @@ class PrefsRows(unittest.TestCase):
                 patch.object(self.s, 'CONFIG_SOURCE', 'env'):
             self.s.refresh_preferences()
 
-    def test_refills_and_week_tail_cannot_escape(self):
+    def test_foryou_refills_and_frozen_week_respect_preferences(self):
         s = self.s
         xs = [{**x, 'releaseInfo': '2000', 'genres': ['Drama']} for x in cards(10)]
         blocked = {**cards(1, 50)[0], 'releaseInfo': '1980', 'genres': ['Horror']}
@@ -149,9 +149,11 @@ class PrefsRows(unittest.TestCase):
             stack.enter_context(patch.object(s, 'week_tail', return_value=[blocked]))
             for suffix in ('week', 'foryou'):
                 cid = s.rid(suffix)
-                with patch.object(s, 'row_list', side_effect=lambda c, *a: xs.copy() if c == cid else []):
+                own = [{**x, '_week': {'ana': 'A recent taste match'}, '_week_start': s.week_start(),
+                        'description': 'A recent taste match · '} for x in xs] if suffix == 'week' else xs
+                with patch.object(s, 'row_list', side_effect=lambda c, *a: own.copy() if c == cid else []):
                     result = s.served_row(cid, 'tv', 'en-US', {}, set(), (set(), set()), who='ana')
-                    self.assertEqual(result, xs)
+                    self.assertEqual(result, own)
 
     def test_live_config_change_invalidates_home_cache(self):
         s = self.s

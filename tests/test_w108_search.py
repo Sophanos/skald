@@ -51,7 +51,7 @@ class WideSearchTests(unittest.TestCase):
         mock.start()
         self.addCleanup(mock.stop)
         self.jobs = []
-        for pool in (s._pool, s._outer):
+        for pool in (s._pool, s._outer, s._search_pool):
             def capture(fn, *args, submit=pool.submit, **kwargs):
                 job = submit(fn, *args, **kwargs)
                 self.jobs.append(job)
@@ -73,10 +73,13 @@ class WideSearchTests(unittest.TestCase):
         return {'id': i, 'title': title, 'name': title,
                 'release_date': year, 'first_air_date': year}, {}
 
-    def reply(self, path, body, timeout, lane, label):
+    def reply(self, path, body, timeout, lane, label, on_text=None, stop=None):
         self.calls.append((path, body, timeout, lane, label))
         if self.transport:
-            return self.transport(path, body, timeout, lane, label)
+            reply = self.transport(path, body, timeout, lane, label)
+            if on_text:
+                on_text(reply['choices'][0]['message']['content'])
+            return reply
         if label == 'rules':
             content = json.dumps(self.rules)
         else:
@@ -84,6 +87,8 @@ class WideSearchTests(unittest.TestCase):
             content = self.wide[stype] if label == 'wide_picks' else ('Title 9|2005|m' if stype == 'movie' else 'Title 19|2005|s')
             if isinstance(content, Exception):
                 raise content
+        if on_text:
+            on_text(content)
         return {'choices': [{'message': {'content': content}}]}
 
     def results(self, stype='movie', query='something cozy tonight'):
@@ -101,7 +106,7 @@ class WideSearchTests(unittest.TestCase):
             self.assertEqual([m['id'] for m in metas], [f'tmdb:{i}' for i in range(20, 5, -1)])
             self.assertTrue(all(c.args[2] == 'ana' for c in self.score_key.call_args_list))
             self.results()
-        self.assertEqual(self.labels().count('picks'), 1)
+        self.assertEqual(self.labels().count('picks'), 0)
         self.taste_rerank.assert_not_called()
 
     def test_picker_position_breaks_equal_taste(self):
@@ -221,7 +226,7 @@ class WideSearchTests(unittest.TestCase):
                 self.assertEqual([m['id'] for m in self.results('series')], ['tmdb:12', 'tmdb:11'])
                 self.results()
                 self.results('series')
-                self.assertEqual(self.labels().count('picks'), 2)
+                self.assertEqual(self.labels().count('picks'), 1)
                 self.assertEqual(self.labels().count('wide_picks'), 2)
 
     def test_filtered_empty_falls_back(self):
@@ -238,14 +243,16 @@ class WideSearchTests(unittest.TestCase):
             return {'choices': [{'message': {'content': content}}]}
         self.transport = transport
         self.search_both.return_value = ([{'id': 8, 'title': 'Plain title'}], {})
-        self.assertEqual([m['id'] for m in self.results()], ['tmdb:8'])
+        metas = self.results()
+        self.assertTrue(metas[0]['id'].startswith(self.s.rid('cmd:')))
+        self.assertEqual([m['id'] for m in metas[1:]], ['tmdb:8'])
 
     def test_series_failure_does_not_fall_back_movies(self):
         self.wide['series'] = TimeoutError('late series')
         self.route['list'] = 'best'
         self.assertEqual([m['id'] for m in self.results('series')], ['tmdb:19'])
         self.assertEqual([m['id'] for m in self.results()], ['tmdb:3', 'tmdb:2', 'tmdb:1'])
-        self.assertEqual(self.labels().count('picks'), 2)
+        self.assertEqual(self.labels().count('picks'), 1)
 
     def test_failed_legacy_after_empty_wide_keeps_timeout_cache_behaviour(self):
         wide, plan = Future(), Future()
@@ -265,8 +272,8 @@ class WideSearchTests(unittest.TestCase):
         with patch.object(self.s, 'ai_future', return_value=plan), \
                 patch.object(self.s, 'search_picks', return_value=legacy), \
                 patch.object(self.s, 'remember_search') as remember:
-            self.assertEqual(self.results(), [])
-        remember.assert_not_called()
+            self.assertTrue(self.results()[0]['id'].startswith(self.s.rid('cmd:')))
+        remember.assert_called_once()
         self.assertEqual(self.s._scoping.search_timing['picker_ms'], 'timeout')
 
     def test_none_stays_empty_cached_without_fallback(self):
@@ -274,7 +281,7 @@ class WideSearchTests(unittest.TestCase):
         self.assertEqual(self.results('series'), [])
         self.assertEqual(self.results('series'), [])
         self.assertEqual(self.labels().count('wide_picks'), 1)
-        self.assertEqual(self.labels().count('picks'), 1)
+        self.assertEqual(self.labels().count('picks'), 0)
 
     def test_wide_constants_used_for_prompt_transport_and_wait(self):
         with patch.object(self.s, 'SEARCH_WIDE_SIZE', 40, create=True), \
@@ -284,7 +291,7 @@ class WideSearchTests(unittest.TestCase):
         self.assertIn('40 lines', call[1]['messages'][0]['content'])
         self.assertIn('give 40 movies', call[1]['messages'][0]['content'])
         self.assertGreaterEqual(call[1]['max_tokens'], 2000)
-        self.assertEqual(call[2], 11)
+        self.assertLess(call[2], self.s.SEARCH_TIMEOUT)
 
     def test_pending_wide_future_uses_timeout_then_legacy(self):
         wide = Mock(spec=Future)
@@ -347,7 +354,7 @@ class WideSearchTests(unittest.TestCase):
             with patch.object(self.s, 'SEARCH_WIDE_TIMEOUT', .4):
                 start = time.monotonic()
                 self.assertEqual([m['id'] for m in self.results()], ['tmdb:9'])
-                self.assertLess(time.monotonic() - start, .55)
+                self.assertLess(time.monotonic() - start, .8)
                 self.assertTrue(picked.is_set())
         finally:
             release.set()
@@ -414,17 +421,19 @@ class WideSearchTests(unittest.TestCase):
                         patch.object(self.s, 'decide', side_effect=route), \
                         patch.object(self.s, 'resolve_pick', side_effect=resolve), \
                         patch.object(self.s, 'search_both', side_effect=lookup), \
-                        patch.object(self.s, 'genres', side_effect=genres):
+                        patch.object(self.s, 'genres', side_effect=genres), \
+                        patch.object(self.s, 'feed', return_value={'metas': {'tv': [{'id': 'tmdb:8', 'type': 'movie', 'name': 'Cached title'}]}}):
                     start = time.monotonic()
                     result = self.results()
                     self.assertLess(time.monotonic() - start, .55)
                     if phase in ('wide_resolution', 'combined'):
-                        self.assertEqual([m['id'] for m in result], ['tmdb:9'])
+                        self.assertTrue(result[0]['id'].startswith(self.s.rid('cmd:')))
+                        self.assertEqual([m['id'] for m in result[1:]], ['tmdb:8'])
             finally:
                 release.set()
                 self.finish_jobs()
 
-    def test_wide_success_does_not_wait_for_slow_parallel_picker(self):
+    def test_wide_success_skips_backup_picker(self):
         started, release, finished = Event(), Event(), Event()
         def transport(path, body, timeout, lane, label):
             if label == 'picks':
@@ -433,7 +442,6 @@ class WideSearchTests(unittest.TestCase):
                 finished.set()
                 content = 'Title 9|2005|m'
             elif label == 'wide_picks':
-                self.assertTrue(started.wait(.5), 'legacy picker must start alongside wide')
                 content = self.wide['movie']
             else:
                 content = json.dumps(self.rules)
@@ -443,6 +451,7 @@ class WideSearchTests(unittest.TestCase):
             start = time.monotonic()
             self.assertEqual([m['id'] for m in self.results()], ['tmdb:3', 'tmdb:2', 'tmdb:1'])
             self.assertLess(time.monotonic() - start, .4)
+            self.assertFalse(started.is_set())
             self.assertFalse(finished.is_set())
         finally:
             release.set()

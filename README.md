@@ -34,7 +34,7 @@ Without AI, home rows, title search and short commands such as "hide anime" work
 
 - **Search that understands requests**, like "anime I haven't watched" or "cozy mystery for a rainy evening", checked against your history.
 - **Picks:** ✨ For You and ✨ This Week, plus tonight's mood shelves.
-- **Experience tags** on titles, which fill `For <member>`, `Same Feeling as <title>`, mood shelves and New to You.
+- **Experience tags** on titles, which fill `Picks for <member>`, `Same Feeling as <title>`, mood shelves and Fresh Finds.
 - **Free wording** for commands and wish shelves, and sorting of unclear import matches.
 
 Cost is capped: AI calls stop at 3 US dollars a month by default (`AI_MONTHLY_USD`), with daily limits per task.
@@ -106,8 +106,8 @@ See [all sources, commands and limits](docs/CONNECTORS.md#sources).
 
 <img src="docs/images/skald-home.jpg" alt="Odin home showing Skald rows for a test household" width="960">
 
-- **Picked for you**, built from taste: ✨ For You, ✨ This Week, `For <member>`, `Because You Love <title>`, `Same Feeling as <title>`, `More from <maker>`, Watch Again, Coming Soon for You, mood, theme and wish shelves, New to You.
-- **Catalogs**, plain lists filtered by your history: Continue Watching & New Episodes, Catch Up, Top 10, Anime · New This Week and Next Season, Latest Digital Releases, Top Rated Movies.
+- **Picked for you**, built from taste: ✨ For You, ✨ New This Week, `Picks for <member>`, `Because You Love <title>`, `Same Feeling as <title>`, `From <maker>`, Watch It Again, Coming Soon, mood, theme and wish shelves, Fresh Finds.
+- **Catalogs**, plain lists filtered by your history: Continue Watching, Catch Up, Top 10, Anime This Week, `Anime · <season> <year>`, Latest Digital Releases, Best Movies, Best Series.
 
 ✨ rows need OpenRouter. Each member and Together get their own rows; each member can choose discovery style, release years and unwanted genres.
 Screenshots show a test household. See [all rows and settings](docs/ROWS.md).

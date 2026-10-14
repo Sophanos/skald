@@ -269,6 +269,8 @@ class BackupTests(ServerCase):
         names = {n for n in re.findall(r'os\.path\.join\(\s*\w+\s*,\s*"([^"/]+)"\s*\)',
                                       (ROOT / 'server.py').read_text()) if not n.endswith('.tmp')}
         names.update(re.findall(r"Path\(s.DATA\) / '([^'/]+)'", (ROOT / 'skald/shelves.py').read_text()))
+        names.update(re.findall(r"Path\(data\) / '([^'/]+)'", (ROOT / 'skald/ai.py').read_text()))
+        names.add('usage.lock')
         names.update(re.findall(r"Path\(s.DATA\)/'([^'/]+)'", (ROOT / 'skald/commands.py').read_text()))
         names.add(SUMMARY)
         names.add(LOCK)

@@ -33,6 +33,7 @@ def server(data, *, report=None):
     s._CONFIG_READONLY = True
     with patch.dict(os.environ, {'DATA_DIR': str(data)}), redirect_stdout(io.StringIO()):
         spec.loader.exec_module(s)
+        s.load_usage()
     try:
         from .aio_refresh import refresh
         changed = False
@@ -48,7 +49,7 @@ def server(data, *, report=None):
     finally:
         s._decide_queue.put(False)
         s._decide_queue.join()
-        for name in ('_pool', '_outer', '_nzb_pool', '_connector_pool'):
+        for name in ('_pool', '_outer', '_search_pool', '_nzb_pool', '_connector_pool'):
             getattr(s, name).shutdown(wait=True, cancel_futures=True)
 
 
@@ -518,10 +519,12 @@ def status(data):
         else:
             notes.append(RESTART)
     from .migrate import check
+    from .ai import read_usage, status as ai_status, text as ai_text
     return {'release': members.VERSION, 'data_format': check(data)['format'], 'done': [k for k, done in steps.items() if done], 'missing': missing,
             'next': next_command, 'ok': not missing,
             'legacy_readonly': legacy, 'aiostreams_login': 'made for ' + ', '.join(logins) if logins else 'not made',
             'notes': notes, 'connections': connections,
+            'ai_credit': ai_text(ai_status(read_usage(data), {}, 0, config or {}), (config or members.CONFIG)['region']['lang']),
             'prefs': [prefs_line(config, p) for p in config['household']['members']] if config else []}
 
 

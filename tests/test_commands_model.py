@@ -63,7 +63,7 @@ class CommandModel(unittest.TestCase):
 
     def test_version_eight_ignores_fresh_version_seven_cache(self):
         spec = self.s.DECISIONS['parse_command']
-        self.assertEqual(spec['ver'], 12)
+        self.assertEqual(spec['ver'], 13)
         self.assertEqual(spec['ttl'], 30 * self.s.DAY)
         inp = self.s.route_norm({'query': 'hide anime'})
         digest = hashlib.sha256(json.dumps(inp, sort_keys=True, separators=(',', ':'),
@@ -71,7 +71,7 @@ class CommandModel(unittest.TestCase):
         self.s._decision_put('parse_command|7|' + digest, {**spec, 'ver': 7},
                              {**self.answer, 'op': 'show'}, 1)
         result = self.run_command([self.reply])
-        self.assertEqual(result['ver'], 12)
+        self.assertEqual(result['ver'], 13)
         self.assertEqual(result['source'], 'llm')
         self.assertEqual(result['answer'], self.answer)
         self.assert_requests()

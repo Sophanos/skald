@@ -42,6 +42,13 @@ def observe(cid, metas=(), code=None, *, typ=None):
             trace['served'][cid, typ] = list(metas)
 
 
+def ranked(cid, metas, scores):
+    trace = _trace.get()
+    if trace is not None:
+        for i, x in enumerate(metas, 1):
+            trace['ranking'][cid, x['id'], x['type']] = {**scores[x['id'], x['type']], 'position': i, 'type': x['type']}
+
+
 def removed(cid, before, after, rule):
     trace = _trace.get()
     if trace is None:
@@ -107,7 +114,7 @@ def unsafe_row(s, cid, who, scope):
 
 
 def raw_cards(s, cid, lang):
-    types = ('movie', 'series') if cid == s.rid('top10') else ('movie',) if cid in (s.rid('digital'), s.rid('toprated')) else ('tv',) if cid in s.MIXED else ('series',)
+    types = ('movie', 'series') if cid in (s.rid('top10'), s.rid('toprated')) else ('movie',) if cid == s.rid('digital') else ('tv',) if cid in s.MIXED else ('series',)
     return [x for typ in types for x in s.row_list(cid, typ, lang)]
 
 
@@ -131,9 +138,9 @@ def label(s, cid, lang):
     elif cid in s.LANE_ROWS:
         fallback = s.t('row.picked')
     elif cid in s.DOCS:
-        fallback = s.DOC_ROWS.get(cid, s.DOC_TREND)[0]
+        fallback = s.t(s.DOC_ROWS.get(cid, s.DOC_TREND)[0])
     elif cid in s.STUDIO_ROWS:
-        fallback = s.STUDIOS[cid][0]
+        fallback = s.t(s.STUDIOS[cid][0])
     else:
         fallback = s.t('row.'+key)
     return s.row_name(cid, lang, fallback=fallback) or key
@@ -164,7 +171,8 @@ def sourcing(s, cid, lang):
     if names.get('source_status'):
         status, date = names['source_status'], names.get('source_date')
         return dict(decided_date=date, reused_today=status == 'reused' and date == s.local_now().date().isoformat(),
-                    fresh=status == 'fresh', failed=status == 'failed', skipped_by_budget=status == 'budget')
+                    fresh=status == 'fresh', failed=status == 'failed', skipped_by_budget=status == 'budget',
+                    **({'candidate_sources': names['candidate_sources']} if 'candidate_sources' in names else {}))
     # shortcut: older feeds only have a build date, rebuild them for full sourcing status.
     date = s.local_now(rec['built']).date().isoformat() if rec.get('built') else None
     return {'decided_date': date, 'reused_today': date == s.local_now().date().isoformat(),
@@ -173,8 +181,13 @@ def sourcing(s, cid, lang):
 
 def card(s, x, removed_by=None):
     notes, _ = s.card_parts(x)
-    return {'key': x['id'], 'title': x.get('name', ''), 'origin': 'borrowed' if x.get('_borrowed') else 'own',
+    return {'key': x['id'], 'kind': 'movie' if x['type'] == 'movie' else 'tv', 'title': x.get('name', ''), 'origin': 'borrowed' if x.get('_borrowed') else 'own',
             'reason_present': any(n.strip() for n in notes), 'removed_by': 'cap' if removed_by in ('superhero_cap', 'franchise_cap') else removed_by}
+
+
+def candidate_sources(metas, missing=0):
+    return {**{source: sum((x.get('_row') or {}).get('feeling_source') == source for x in metas)
+               for source in ('catalog', 'recommendations')}, 'missing_cards': missing}
 
 
 def plan(s, person='household', lang=None, *, cards=False, caps=None):
@@ -186,7 +199,7 @@ def plan(s, person='household', lang=None, *, cards=False, caps=None):
     if person not in ('household', 'together', 'guest', *s.PEOPLE):
         raise ValueError('unknown person')
     scope = None if person in ('household', 'guest') else person
-    trace = {'server': s, 'rows': {}, 'served': {}}
+    trace = {'server': s, 'rows': {}, 'served': {}, 'ranking': {}}
     token = _trace.set(trace)
     try:
         with ExitStack() as stack:
@@ -210,6 +223,10 @@ def plan(s, person='household', lang=None, *, cards=False, caps=None):
                 home = {(row['id'], 'tv'): [{'id': x['key'], 'name': x['title'], 'type': 'movie' if x['kind'] == 'movie' else 'series', 'description': ''} for x in row['items']] for row in public}
                 for cid, _, _ in feeds:
                     trace['rows'][cid] = {'cards': home[cid, 'tv'], 'dropped': {}, 'code': None}
+                    if cid == s.rid('toprated'):
+                        scores = s.toprated_scores(raw_cards(s, cid, lang), s.GUEST)
+                        for typ in ('movie', 'series'):
+                            ranked(cid, [x for x in home[cid, 'tv'] if x['type'] == typ], scores)
             wishes = {s.rid(f"shelf_{w['scope']}_{w['slot']}"): w for w in shelves.read(s)['wishes']}
             rules = shelves.rules(s)
             labels = {cid: name if isinstance(name, str) else ' / '.join(name.values()) for cid, _, name in feeds}
@@ -260,12 +277,17 @@ def plan(s, person='household', lang=None, *, cards=False, caps=None):
                        'hero_cards': sum(s.is_hero(x) for x in xs), 'seed': None if unsafe else s.row_seed(cid, lang)}
                 if kind == 'ai_sourced':
                     row['ai_sourcing'] = sourcing(s, cid, lang) if not unsafe else None
+                    months = s.row_months(cid, lang) if not unsafe else None
+                    row['season'] = {'months': months, 'hidden': not s.season_fits(months)}
+                counts = (s.feed(cid, lang).get('names') or {}).get('candidate_sources')
+                if counts is not None and not unsafe:
+                    row['candidate_sources'] = counts
                 if support is not None:
                     rows = [r for r in support['rows'] if r['row'] == cid and (person == 'household' or r['person'] == person)]
                     row['support'] = {'shown': sum(r['shown'] for r in rows), 'plays': sum(r['played'] for r in rows)}
-                if cards:
+                if cards or cid == s.rid('toprated'):
                     kept = {(x['id'], x['type']) for x in xs}
-                    row['cards'] = [card(s, x) for x in xs] + [card(s, x, rule) for key, (x, rule) in drops.items() if key not in kept]
+                    row['cards'] = [{**card(s, x), **trace['ranking'].get((cid, x['id'], x['type']), {})} for x in xs] + [card(s, x, rule) for key, (x, rule) in drops.items() if key not in kept]
                 out.append(row)
             out.sort(key=lambda r: (r['position'] is None, r['position'] or 0))
             return {'person': person, 'lang': lang, 'rows': out}
@@ -278,11 +300,23 @@ def why(s, name, person='household', lang=None):
     return next(r for r in plan(s, person, lang, cards=True)['rows'] if r['id'] == cid)
 
 
+def title(s, key, kind=None, person=None):
+    if not any(x['id'] == key and (kind is None or x['type'] == ('movie' if kind == 'movie' else 'series'))
+               for x in raw_cards(s, s.rid('toprated'), s.LANG)):
+        return {}
+    person = person or getattr(s._scoping, 'scope', None) or 'household'
+    picks = [x for x in why(s, 'toprated', person)['cards'] if x['key'] == key and x.get('position')
+             and (kind is None or x['type'] == ('movie' if kind == 'movie' else 'series'))]
+    return {'toprated': picks[0]} if picks else {}
+
+
 def text(result):
     for row in result.get('rows', [result]):
         yield f"{row['position'] or '-':>2} {row['id']} | {row['label']} | {row['rejection'] or 'shown'}: {row['reason']} (own {row['own_cards']}, borrowed {row['borrowed_cards']}, hero cap {row['superhero_removed']}, franchise cap {row['franchise_removed']})"
         for x in row.get('cards', []):
             yield f"   {x['key']} | {x['title']} | {x['origin']} | reason {x['reason_present']} | {x['removed_by'] or 'kept'}"
+            if 'position' in x:
+                yield f"      {x['type']} position {x['position']} | rating {x['rating']} | taste match {x['taste_match']} of 100 | blend {x['blend']:.4f}"
 
 
 def prefer(cfg, theme, more):
@@ -384,7 +418,7 @@ def refresh(s, cid, expected, *, restore=False):
     s.save_feeds()
 
 
-def preview(s, text, change, viewer, bound, *_):
+def preview(s, query, change, viewer, bound, *_):
     from . import commands as c
     op, values = change['op'], change['values']
     if change['kind'] is not None:
@@ -414,17 +448,19 @@ def preview(s, text, change, viewer, bound, *_):
                         'sr': ' {label} ima {own} sopstvenih i {borrowed} dopunjenih naslova.'}.get(lang, ' {label} has {own} own and {borrowed} borrowed picks.').format(label=row['label'], own=row['own_cards'], borrowed=row['borrowed_cards'])
         elif rows:
             message += ' '+', '.join(r['label'] for r in rows[:3])+'.'
+        if values and any(r['id'] == s.rid('toprated') for r in rows):
+            message += '\n'+'\n'.join(text({'rows': [r for r in rows if r['id'] == s.rid('toprated')]}))
         return dict(read_only=True, people=[], name={'de': 'Startseitenplan', 'sr': 'Plan početne strane'}.get(lang, 'Home plan'), description=message, home=result)
     targets = c.people(s, change['person'], viewer, bound)
     if len(targets) != 1:
         raise ValueError('Choose one adult for household rows')
     if not values:
-        return c.ask_preview(s, text, dict(slot='change', question='Which row or row family do you mean?'))
+        return c.ask_preview(s, query, dict(slot='change', question='Which row or row family do you mean?'))
     if len(values) != 1 or not isinstance(values[0], str):
         raise ValueError('one row or row family')
     cfg = c.config(s)
     before = {p: copy.deepcopy(cfg['taste']['people'].get(p, {}).get('prefs')) for p in targets}
-    proposal = dict(people=targets, change=change, before=before, item=None, text=text[:200], source='search', actor=targets[0])
+    proposal = dict(people=targets, change=change, before=before, item=None, text=query[:200], source='search', actor=targets[0])
     if op in ('home_more', 'home_fewer'):
         trial = copy.deepcopy(cfg)
         count = prefer(trial, values[0], op == 'home_more')
@@ -441,18 +477,21 @@ def preview(s, text, change, viewer, bound, *_):
     return c.seal(proposal)
 
 
-def source_status(s, cid, lang, *, date=None, reused=False, failed=False, budget=False):
+def source_status(s, cid, lang, *, date=None, reused=False, failed=False, budget=False, candidate_sources=None):
     if not hasattr(s, '_row_source_status'):
         s._row_source_status = {}
     s._row_source_status[cid, lang] = dict(decided_date=date, reused_today=reused, fresh=not reused and not failed and not budget,
                                          failed=failed, skipped_by_budget=budget)
+    if candidate_sources is not None:
+        s._row_source_status[cid, lang]['candidate_sources'] = candidate_sources
 
 
 def source_names(s, cid, lang):
     rec = s._row_source_status.get((cid, lang))
     if not rec:
         return {}
-    return {'source_date': rec['decided_date'], 'source_status': 'budget' if rec['skipped_by_budget'] else 'failed' if rec['failed'] else 'reused' if rec['reused_today'] else 'fresh'}
+    return {'source_date': rec['decided_date'], 'source_status': 'budget' if rec['skipped_by_budget'] else 'failed' if rec['failed'] else 'reused' if rec['reused_today'] else 'fresh',
+            **({'candidate_sources': rec['candidate_sources']} if 'candidate_sources' in rec else {})}
 
 
 def command_input(s, text, results=None):

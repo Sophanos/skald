@@ -61,7 +61,7 @@ def close_server(server):
     server.flush_decisions()
     server._decide_queue.put(False)
     server._decide_queue.join()
-    for name in ("_pool", "_outer", "_nzb_pool", "_connector_pool"):
+    for name in ("_pool", "_outer", "_search_pool", "_nzb_pool", "_connector_pool"):
         pool = getattr(server, name, None)
         if pool is not None:
             pool.shutdown(wait=True, cancel_futures=True)
@@ -252,7 +252,7 @@ def synthetic_model(server):
     return m
 
 
-SETUP = {"explain_pick": synthetic_model, "mood_pick": reset, "theme_source": reset, "rank_titles": synthetic_model}
+SETUP = {"explain_pick": synthetic_model, "mood_pick": reset, "theme_source": reset, "theme_season": reset, "rank_titles": synthetic_model}
 
 
 def write_legacy(data):

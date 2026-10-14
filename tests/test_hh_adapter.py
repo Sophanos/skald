@@ -88,7 +88,7 @@ class AdapterTests(unittest.TestCase):
                 self.assertEqual(build.call_count, 1)
             self.assertEqual([(r['id'], r['type'], r['metas']) for r in got['rows']], expected)
             mood = next(r for r in got['rows'] if r['id'] == s.rid('mood1'))
-            self.assertEqual(mood['name'], 'Pinned cozy' if selected_scope is None else 'Scoped cozy')
+            self.assertEqual(mood['name'], s.t('row.mood.cozy'))
             self.assertEqual(got['rows'][0]['id'], s.rid('mood1'))
             stages = got['candidate_inputs'][s.rid('mood1'), 'tv']
             self.assertEqual(stages['curated'], pin if selected_scope is None else scoped)

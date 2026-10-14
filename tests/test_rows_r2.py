@@ -32,8 +32,8 @@ class RowsR2(unittest.TestCase):
             stack.enter_context(patch.object(s, 'row_list', side_effect=lambda c, *a: metas.copy() if c == cid else []))
             for name in ('fill_row', 'balance_row', 'polish_row', 'rotate_row', 'remote_order'):
                 stack.enter_context(patch.object(s, name, side_effect=lambda xs, *a, **kw: xs))
-            p = {'entries': [{'key': x['id'], 'kind': 'movie' if x['type'] == 'movie' else 'tv',
-                              'signal': 'watched', 'item': {}} for x in metas]}
+            p = {'entries': [{'key': x['id'], 'title': x['name'], 'kind': 'movie' if x['type'] == 'movie' else 'tv',
+                              'signal': 'watched', 'weight': 1, 'item': {}} for x in metas]}
             return s.served_row(cid, typ, 'de-DE', p, above if above is not None else set(), (set(), set()), who)
 
     def test_rewatch_dedupes_catchup_and_refills_own_candidates(self):
@@ -156,9 +156,9 @@ class RowsR2(unittest.TestCase):
         self.assertFalse(self.tail_gate(.64))
         self.assertFalse(self.tail_gate(.5, n=20))
 
-    def test_week_full_strict_head_keeps_twenty(self):
-        # More evidence can fill Week with strict picks without being capped at fourteen.
-        self.assertEqual(self.served(rid('week', self.s.CONFIG), cards(20)), cards(20))
+    def test_week_unvetted_legacy_head_hides(self):
+        # Cached picks from the old title-from-memory builder have no release proof.
+        self.assertEqual(self.served(rid('week', self.s.CONFIG), cards(20)), [])
 
     def test_week_short_head_cannot_expose_tail(self):
         # A weaker pick cannot enter the first ten when the strict head itself is short.
@@ -208,9 +208,10 @@ class RowsR2(unittest.TestCase):
             self.assertEqual({x['id'] for x in tail}, {'tmdb:102', 'tmdb:104', 'tmdb:105'})
             self.assertEqual(len(tail), 3)
 
-    def test_week_tail_not_front_after_rotation(self):
-        # Even a tail original sharing a franchise cannot enter the first ten on rotation.
+    def test_week_never_adds_tail_or_rotates(self):
+        # Frozen picks keep their order even when old refill and rotation helpers offer more.
         s, head, tail = self.s, cards(14), cards(6, 100)
+        head = [{**x, '_week': {'together': 'A recent taste match'}, '_week_start': s.week_start()} for x in head]
         with ExitStack() as stack:
             stack.enter_context(patch.object(s, 'row_list', side_effect=lambda cid, *a: head.copy() if cid == rid('week', s.CONFIG) else []))
             for name, value in {'row_eligible': True, 'row_member': False, 'feed': {}, 'tired_keys': {}, 'week_scores': {}}.items():
@@ -223,12 +224,12 @@ class RowsR2(unittest.TestCase):
             stack.enter_context(patch.object(s, 'franchise_key', return_value='same'))
             stack.enter_context(patch.object(s, 'row_facts', side_effect=lambda x: {'date': '1990' if x in tail else '2000'}))
             result = s.served_row(rid('week', s.CONFIG), 'tv', 'de-DE', {}, set(), (set(), {x['id'] for x in head}))
-            self.assertEqual(len(result), 20)
-            self.assertFalse(set(x['id'] for x in result[:10]) & set(x['id'] for x in tail))
-            self.assertEqual(set(x['id'] for x in result[:14]), set(x['id'] for x in head))
+            self.assertEqual([x['id'] for x in result], [x['id'] for x in head])
 
     def lane_build(self, items, front=(), anime=False):
         s = self.s
+        for x in items:
+            x.setdefault('_row', {})['anime_lane'] = anime
         model = {'aff': {'k:1': 1}, 'names': {'k:1': 'anime' if anime else 'cartoon'}}
         with patch.object(s, 'get_model', return_value=model), patch.dict(s._profiles, {'household': {'seen': set(), 'negative': set(), 'entries': []}}), \
                 patch.dict(s._feeds, {(rid('foryou', s.CONFIG), 'de-DE'): {'metas': {'tv': list(front)}}}, clear=True), \

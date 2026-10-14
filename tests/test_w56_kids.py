@@ -291,7 +291,7 @@ class Kids(unittest.TestCase):
                 patch.object(s, '_title_notes', {'model': None, 'notes': {}}), patch.object(s, 'maturity', return_value={'explicit': 0}), \
                 patch.object(s, 'frec', return_value={'title': 'Synthetic Safe', 'cr': {'US': 'G'}}), \
                 patch.object(s, 'person_score', return_value=(1, [])), patch.object(s, 'confidence', return_value=('Strong fit', 90)), \
-                patch.object(s, 'reasons', return_value=['Found family like ' + blocked]) as reasons, \
+                patch.object(s, 'reason_details', return_value=[('Found family like ' + blocked, 'movie:99001')]) as reasons, \
                 patch.object(s, 'feed_rows', return_value=[(s.rid('ana'), ('tv',), 'Same Feeling as ' + blocked)]), \
                 patch.object(s, 'feed', return_value={'names': {'title': 'Same Feeling as ' + blocked}}), \
                 patch.object(s, 'row_metas', return_value=[cached_card]):
@@ -304,7 +304,7 @@ class Kids(unittest.TestCase):
                     with self.subTest(viewer=viewer):
                         row = s.rows_view({'viewer': viewer, 'query': {'person': 'ana'}})['rows'][0]
                         self.assertNotIn(blocked, json.dumps(row))
-                        self.assertEqual(row['name'], 'Picked for you')
+                        self.assertEqual(row['name'], 'Our Picks')
                 self.assertEqual(s.title_view('tmdb:0', 'movie', 'ana')['reasons'], [])
                 reasons.assert_not_called()
             with self.prefs(ana={}):

@@ -260,7 +260,7 @@ class NewToYouRow(Base):
         self.assertNotIn(cid, before)
         day = dt.datetime(2026, 10, 13, 20)
         self.assertNotIn("newtoyou", [name for name, *_ in s.job_specs(day, {})])
-        rows = [k for k in members.ROW_KEYS if k not in ("digital", "toprated", "newtoyou")]
+        rows = [k for k in members.ROW_KEYS if k not in ("digital", "newtoyou")]
         with patch.dict(s.CONFIG["household"], rows=rows + ["newtoyou"]):
             self.assertTrue(s.row_enabled(cid))
             after = self.cids()
@@ -338,7 +338,7 @@ class NewToYouCandidates(Base):
     def test_feed_filters_and_needs_both_axes(self):
         s = self.s
         calls = []
-        def pool(m, p, xs, lang, seeds=6, extra=(), seed=None):
+        def pool(m, p, xs, lang, seeds=6, extra=(), seed=None, **kwargs):
             calls.append(list(xs))
             return list(self.pool)
         with patch.object(s, "feeling_pool", pool), patch.object(s, "day_index", return_value=0), \
@@ -471,7 +471,7 @@ class ReviewFixes(Base):
         self.assertEqual(items["ben"]["at"], int(NOW))
 
     def test_parse_command_version_bumped(self):
-        self.assertEqual(self.s.DECISIONS["parse_command"]["ver"], 12)
+        self.assertEqual(self.s.DECISIONS["parse_command"]["ver"], 13)
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ def doctor_keys(data):
         records = server.mixed_keys(data, facets)
         return {"mixed": len(records), "records": records}
     finally:
-        for name in ("_pool", "_outer", "_nzb_pool"):
+        for name in ("_pool", "_outer", "_search_pool", "_nzb_pool"):
             getattr(server, name).shutdown(wait=True, cancel_futures=True)
 
 
@@ -154,7 +154,7 @@ class Engine:
             if hasattr(self._server, "_decide_queue"):
                 self._server.flush_decisions()
                 self._server._decide_queue.put(False)
-            for name in ("_pool", "_outer", "_nzb_pool", "_connector_pool"):
+            for name in ("_pool", "_outer", "_search_pool", "_nzb_pool", "_connector_pool"):
                 pool = getattr(self._server, name, None)
                 if pool:
                     pool.shutdown(wait=True, cancel_futures=True)
@@ -350,8 +350,8 @@ class Engine:
         return {"person": person, "reference": {"kind": m.get("cal_reference"), "size": len(bg)},
                 "scores": scores, "rows": rows}
 
-    def explain(self, key):
-        return plain(self._server.explain(key, self._index.get(key, {}).get("kind")))
+    def explain(self, key, person=None):
+        return plain(self._server.explain(key, self._index.get(key, {}).get("kind"), person=person))
 
     def interview(self, person, answer=None):
         self._person(person)
@@ -409,7 +409,7 @@ class Engine:
         top = {fid for _, fid in good[:5]}
         evidence = self._evidence([ev for _, evts in stages for ev in evts], top, person, now, 5)
         view = s.title_view(key, kind, person)
-        explanation = self.explain(key)
+        explanation = self.explain(key, person)
         return {**explanation, **self.score(key, person), "parts": parts, "events": evidence,
                 "rung": (view or {}).get("rung"),
                 "bg_n": len(m.get("pbg", {}).get(person, []) if person else m["bg"]),
@@ -534,6 +534,11 @@ class Engine:
         report['unique_foryou_titles'] = len({(x['id'], x['type']) for x in cards})
         return report
 
+    def week(self, weeks=1, person=None):
+        s = self._server
+        latest = max((r['week'] for r in s._learn.get('week', [])), default=None)
+        return s.week_history(weeks, person, week=latest)
+
     def rows(self, lang=None):
         s = self._server
         lang = lang or s.LANG
@@ -547,6 +552,10 @@ class Engine:
                          "kind": "movie" if m.get("type") == "movie" else "tv", "why": self.score(m["id"])["reasons"] or
                          [m.get("description", "").split(" · ")[0]]} for m in metas]})
         return {"lang": lang, "rows": rows}
+
+    def reach(self, person=None, top=20):
+        from .reach import view
+        return view(self._server, person, top)
 
     def _rank(self, model, keys, person=None, display=False):
         score = self._server.person_score if display else self._server.score_key

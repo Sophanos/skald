@@ -51,7 +51,7 @@ class CLIDecideTests(unittest.TestCase):
             start = time.perf_counter()
             data = self.cli("decide", "--eval")
             self.assertLess(time.perf_counter() - start, 5)
-            self.assertEqual(len(data), 9)
+            self.assertEqual(len(data), 11)
             self.assertTrue(all(m["pass"] for m in data.values()))
             out = io.StringIO()
             self.assertEqual(main(["decide", "rank_titles", "--eval"], out=out), 0)

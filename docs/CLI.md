@@ -8,6 +8,12 @@ The copy is read-only. Imports are saved separately in `$XDG_DATA_HOME/skald`,
 or `~/.local/share/skald`. Change that with `--state-dir PATH`.
 `--json` prints machine results. Use `skald COMMAND --help` for flags.
 
+`skald ai status --json` reads saved OpenRouter credit, the last check and failure,
+Skald spending today and this month, and daily calls used per group. It works
+offline and writes nothing. Add `--refresh` to check the key once now, using
+`OPENROUTER_API_KEY` from the environment. `setup --status` shows a credit line.
+Ask Commander “how much AI credit is left?” to read the same saved numbers.
+
 ## See your taste
 
 | Command | What it does and an example |
@@ -18,13 +24,15 @@ or `~/.local/share/skald`. Change that with `--state-dir PATH`.
 | `taste why` | Explain a title's fit: `skald --snapshot /path/copy taste why tmdb:123 --person alex` |
 | `taste report` | Summarize recent learning: `skald --snapshot /path/copy taste report --since 7` |
 | `taste calibration` | Inspect the reference, score percentiles and cached row match bands without fetching or writing: `skald taste calibration --person alex --json` |
-| `explain` | Show scoring details and the household taste archetype: `skald --snapshot /path/copy explain tmdb:123` |
+| `explain` | Show scoring details, unseen known rank per person, Home row presence, feeling rows sourced from the tagged catalog and the household taste archetype: `skald --snapshot /path/copy explain tmdb:123 --json`. A served Top Rated pick includes its rating, relative taste match and row position; use `--person ana` for that member. |
 | `rows` | Preview rows: `skald --snapshot /path/copy rows --n 10` |
 | `rows pool [--json]` | Read today's seed choices and last background pool counts: `skald --snapshot /path/copy rows pool --json`; missing offline endpoints are reported, and counts carry their build time. |
-| `rows plan` | Explain every registered home row, including hidden rows: `skald rows plan --person household --lang en-US --json`. Reads local `DATA_DIR` or `--snapshot`; `--person` also accepts `together`, a member or `guest`. |
-| `rows why ROW` | Explain one row and its kept and dropped cards: `skald rows why mood1 --person ana --json`. Uses the same read-only build as `rows plan`. |
+| `rows reach [--person NAME] [--top N]` | Check how many best unseen known matches appear on each profile's Home, with row ids and the first drop reason for missing titles: `skald --snapshot /path/copy rows reach --top 20 --json`. Omit `--person` for the household and every member. Reads stored data offline; it does not source or rebuild feeds. `--top` defaults to 20 and accepts 1..10000. |
+| `rows plan` | Explain every registered home row, including hidden rows: `skald rows plan --person household --lang en-US --json`. Top Rated cards include type, position, TMDB rating, relative taste match (0..100) and blend score. Feeling rows include `candidate_sources`: catalog and recommendation counts before vetting or balancing, and `missing_cards` skipped because stored artwork is missing. Themed vetting examines the first 40 cards. Counts appear after a rebuild. Themed rows include `season.months` (month numbers, `"any"`, or `null` when unknown) and `season.hidden` for the household's local date. Reads local `DATA_DIR` or `--snapshot`; `--person` also accepts `together`, a member or `guest`. |
+| `rows why ROW` | Explain one row and its kept and dropped cards: `skald rows why mood1 --person ana --json`. Use `skald rows why toprated --person ana --json` to list ranked movies and series with rating and taste. Commander can read the same list through its Home plan operation, or hide and show the row with `hide top rated` and `show top rated series`. Both types share the `toprated` control. Uses the same read-only build as `rows plan`. |
 | `rows prefer` | Preview a household mood or lane limit change: `skald rows prefer --theme mood --more` or `--theme lane --fewer`. Defaults are three each; limits are 0..8. Apply with `--plan HASH` from the preview or `--yes`. Preview and apply refuse a reduction below six populated rows, or the current count if already lower, and never allow zero. Changes use the existing atomic `skald.json` write; the server reloads them on its next row request or worker pass. An explicit household `rows` list bypasses these limits. |
 | `rows refresh ROW` | Preview refreshing one row: `skald rows refresh mood1`. Apply with `--plan HASH` or `--yes`; the CLI atomically queues row ids in `DATA_DIR/row_refresh.json`, without writing feeds or calling upstream services. The worker clears those rows' stamps and deletes the request at the start of its next feed pass. Older servers ignore the request. A grouped mood or lane build can also rebuild its siblings. Queued CLI refreshes have no undo. |
+| `rows week [--weeks N] [--person NAME] [--json]` | Read saved weekly picks offline, including on an older snapshot. Defaults to the latest saved week; `--weeks 1..8` includes that week and earlier calendar weeks. For example: `skald --snapshot /path/copy rows week --weeks 4 --person ana --json`. |
 | `learn` | Inspect viewing signals: `skald --snapshot /path/copy learn` |
 | `suggest` | Read your weekly habits: `skald suggest --person alex`. Use `--dismiss ID` to hide a theme for 90 days in private DATA_DIR. Listing writes nothing; a read-only copy also works with `--snapshot`. |
 | `memory` | Inspect saved preferences: `skald --snapshot /path/copy memory` |
@@ -33,10 +41,23 @@ or `~/.local/share/skald`. Change that with `--state-dir PATH`.
 | `metrics` | Show counts per row, person and week for the current week and previous three: `skald metrics`. Reads local `DATA_DIR`; `skald --snapshot /path/copy metrics --days 7` includes weeks touching those days. Lists play sources, never titles. |
 | `metrics learning` | Read mature row learning without writing: `skald metrics learning --person alex --json`. Omit `--person` for the household. Shows decayed showings (S), credited plays (P), posterior (p), discovery baseline (p0), mature week support, learning (L) and why neutral. Mood and lane slots share family evidence. |
 | `health` | Read saved server checks, the last repair and alert availability: `skald health --json`. Reads local DATA_DIR or an explicit copy; makes no network requests. |
+| `search --explain-timing` | Read the last 15 saved search timings: `skald search --explain-timing --json`. Uses local `DATA_DIR` or `--snapshot`, with no network requests or writes. |
 
 `taste report` shows "Learned from N of M titles" for each adult: positive taste
 titles with a facet record out of their positive taste titles. Shared watches count
 for each adult. `--json` includes these counts under `coverage`, by member.
+
+Search timing includes total, title check, remaining settle wait, router, picker
+and resolution milliseconds. Resolution overlaps generation, so stages do not
+add up to the total. `first_line_ms` starts at picker submission; `early` means
+15 filtered, ranked picks were ready after 2.7 seconds. `picker_state` says
+whether generation was still running when the answer was served. `cached`
+means the AI answer was reused. Duplicate searches within 30 seconds keep the
+existing single log record. Old records may lack newer timing fields.
+Resolved public TMDB metadata is disposable in
+`DATA_DIR/.cache/search-resolve.sqlite3`: at most 5,000 entries, 8 MiB of keys
+and values, and a 12 MiB database. Stop the engine and delete this file to
+refresh its metadata on the next search.
 
 Each For You candidate pool invocation makes at most 34 TMDB list requests and
 fetches details for at most 50 uncached candidates, best ranked first. Ranking
@@ -86,7 +107,7 @@ The older `--live` route uses SSH and has no default host; set `SKALD_SSH_HOST` 
 | `setup link` | Issue a private laptop token: `skald setup link --name laptop --person alex` |
 | `setup prefs` | Set member rows: `skald setup prefs --person alex --discovery gems --years 1990- --exclude-movie-genres horror --exclude-series-genres reality,talk --hide documentaries,anime --focus-movie-genres horror,drama --focus-series-genres drama --focus-languages es --focus-countries ES`; `--hide` adds movies, series, documentaries, animation or anime; `--show anime` removes a hide; focus ranks without filtering; empty focus lists clear that group. `--kids-age 8` (3..17) limits all Skald rows and search for that child; `--kids-age off` clears it. Other addons and streams are not filtered; use the app's profile lock too. TMDB ratings can be missing (titles are hidden) or wrong. Reset with `skald setup prefs --person alex --clear`. Omitted flags keep other settings; `setup --status` shows each member. |
 | `setup adopt` | Make a legacy household editable without changing its config: `skald setup adopt --yes` |
-| `setup rows KEY,KEY,...` | Choose home rows in Skald's usual order: `skald setup rows episodes,foryou,top10,digital,toprated`. The two movie lists and New to You (`newtoyou`) are opt-in; search stays available. `skald setup rows all` restores default rows. See [setup](SETUP.md) for valid keys. Changes refresh AIOStreams rows. |
+| `setup rows KEY,KEY,...` | Choose home rows in Skald's usual order: `skald setup rows episodes,foryou,top10,digital,toprated`. Top Rated movies and series are on by default; Latest Digital Releases and New to You (`newtoyou`) are opt-in. An explicit list keeps exactly those rows; search stays available. `skald setup rows all` restores default rows. See [setup](SETUP.md) for valid keys. Changes refresh AIOStreams rows. |
 | `connectors test` | Probe a source without saving history: `skald connectors test jellyfin --json` |
 | `connectors` | Inspect saved source health: `skald --snapshot /path/copy connectors` |
 | `trakt login` | Authorize a configured Trakt app: `skald trakt login --person alex` |
@@ -202,6 +223,10 @@ Repeat with `--plan HASH` or `--yes` to apply; one undo restores the reset.
 Add `for us` to reset adult filters or Together shelves. Personal shelves stay intact.
 Together filter resets need a shared link or an unbound CLI/API session.
 Resets preserve ratings, learned taste, imports, viewing history and household rows.
+
+This Week keeps new, worthwhile picks fixed from Monday at local midnight until the next Monday. Movies need a digital or streaming release in the last 42 days; series need a premiere or season start in the last 28 days. Charts alone do not qualify. Known calibrated matches need at least 70%; without calibration, only the leading fifth of raw taste scores qualifies (at least 3, at most 12 candidates). The row shows fewer cards when needed and hides below six. Watched or disliked titles drop out during the week. People changes rebuild it; other taste changes wait until next week.
+
+The background job reuses cached releases. If it has no recent movie candidates, it can fetch one digital discovery page and check at most 12 movies, even with the Digital row disabled. It never looks up releases while serving the row. It attempts at most one weekly model call across languages and restarts, under the existing feed budget with label `week`; failures and people changes use taste order with factual reasons. Eight weeks of picks stay in `learn.json`; older versions ignore these extra keys. Ask Commander “show this week's picks”, “what was new last week?” or “show the last 3 weeks of saved picks”. These are read-only requests understood by the command model. German and Serbian work too.
 History keeps 180 days and at most 200 entries per scope, including undone entries.
 Undated legacy entries stay and support plain undo; they cannot be targeted or redone.
 Children can read their history and manage their own shelves through command previews.
@@ -220,6 +245,7 @@ Title commands work on one title and preview first like other changes.
 `I already watched Arrival`, `ich habe Arrival schon gesehen` and `već sam gledao Arrival` mark it seen.
 `don't learn from my watching of Arrival` keeps that plain watch out of your taste and your share of the household taste; it still counts as watched, and your ratings of it still count. `Ben watched Arrival, not me` moves your watch of it to Ben, who can then fix it the same way. Both need a recorded watch of yours and change taste only, not household history.
 `why is Arrival in my picks` explains the row without changing anything.
+`are my best matches on my home?` reads reach for your profile, with the row ids and why missing matches were dropped. It changes nothing.
 `the movie Calm` or `der Film Happy` searches for a title with that name.
 Plain `undo` reverts a title command; `undo` with a phrase does not target them. Forgetting a person also removes their title fixes; a moved watch goes with the member it moved to.
 
@@ -228,3 +254,29 @@ Plain `undo` reverts a title command; `undo` with a phrase does not target them.
 `skald shelf add --person ana --when "sun 05-12" --name "Sunday Classics" "a classic film"` previews a wish and prints its plan hash. Repeat with `--yes` or `--plan HASH` to apply. Use `--together` instead of `--person` for shared slots.
 `skald shelf list [--person ana]` lists wishes. `skald shelf stop --person ana NAME` stops one; a slot number also works. `skald shelf replace --person ana --slot 1 --yes "another wish"` replaces it.
 `skald shelf count --person ana 6` or `skald shelf count --together 3` changes the number of slots. These commands use local DATA_DIR. GET `/api/v1/shelves` lists a bound member's own wishes plus Together; POST accepts `{ "plan": "HASH" }` from a local preview. Child and guest tokens cannot use this API.
+
+`python -m skald rows names --json` lists every row ID, its label key, the label shown
+in the household language, its source (`fixed`, `template`, `ai`, or `custom`), and
+missing translation keys. `--lang de-DE` previews another UI language. It reads
+only local config and cached row names, including hidden rows. Use `--snapshot DIR`
+for a copied directory. It never builds rows or contacts a service.
+
+Ask Commander “What are my rows called?”, “Wie heißen meine Reihen?” or
+“Kako se zovu naši redovi?” for the same read-only list. Rename an existing row with
+`python -m skald command "rename For You to Ana Picks" --person ana --json`.
+Review the preview, then repeat it with `--plan HASH` to confirm. Commander also
+previews row renames and waits for confirmation. Custom names use the existing
+`household.row_labels` setting and take priority over translated or AI names.
+
+Fixed row names and card labels use `region.lang`, with English fallback per key.
+Serbian scripts can be set with `sr-Latn-RS` or `sr-Cyrl-RS`.
+Keyword lanes get one naming call per lanes pass, batching only lanes without a
+name in that language. Successful names stay in `learn.json` under each lane's
+`titles` map. No AI, a failed response, or a spent feed cap keeps the old name.
+Names are natural phrases of at most four words in the household language, with
+no `&` double titles. Code checks the word count; the naming decision chooses the wording.
+The call shares `AI_DAILY_FEED_CALLS` (40 by default); a stable set of named lanes
+adds no daily calls. Names survive retirement and restarts. Existing cached card
+reasons refresh on their next feed build. New episode and season details appear
+in the card description. The optional cache keys keep DATA at FORMAT 5, so the
+previous build can still load it without a migration.

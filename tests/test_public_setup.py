@@ -65,8 +65,8 @@ class PublicSetupTests(unittest.TestCase):
         source = (ROOT/'server.py').read_text()
         self.assertEqual(members.DEFAULT_ADDON['id'], 'community.skald')
         self.assertEqual(members.LEGACY['addon']['id'], 'community.skald.legacy')
-        self.assertIn('Because you loved Paddington 2', source)
-        self.assertIn('Witty banter duo like Moonlighting', source)
+        self.assertIn('a connection to a favourite', source)
+        self.assertIn('Localized reasons paired with their anchor identity', source)
 
     def test_stack_template(self):
         source = (ROOT/'compose.stack.example.yaml').read_text()

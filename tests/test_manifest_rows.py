@@ -213,7 +213,7 @@ class ManifestRows(unittest.TestCase):
         self.assertEqual([r['name'] for r in rows if r['id'] in s.MOODS_ROWS],
                          ["Tonight's Mood", "Tonight's Mood · 2", "Tonight's Mood · 3", "Tonight's Mood · 4"])
         self.assertEqual([r['name'] for r in rows if r['id'] in s.LANES],
-                         ['Picked for You'] + [f'Picked for You · {i}' for i in range(2, 6)])
+                         ['Our Picks'] + [f'Our Picks · {i}' for i in range(2, 6)])
         self.put(s.MOODS_ROWS[0], [])
         self.put(s.MOODS_ROWS[1], cards(6), title='Built Mood')
         rows = self.rows()

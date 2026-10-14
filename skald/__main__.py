@@ -75,6 +75,10 @@ def parser():
 
     from . import setup
     setup.add_parser(commands)
+    ai = commands.add_parser('ai', help='show saved AI credit and spending').add_subparsers(dest='ai_action', required=True)
+    status = ai.add_parser('status', help='show saved credit; --refresh checks OpenRouter once')
+    status.add_argument('--refresh', action='store_true', help='check OpenRouter now')
+    status.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
     command = commands.add_parser("command", help="preview, apply or undo a personal change")
     command.add_argument("text", nargs="?", default="", help="one personal change; repeat text with --plan")
     command.add_argument("--person", required=True)
@@ -111,7 +115,14 @@ def parser():
     rows.add_argument("--n", type=int, default=10)
     rows.add_argument("--lang", default=members.CONFIG["region"]["lang"])
     row_actions = rows.add_subparsers(dest="rows_action")
+    names = row_actions.add_parser("names", help="list cached row names and translation keys")
+    names.add_argument("--lang", default=argparse.SUPPRESS, help="inspect this UI language")
+    names.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     row_actions.add_parser("pool", help="inspect pool seeds and cached counts").add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    reach = row_actions.add_parser('reach', help='check whether your best known matches reach Home')
+    reach.add_argument('--person', choices=('household', 'together', *PEOPLE))
+    reach.add_argument('--top', type=int, default=20, help='number of best unseen known matches, 1..10000 (default: 20)')
+    reach.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
     for op in ('plan', 'why', 'prefer', 'refresh'):
         c = row_actions.add_parser(op, help={'plan': 'explain every home row', 'why': 'explain one row and its cards',
                                        'prefer': 'change a household row family cap', 'refresh': 'queue a row refresh for the worker'}[op])
@@ -129,6 +140,10 @@ def parser():
             direction = c.add_mutually_exclusive_group(required=True)
             direction.add_argument('--more', action='store_true', help='raise the row limit by one')
             direction.add_argument('--fewer', action='store_true', help='lower the row limit by one')
+    week = row_actions.add_parser("week", help="read saved weekly picks offline")
+    week.add_argument("--weeks", type=int, default=1, help="calendar weeks to read, 1..8")
+    week.add_argument("--person", help="member name")
+    week.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     react = cmd(commands, "react")
     react.add_argument("action", nargs="?", choices=("love", "loves", "like", "likes", "meh", "seen", "not_for_us", "not_tonight", "interest"))
     react.add_argument("title", nargs="*")
@@ -148,6 +163,9 @@ def parser():
         "--person", "--member", dest="person", choices=PEOPLE if not members.CONFIG_ERROR else None)
     cmd(commands, "learn")
     cmd(commands, "health")
+    search = commands.add_parser("search", help="inspect saved search timing")
+    search.add_argument("--explain-timing", action="store_true", required=True, help="show stage times for the last 15 searches")
+    search.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     metrics = cmd(commands, "metrics")
     metrics.add_argument("--days", type=int, help="include row weeks touching the last 1..35 days (default: 4 weeks)")
     learning = metrics.add_subparsers(dest="metrics_action").add_parser("learning", help="show mature row learning without writing")
@@ -394,6 +412,10 @@ def execute(args, engine, state, snapshot, out=None):
     if args.command == "explain":
         return engine.trace(title_key(engine, args.title), args.person)
     if args.command == "rows":
+        if args.rows_action == "week":
+            return engine.week(args.weeks, args.person)
+        if args.rows_action == 'reach':
+            return engine.reach(args.person, args.top)
         if args.rows_action == "pool":
             return engine.pool()
         if args.rows_action in ('plan', 'why'):
@@ -570,6 +592,8 @@ def text_output(args, data, out):
         taste_line(arch.get(getattr(args, "person", None)) or arch.get("household"))
         for reason in data["reasons"]:
             line("  " + reason)
+        if data.get('feeling_catalog_rows'):
+            line('  From the tagged catalog in feeling rows: '+', '.join(data['feeling_catalog_rows']))
         for facet in data.get("facets", [])[:6]:
             line(f"  {facet['name'][:34]:34} {facet['affinity']:6.3f}  {', '.join(facet['anchors'][:2])}")
         for person, split in data.get("per_person", {}).items():
@@ -580,6 +604,15 @@ def text_output(args, data, out):
             for e in data["events"]:
                 line(f"  {e['src']} {e['day'] or 'undated'} {e['weight']:+.3f} · {e['title']}")
     elif args.command == "rows":
+        if args.rows_action == "week":
+            for week in data['weeks']:
+                line(week['week'])
+                for pick in week['picks']:
+                    line(f"  {pick['member']}: {pick['title']} ({pick['id']}) · {pick['reason']}")
+        if args.rows_action == 'reach':
+            from .reach import text
+            line(text(data))
+            return
         if args.rows_action == "pool":
             line(f"Pool: {data['pool_size']} candidates")
             if data.get('counts_built_at') is not None:
@@ -788,8 +821,8 @@ def main(argv=None, out=None):
         from . import migrate
         cli_argv = sys.argv[1:] if argv is None else argv
         readonly_align = known.command == "taste" and "align" in cli_argv
-        row_control = known.command == 'rows' and any(v in ('plan', 'why', 'prefer', 'refresh') for v in cli_argv)
-        if not known.snapshot and not known.live and not known.remote and known.command != "suggest" and not readonly_align and not row_control and not calibration and not (
+        row_control = known.command == 'rows' and any(v in ('plan', 'why', 'prefer', 'refresh', 'names', 'reach') for v in cli_argv)
+        if not known.snapshot and not known.live and not known.remote and known.command not in ("suggest", "ai", "search") and not readonly_align and not row_control and not calibration and not (
                 known.command == "metrics" and "learning" in cli_argv) and not any(
                 flag in cli_argv for flag in ('--help', '-h')):
             local_data = os.environ.get("DATA_DIR", "/data")
@@ -808,6 +841,29 @@ def main(argv=None, out=None):
         if members.CONFIG_ERROR and (isinstance(members.CONFIG_ERROR, FormatError) or args.command not in ("backup", "doctor", "connect")):
             raise members.CONFIG_ERROR
         state = Path(args.state_dir).resolve()
+        if args.command == "rows" and args.rows_action == "names":
+            if args.live:
+                raise ValueError("rows names reads local DATA_DIR or --snapshot only; omit --live")
+            from .row_names import view
+            data = view(args.snapshot or os.environ.get("DATA_DIR", "/data"), members.CONFIG, args.lang)
+            if args.json:
+                print(json.dumps(data, ensure_ascii=False), file=out)
+            else:
+                for row in data['rows']:
+                    print(row['id'] + ': ' + str(row['label']) + ' (' + row['source'] + ')' +
+                          ('; missing: ' + ', '.join(row['missing']) if row['missing'] else ''), file=out)
+            return 0
+        if args.command == "search":
+            from .search import timings
+            if args.live:
+                raise ValueError("search timing reads local DATA_DIR or --snapshot")
+            data = timings(args.snapshot or os.environ.get("DATA_DIR", "/data"))
+            if args.json:
+                print(json.dumps(data, ensure_ascii=False), file=out)
+            else:
+                for row in data["searches"]:
+                    print(row.get("q", "") + ": " + json.dumps(row["timing"], ensure_ascii=False), file=out)
+            return 0
         if args.command == "taste" and args.taste == "calibration":
             if args.live:
                 raise ValueError("taste calibration reads local data only; omit --live")
@@ -914,13 +970,14 @@ def main(argv=None, out=None):
                     data = s.shelf_change(scope, args.shelf_op, apply=getattr(args, "yes", False) or args.shelf_op in ("stop", "count"), **kwargs)
             print(json.dumps(data, ensure_ascii=False, indent=None if args.json else 2), file=out)
             return 0
-        if args.command == 'rows' and args.rows_action in ('plan', 'why'):
+        if args.command == 'rows' and args.rows_action in ('plan', 'why', 'reach'):
             from . import rowplan
             if args.live:
-                raise ValueError('rows plan and why use local DATA or --snapshot')
+                raise ValueError('rows plan, why and reach use local DATA or --snapshot')
             with Engine(args.snapshot or os.environ.get('DATA_DIR', '/data'), offline=True) as engine:
-                data = rowplan.plan(engine._server, args.person, args.lang) if args.rows_action == 'plan' else rowplan.why(engine._server, args.row_name, args.person, args.lang)
-            print(json.dumps(data, ensure_ascii=False) if args.json else '\n'.join(rowplan.text(data)), file=out)
+                data = engine.reach(args.person, args.top) if args.rows_action == 'reach' else rowplan.plan(engine._server, args.person, args.lang) if args.rows_action == 'plan' else rowplan.why(engine._server, args.row_name, args.person, args.lang)
+            from .reach import text as reach_text
+            print(json.dumps(data, ensure_ascii=False) if args.json else reach_text(data) if args.rows_action == 'reach' else '\n'.join(rowplan.text(data)), file=out)
             return 0
         if args.command == 'rows' and args.rows_action in ('prefer', 'refresh'):
             from . import commands
@@ -943,6 +1000,18 @@ def main(argv=None, out=None):
                     with patch.object(s, 'DATA', str(data_dir)):
                         data = commands.apply(s, data)
             print(json.dumps(data, ensure_ascii=False) if args.json else data['name'] + ('? Plan: '+data['plan'] if 'plan' in data else ''), file=out)
+            return 0
+        if args.command == 'ai':
+            from . import ai, setup
+            if args.live or args.snapshot and args.refresh:
+                raise ValueError('AI refresh uses local DATA_DIR; omit --snapshot and --live')
+            with setup.server(Path(args.snapshot or os.environ.get('DATA_DIR', '/data'))) as s:
+                if args.refresh:
+                    with redirect_stdout(sys.stderr):
+                        s.check_ai_credit(refresh=True)
+                    s.load_usage()
+                data = s.ai_status()
+                print(json.dumps(data, ensure_ascii=False) if args.json else ai.text(data, s.LANG, detailed=True), file=out)
             return 0
         if args.command == "command":
             from . import commands, setup
@@ -986,6 +1055,7 @@ def main(argv=None, out=None):
             elif args.command == "connect":
                 print(data["message"], file=out)
             elif args.status:
+                print(data['ai_credit'], file=out)
                 print("Release: " + data["release"], file=out)
                 print("Data format: " + str(data["data_format"]), file=out)
                 print("Done: " + (", ".join(data["done"]) or "nothing yet"), file=out)

@@ -214,7 +214,7 @@ class SearchTests(unittest.TestCase):
                         plan = self.s.ai_future("something cozy for tonight", stype=stype)
                         picks = plan.result(timeout=2)["picks"]
                         picks.result(timeout=2)
-                        picks.search_fallback.result(timeout=2)
+                        self.s.search_backup(picks).result(timeout=2)
                         self.assertIs(plan, self.s.ai_future("something cozy for tonight", stype=stype))
                         prompt = self.llm_text.call_args.args[1]
                         self.assertIn("Romance" if scope == "ben" else "Action", prompt)
@@ -263,7 +263,7 @@ class SearchTests(unittest.TestCase):
                         release.set()
                         picks = plan.result(timeout=2)["picks"]
                         picks.result(timeout=2)
-                        picks.search_fallback.result(timeout=2)
+                        self.s.search_backup(picks).result(timeout=2)
                     prompt = self.llm_text.call_args.args[1]
                     self.assertIn("Romance", prompt)
                     self.assertNotIn("Action", prompt)
@@ -316,7 +316,7 @@ class SearchTests(unittest.TestCase):
     def test_canon_skips_rerank_and_taste_only_reranks_unseen(self):
         self.legacy_picker()
         self.s._profiles["household"] = {"seen": {"tmdb:1", "tmdb:4"}, "negative": {"tmdb:3"}}
-        with patch.object(self.s, "taste_rerank", side_effect=lambda metas: metas[::-1]) as rerank:
+        with patch.object(self.s, "taste_rerank", side_effect=lambda metas, **kw: metas[::-1]) as rerank:
             self.assertEqual([m["id"] for m in self.search_results("best all times", "movie", listing="best")],
                              ["tmdb:2", "tmdb:5", "tmdb:1", "tmdb:4"])
             rerank.assert_not_called()
@@ -399,9 +399,9 @@ class SearchTests(unittest.TestCase):
         for scope, ids in [("ana", [1]), ("ben", [4]), ("together", [4, 1]), (None, [4, 1])]:
             with self.subTest(scope=scope):
                 self.assertEqual([m["id"] for m in self.seen_results(scope)], [f"tmdb:{i}" for i in ids])
-        self.assertEqual(self.llm_text.call_count, 8)
+        self.assertEqual(self.llm_text.call_count, 4)
         self.seen_results("ana")
-        self.assertEqual(self.llm_text.call_count, 8)
+        self.assertEqual(self.llm_text.call_count, 4)
 
     def test_scoped_unseen_and_neutral(self):
         self.legacy_picker()
@@ -485,13 +485,13 @@ class SearchTests(unittest.TestCase):
                 self.assertEqual(self.s.search("movie", "anime I haven't watched", "en-US")["metas"], [])
                 self.assertEqual(resolve.call_count, 2)
 
-    def test_seen_plain_fallbacks(self):
+    def test_seen_title_paths(self):
         self.history()
         query = "anime I have already seen"
-        for mode in ("no_key", "title_only", "exact", "router_title"):
+        for mode in ("title_only", "exact", "router_title"):
             self.s._ai.clear()
             self.tmdb.return_value = {"results": [{"id": 1, "title": query if mode == "exact" else "Other"}]}
-            with patch.object(self.s, "OR_KEY", "" if mode == "no_key" else "offline"), \
+            with patch.object(self.s, "OR_KEY", "offline"), \
                     patch.object(self.s, "looks_like_title", return_value=False), \
                     patch.object(self.s, "superseded", return_value=False), \
                     patch.object(self.s, "decide", return_value={"answer": {"choice": "title", "confidence": .9}}):

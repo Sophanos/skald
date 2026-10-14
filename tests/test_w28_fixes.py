@@ -120,7 +120,7 @@ class W28Fixes(unittest.TestCase):
         order = Path(self.temp.name)/'order.mjs'
         with setup.server(self.data) as s:
             requests = [(cid, typ) for cid in s.DEDUPE_ORDER if s.row_enabled(cid) for typ in
-                        (('movie', 'series') if cid == s.rid('top10') else ('series',) if cid in (s.rid('episodes'), s.rid('airing'), s.rid('nextseason')) else ('tv',))]
+                        (('movie', 'series') if cid in (s.rid('top10'), s.rid('toprated')) else ('series',) if cid in (s.rid('episodes'), s.rid('airing'), s.rid('nextseason')) else ('tv',))]
             order.write_text('const ORDER = [' + ','.join(repr('player.' + cid.split('.', 1)[1] + ':' + typ) for cid, typ in requests) + '];')
             with patch.object(s, 'row_metas', return_value=[]):
                 rows = rows_report.display_rows(s, order=order)

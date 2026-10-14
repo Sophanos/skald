@@ -34,9 +34,15 @@ class NeutralPromptTests(unittest.TestCase):
 
     def prompts(self):
         s = self.s
+        candidate = {'id': 'tmdb:2', 'name': 'Invented Harbor', 'type': 'movie', '_week_pct': 80,
+                     '_row': {'watchable': '2026-10-01', 'date': '2026-10-01'}}
+        s._learn.pop('week', None)
+        with patch.object(s, 'OR_KEY', 'synthetic'), patch.object(s, 'get_model', return_value={'cal': True}), \
+                patch.object(s, 'week_candidates', return_value=[candidate]), \
+                patch.object(s, 'week_scope', return_value=[candidate]), patch.object(s, 'llm_text', return_value='{}') as llm:
+            s.week_feed('en-US')
+            week = '\n'.join(llm.call_args.args[:2])
         with patch.object(s, "llm_sections", return_value={}) as llm:
-            s.week_feed("en-US")
-            week = "\n".join(llm.call_args.args[:2])
             s.personal_feed("en-US")
             personal = "\n".join(llm.call_args.args[:2])
         body = s.DECISIONS["mood_pick"]["llm"]["prompt"]([{"state": [s.mood_state({"names": {}, "aff": {}})]}])

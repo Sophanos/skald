@@ -43,7 +43,7 @@ class Makers(unittest.TestCase):
         s, xs = self.s, cards(10)
         self.evidence(s.PEOPLE[0], signal='liked')
         out, fetch = self.build({'d:1': xs})
-        self.assertEqual(out['_names'], {s.LANES[0]: {'title': 'More from Maker 1', 'lane': 'd:1'}})
+        self.assertEqual(out['_names'], {s.LANES[0]: {'title': 'More from Maker 1', 'lane': 'd:1', 'months': None, 'maker': True, 'name': 'Maker 1'}})
         self.assertEqual(out[s.LANES[0]]['tv'], xs)
         fetch.assert_called_once_with('d:1', 'en-US', makers_only=True)
 
@@ -51,7 +51,7 @@ class Makers(unittest.TestCase):
         s = self.s
         self.evidence(s.PEOPLE[0], signal='liked')
         out, fetch = self.build({'d:1': cards(7), 'k:1': cards(20, 100)}, themes=('k:1',))
-        self.assertEqual(out['_names'], {s.LANES[0]: {'title': 'Title k:1', 'lane': 'k:1'}})
+        self.assertEqual(out['_names'], {s.LANES[0]: {'title': 'Title k:1', 'lane': 'k:1', 'months': None, 'maker': False, 'name': 'k:1'}})
         self.assertEqual([call.args[0] for call in fetch.call_args_list], ['d:1', 'k:1'])
 
     def test_theme_with_ten_items_is_skipped(self):
@@ -89,7 +89,7 @@ class Makers(unittest.TestCase):
         s._feeds[s.rid('week'), 'en-US'] = {'metas': {'tv': xs[2:4]}}
         out, fetch = self.build({'d:1': xs})
         cid = next(iter(out['_names']))
-        self.assertEqual(out['_names'][cid], {'title': 'More from Maker 1', 'lane': 'd:1'})
+        self.assertEqual(out['_names'][cid], {'title': 'More from Maker 1', 'lane': 'd:1', 'months': None, 'maker': True, 'name': 'Maker 1'})
         self.assertEqual(out[cid]['tv'], xs[4:])
         self.assertEqual(self.build({'d:1': xs[:11]})[0]['_names'], {})
 
@@ -97,7 +97,7 @@ class Makers(unittest.TestCase):
         s, xs = self.s, cards(20)
         self.evidence(s.PEOPLE[0])
         self.put(s.LANES[0], xs, 'd:1')
-        s._feeds[s.LANES[0], 'de-DE']['names']['title'] = 'More from Maker 1'
+        s._feeds[s.LANES[0], 'de-DE']['names'].update(title='More from Maker 1', maker=True, name='Maker 1')
         p = s._profiles['household']
         for who, expected in ((s.PEOPLE[0], True), (s.PEOPLE[1], False), ('both', False), ('none', True)):
             self.assertEqual(bool(s.served_row(s.LANES[0], 'tv', 'de-DE', p, set(), (set(), set()), who)), expected)
@@ -109,6 +109,17 @@ class Makers(unittest.TestCase):
         before = lanes.LanesR3.build(self, {'k:1': cards(20)})
         self.evidence(self.s.PEOPLE[0], n=1)
         self.assertEqual(lanes.LanesR3.build(self, {'k:1': cards(20)}), before)
+
+    def test_legacy_maker_pin_keeps_owner_restriction_without_new_flags(self):
+        s = self.s
+        self.evidence(s.PEOPLE[0])
+        self.put(s.LANES[0], cards(20), 'd:1')
+        names = {'title': 'More from Invented Maker', 'lane': 'd:1'}
+        s._feeds[s.LANES[0], 'de-DE']['names'] = names
+        for who, expected in ((s.PEOPLE[0], True), (s.PEOPLE[1], False), ('both', False), ('none', True)):
+            with self.subTest(who=who):
+                self.assertEqual(bool(s.served_row(s.LANES[0], 'tv', 'de-DE', s._profiles['household'], set(), (set(), set()), who)), expected)
+        self.assertEqual(names, {'title': 'More from Invented Maker', 'lane': 'd:1'})
 
     def test_each_member_gets_their_strongest_maker(self):
         s = self.s
@@ -144,7 +155,7 @@ class Makers(unittest.TestCase):
             e['opinions'] = {s.PEOPLE[1]: {'signal': 'disliked', 'weight': -1}}
         self.assertTrue(s.maker_seeds(p, s.PEOPLE[0]))
         self.assertEqual(s.maker_seeds(p, s.PEOPLE[1]), [])
-        self.assertFalse(s.maker_view({'title': 'More from Maker 1', 'lane': 'd:1'}, p, 'both'))
+        self.assertFalse(s.maker_view({'title': 'More from Maker 1', 'lane': 'd:1', 'maker': True, 'name': 'Maker 1'}, p, 'both'))
 
     def test_remote_hidden_candidate_is_excluded(self):
         s, xs = self.s, cards(17)
@@ -158,7 +169,7 @@ class Makers(unittest.TestCase):
         s = self.s
         self.evidence(s.PEOPLE[0])
         self.put(s.LANES[0], cards(20), 'd:1')
-        s._feeds[s.LANES[0], 'de-DE']['names']['title'] = 'More from Maker 1'
+        s._feeds[s.LANES[0], 'de-DE']['names'].update(title='More from Maker 1', maker=True, name='Maker 1')
         self.put(s.LANE_BENCH[0], cards(20, 100), 'k:2')
         with patch.object(s, 'DEDUPE_ORDER', s.LANES), patch.object(s, 'LANG', 'de-DE'), \
                 tempfile.TemporaryDirectory() as temp, patch.object(s, 'DATA', temp):

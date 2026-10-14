@@ -68,7 +68,9 @@ class TogetherFixes(unittest.TestCase):
             return {name: stamp for name, _, stamp, _, _ in s.job_specs(s.local_now(), {'household': 'same'})}
         with patch.dict(s.CONFIG['household'], {'row_order': []}), patch.object(s, 'OR_KEY', 'synthetic'):
             before = stamps()
-            self.assertEqual(hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(), 'b8114b2e7a062c15d6fcaee8293b864a5a700d789f7a3a5598d615913718da72')
+            # Week now uses the calendar boundary and full people signature; other stamps stay unchanged.
+            self.assertIn('toprated', before)
+            self.assertEqual(hashlib.sha256(json.dumps({k: v for k, v in before.items() if k not in ('week', 'toprated')}, sort_keys=True).encode()).hexdigest(), 'f11d7d332700d517c9563b7a82f58897199e9dda2d856af872acaff7013efd62')
             with self.prefs(ana={'kids_age': 8}):
                 child = stamps()
             with self.prefs(ana={'kids_age': 13}):
@@ -77,7 +79,10 @@ class TogetherFixes(unittest.TestCase):
                 other = stamps()
             for job in ('rewatch', 'upcoming', 'catchup', 'because', 'leap', 'lanes', 'moods', 'docs', 'studios', 'personal', 'week', 'docsai'):
                 self.assertNotEqual(before[job], child[job], job)
-                self.assertEqual(child[job], older[job], job)
+                if job == 'week':
+                    self.assertNotEqual(child[job], older[job], job)
+                else:
+                    self.assertEqual(child[job], older[job], job)
                 self.assertNotEqual(child[job], other[job], job)
             for job in ('episodes', 'top10', 'airing', 'nextseason', *s.PEOPLE):
                 if job in before:

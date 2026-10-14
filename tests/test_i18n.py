@@ -122,6 +122,11 @@ class I18nTests(unittest.TestCase):
                 prefix = 'weekday.' if name == 'WD_SHORT' else 'month.'
                 for i in range(*(ast.literal_eval(arg) for arg in node.value.generators[0].iter.args)):
                     self.assertIn(prefix + str(i), strings)
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == 'seed_label':
+                for part in ast.walk(node):
+                    if isinstance(part, ast.Constant) and isinstance(part.value, str) and part.value.startswith('row.seed.') and part.value != 'row.seed.':
+                        self.assertIn(part.value, strings)
         functions = {'feed_rows', 'row_name', 'memory_why', 'seed_phrase', 'reasons',
                      'confidence', 'episode_label', 'manifest', 'remote_rows', 'rows_view', 'guest_rows_view'}
         definitions = {'DOC_ROWS', 'DOC_TREND', 'STUDIOS', 'LANE_TEMPLATE', 'MOODS', 'EXPERIENCES'}

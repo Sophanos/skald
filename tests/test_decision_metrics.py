@@ -14,7 +14,7 @@ from decide_kit import close_server, fixture_rows, load_server, run_type
 class DecisionMetricsTests(unittest.TestCase):
     def test_live_case_loader_has_accepted_routes_and_optional_fields(self):
         rows = decisions.live_cases()
-        self.assertEqual(len(rows), 225)
+        self.assertEqual(len(rows), 235)  # Ten AI credit and title-lookalike routing cases.
         self.assertEqual({r['lang'] for r in rows}, {'en', 'de', 'sr', 'es', 'pt'})
         self.assertEqual(next(r for r in rows if r['q'] == 'Dark')['route'], ['title'])
         self.assertEqual(next(r for r in rows if r['q'] == 'Dark series')['route'], ['title', 'request'])

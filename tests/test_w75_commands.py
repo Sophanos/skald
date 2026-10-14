@@ -235,7 +235,7 @@ class SettingsHistory(unittest.TestCase):
         self.assertEqual(shelves.read(self.s)['wishes'], [])
 
     def test_new_decision_rules_and_unsupported_taste_reset(self):
-        self.assertEqual(self.s.DECISIONS['parse_command']['ver'], 12)
+        self.assertEqual(self.s.DECISIONS['parse_command']['ver'], 13)
         cases = {'what did I change': ('history', []), 'Verlauf': ('history', []),
                  'undo no horror': ('undo', ['no horror']), 'undo the crime shelf': ('undo', ['the crime shelf']),
                  'bring back horror': ('undo', ['horror']), 'redo no horror': ('redo', ['no horror']),

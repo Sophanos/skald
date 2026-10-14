@@ -39,7 +39,7 @@ class SearchRouting(unittest.TestCase):
                 ('decide', {'return_value': {'answer': self.route}}),
                 ('llm_picks', {'return_value': self.picks}),
                 ('search_rules', {'return_value': {'from': None, 'to': None, 'exclude': []}}),
-                ('taste_rerank', {'side_effect': lambda metas: metas})):
+                ('taste_rerank', {'side_effect': lambda metas, **kw: metas})):
             mock = patch.object(s, name, **kwargs)
             setattr(self, name, mock.start())
             self.addCleanup(mock.stop)
@@ -59,7 +59,7 @@ class SearchRouting(unittest.TestCase):
             if picks is not None and not picks.cancelled():
                 picks.result(timeout=2)
                 for job in (getattr(picks, 'search_fallback', None), getattr(picks, 'search_rules', None)):
-                    if job is not None:
+                    if job is not None and not job.cancelled():
                         job.result(timeout=2)
 
     def resolve(self, kind, title, year, lang):
@@ -93,7 +93,9 @@ class SearchRouting(unittest.TestCase):
                 self.s._ai.clear()
                 self.route.update(watched=watched, list='best')
                 with self.subTest(order=order, watched=watched), patch.object(self.s, 'SEARCH_ORDER', order):
-                    self.assertEqual([m['id'] for m in self.results()], expected)
+                    metas = self.results()
+                    self.assertTrue(metas[0]['id'].startswith(self.s.rid('cmd:')))
+                    self.assertEqual([m['id'] for m in metas[1:]], expected)
 
     def test_failed_or_cancelled_picker_is_retried_after_recovery(self):
         self.legacy_picker()
@@ -107,7 +109,7 @@ class SearchRouting(unittest.TestCase):
             recovered = Future()
             recovered.set_result(self.picks[:5])
             with self.subTest(picker=picker), patch.object(self.s, 'search_picks', side_effect=[picker, recovered]) as pick:
-                self.assertEqual(self.results('Animes I havent watched'), [])
+                self.assertTrue(self.results('Animes I havent watched')[0]['id'].startswith(self.s.rid('cmd:')))
                 self.assertEqual([m['id'] for m in self.results('Animes I havent watched')], ['tmdb:4', 'tmdb:5'])
                 self.assertEqual(pick.call_count, 2)
 
@@ -141,7 +143,7 @@ class SearchRouting(unittest.TestCase):
                     patch.object(self.s, 'ai_future', return_value=plan), \
                     patch.object(self.s.time, 'monotonic', side_effect=lambda: clock[0]):
                 self.assertEqual([m['id'] for m in self.results()], ['tmdb:4', 'tmdb:5', 'tmdb:1', 'tmdb:2'])
-                self.assertEqual(picker.result.call_args.kwargs['timeout'], 4)
+                self.assertEqual(picker.result.call_args.kwargs['timeout'], 3.45)
 
     def test_orders_share_channels_and_cancel_command_picker(self):
         self.legacy_picker()
@@ -192,7 +194,7 @@ class SearchRouting(unittest.TestCase):
                                  ['tmdb:1', 'tmdb:2', 'tmdb:4', 'tmdb:5'])
                 self.results('dark movies', 'series')
                 self.finish_pickers()
-                self.assertEqual(self.llm_picks.call_count, 4)
+                self.assertEqual(self.llm_picks.call_count, 3)
 
     def test_router_first_taste_hint_and_best_omission(self):
         self.legacy_picker()
@@ -262,7 +264,7 @@ class SearchRouting(unittest.TestCase):
         with patch.object(self.s.time, 'time', return_value=self.s.time.time() + 86300):
             self.s.ai_future('animes i havent watched').result(timeout=2)["picks"].result(timeout=2)
         self.finish_pickers()
-        self.assertEqual(self.llm_picks.call_count, 2)
+        self.assertEqual(self.llm_picks.call_count, 1)
         self.decide.assert_called_once()
         self.assertEqual(self.s.CACHE_TTL, 600)
 
@@ -273,7 +275,7 @@ class SearchRouting(unittest.TestCase):
                 with self.s.addon_scope(scope):
                     picks = self.s.ai_future('synthetic request').result(timeout=2)["picks"]
                     picks.result(timeout=2)
-                    picks.search_fallback.result(timeout=2)
+                    self.s.search_backup(picks).result(timeout=2)
                     prompt = self.llm_picks.call_args.args[1]
                     for i in (1, 2):
                         self.assertEqual(f'Title {i}|2000|m' in prompt, i in titles)
@@ -324,4 +326,4 @@ class SearchRouting(unittest.TestCase):
         pair = s.route_parse({'answers': {'route': {'choice': 'request', 'confidence': .9},
                                         'watched': {'choice': 'unseen'}, 'list': {'choice': 'best'}}}, [{}])[0]
         self.assertEqual((pair[0]['watched'], pair[0]['list']), ('unseen', 'best'))
-        self.assertEqual(s.DECISIONS['route_query']['ver'], 6)
+        self.assertEqual(s.DECISIONS['route_query']['ver'], 7)

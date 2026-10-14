@@ -163,13 +163,13 @@ class PoolTests(unittest.TestCase):
             stack.enter_context(patch.object(s, 'OR_KEY', 'fake'))
             stack.enter_context(patch.object(s, '_emb_model', s.EMB_MODEL))
             stack.enter_context(patch.object(s, 'tmdb', side_effect=tmdb))
-            stack.enter_context(patch.object(s, 'with_match', side_effect=lambda x: x))
+            stack.enter_context(patch.object(s, 'with_match', side_effect=lambda x, **kw: x))
             details = []
             for build in range(2):
                 if build:
                     s._facets['tmdb:100'] = cached
                 paths.clear()
-                cards = s.candidate_pool(self.profile(entries), metas=True)
+                cards = s.candidate_pool(self.profile(entries), metas=True, catalog=[])
                 lists = [p for p in paths if p in responses]
                 details.append([p for p in paths if p not in responses])
                 self.assertEqual(len(lists), 34)

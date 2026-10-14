@@ -53,16 +53,16 @@ class Talk(unittest.TestCase):
         original = Future.result
         def wait(future, timeout=None):
             return original(future, timeout=.02 if timeout and timeout > 2 else timeout)
-        with patch.object(Future, 'result', wait):
+        with patch.object(Future, 'result', wait), patch.object(self.s, 'SEARCH_WIDE_TIMEOUT', .02):
             headers, metas = self.http_results('dark movies')
-        self.assertEqual(metas, [])
+        self.assertTrue(metas[0]['id'].startswith(self.s.rid('cmd:')))
         self.assertEqual(headers['Cache-Control'], 'no-store')
         gate.set()
         headers, metas = self.http_results('dark movies')
         self.assertTrue(metas)
         self.assertEqual(headers['Cache-Control'], 'no-store')
         self.finish_pickers()
-        self.assertEqual(self.llm_picks.call_count, 2)
+        self.assertEqual(self.llm_picks.call_count, 3)
 
     def test_context_rows_ttl_and_scope(self):
         s = self.s
@@ -184,10 +184,10 @@ class Talk(unittest.TestCase):
             self.results('more like this')
             first = picker.call_count
             self.results('more like this', 'series')
-            self.assertEqual(picker.call_count, first + 4)
+            self.assertEqual(picker.call_count, first + 2)
             self.results('cozy movies')
             self.results('more like this')
-            self.assertEqual(picker.call_count, first + 12)
+            self.assertEqual(picker.call_count, first + 4)
 
     def test_router_cache_includes_ids_and_previous_answers(self):
         self.results('dark movies')
@@ -235,7 +235,7 @@ class Talk(unittest.TestCase):
         self.assertEqual(self.s.last_search()['query'], 'Title 8')
         self.assertLessEqual(self.llm_picks.call_count, 2)
 
-    def test_slow_picker_stays_cached_until_it_finishes(self):
+    def test_slow_picker_fallback_is_evicted_before_retry(self):
         gate = threading.Event()
         self.addCleanup(gate.set)
         def slow(*args):
@@ -245,15 +245,15 @@ class Talk(unittest.TestCase):
         original = Future.result
         def wait(future, timeout=None):
             return original(future, timeout=.02 if timeout in (6, 7) or timeout and timeout > 2 else timeout)
-        with patch.object(Future, 'result', wait):
-            self.assertEqual(self.results('dark movies'), [])
-        self.assertIsNone(self.s.last_search())
-        self.assertEqual(len(self.s._ai), 1)
+        with patch.object(Future, 'result', wait), patch.object(self.s, 'SEARCH_WIDE_TIMEOUT', .02):
+            self.assertTrue(self.results('dark movies')[0]['id'].startswith(self.s.rid('cmd:')))
+        self.assertEqual(self.s.last_search()['rows']['movie'], [])
+        self.assertEqual(len(self.s._ai), 0)
         gate.set()
         self.assertTrue(self.results('dark movies'))
         self.finish_pickers()
-        self.assertEqual(self.llm_picks.call_count, 2)
-        self.decide.assert_called_once()
+        self.assertEqual(self.llm_picks.call_count, 3)
+        self.assertEqual(self.decide.call_count, 2)
 
 
 class ResultCommands(unittest.TestCase):

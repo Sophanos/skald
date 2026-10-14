@@ -63,6 +63,8 @@ Never commit DATA, watch history, credentials, tokens or private snapshots.
 Build every row and catalog id with rid(); never use a literal prefix.
 Never rewrite stored ids. A stored DATA shape change needs a numbered migration
 in `skald/migrate.py`, a bump of FORMAT, and a migration test.
+New optional fields or files that older servers ignore are not a shape change:
+they need no migration and keep FORMAT; say so in the CHANGELOG data line.
 Read secrets through getpass or stdin, or store them in mode 0600 files.
 Never accept secrets in argv or print them.
 The threat model is `docs/CONNECTORS.md`: one uid owns DATA and controls its files.

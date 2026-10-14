@@ -41,9 +41,110 @@ class RowPlan(unittest.TestCase):
         self.s._feeds[cid, self.s.LANG] = {'stamp': 'current', 'metas': {'tv': xs}, 'names': names}
         return cid
 
+    def test_season_gate_at_serve_time_and_in_plan_and_why(self):
+        import datetime
+        from skald.rowplan import why
+        s = self.s
+        cid = self.put('lane1', cards(20), lane='k:42', title='Synthetic winter theme', months=[12])
+        for month, hidden in ((10, True), (12, False), (2, True)):
+            with self.subTest(month=month), patch.object(s, 'local_now', return_value=datetime.datetime(2026, month, 14, 18)):
+                self.assertEqual(bool(s.served_row(cid, 'tv', s.LANG, {}, set(), (set(), set()))), not hidden)
+                row = next(r for r in self.plan() if r['id'] == cid)
+                self.assertEqual(row['season'], {'months': [12], 'hidden': hidden})
+                self.assertEqual(why(s, 'lane1')['season'], row['season'])
+                self.assertEqual(row['rejection'], 'not_today' if hidden else None)
+                self.assertEqual(bool(s.source_metas(cid, s.LANG)), not hidden)
+        s._feeds[cid, s.LANG]['names']['months'] = 'any'
+        with patch.object(s, 'local_now', return_value=datetime.datetime(2026, 10, 14, 18)):
+            self.assertTrue(s.served_row(cid, 'tv', s.LANG, {}, set(), (set(), set())))
+        for key in ('mood1', 'leap'):
+            row = self.put(key, cards(20), months=[12])
+            with patch.object(s, 'local_now', return_value=datetime.datetime(2026, 10, 14, 18)):
+                self.assertEqual(s.served_row(row, 'tv', s.LANG, {}, set(), (set(), set())), [])
+
+    def test_legacy_pin_uses_new_window_only_for_the_same_theme(self):
+        import datetime
+        s = self.s
+        cid = self.put('lane1', cards(20), lane='k:42', title='Synthetic winter theme', months=[12])
+        s._shown[cid, s.LANG] = {'metas': {'tv': cards(20)}, 'names': {'lane': 'k:42', 'title': 'Synthetic winter theme'}}
+        with patch.object(s, 'local_now', return_value=datetime.datetime(2026, 10, 14, 18)):
+            self.assertEqual(s.row_list(cid, 'tv', s.LANG), [])
+            s._shown[cid, s.LANG]['names']['lane'] = 'k:43'
+            self.assertTrue(s.row_list(cid, 'tv', s.LANG))
+
+    def test_legacy_winter_pin_resolves_persisted_window_after_slot_replacement(self):
+        import datetime
+        from skald.rowplan import why
+        s = self.s
+        theme = {'kind': 'lane', 'name': 'Synthetic winter theme', 'source': ['k:42', 'Synthetic winter']}
+        s.theme_months(theme, [12])
+        s._learn['seasons'].clear()
+        s.load_state()
+        cid = self.put('lane1', cards(20, 100), lane='k:43', title='Synthetic everyday theme', months='any')
+        s._shown[cid, s.LANG] = {'metas': {'tv': cards(20)},
+                                    'names': {'lane': 'k:42', 'title': theme['name']}}
+        with patch.object(s, 'get_model', return_value={'names': {'k:42': 'Synthetic winter'}, 'nexp': {}}), \
+                patch.object(s, 'openrouter', side_effect=AssertionError('serving must be offline')):
+            for month, hidden in ((10, True), (12, False)):
+                with self.subTest(month=month), patch.object(s, 'local_now', return_value=datetime.datetime(2026, month, 14, 18)):
+                    self.assertEqual(s.row_months(cid, s.LANG), [12])
+                    self.assertEqual(bool(s.row_list(cid, 'tv', s.LANG)), not hidden)
+                    self.assertEqual(bool(s.served_row(cid, 'tv', s.LANG, {}, set(), (set(), set()))), not hidden)
+                    self.assertEqual(why(s, 'lane1')['season'], {'months': [12], 'hidden': hidden})
+
+    def test_deferred_window_invalidates_home_cached_before_season_reply(self):
+        import datetime
+        s = self.s
+        cid = s.rid('lane1')
+        theme = {'kind': 'lane', 'key': 'k:42', 'name': 'Synthetic winter theme', 'source': ['k:42', 'Synthetic winter']}
+        def build(lang):
+            s.theme_months(theme, allow_llm=True)
+            return {cid: {'tv': cards(20)}, '_names': {cid: {'title': theme['name'], 'lane': theme['key']}}}
+        def reply(*args):
+            self.assertEqual(len(s.row_metas(cid, 'tv', s.LANG, who='both')), 20)
+            return {'choices': [{'message': {'content': '{"months": [12]}'}}]}
+        with patch.object(s, 'local_now', return_value=datetime.datetime(2026, 10, 14, 18)), \
+                patch.object(s, 'OR_KEY', 'fake'), patch.object(s, 'openrouter', side_effect=reply), \
+                patch.object(s, '_langs', {s.LANG}), patch.object(s, 'connectors_tick'), \
+                patch.object(s, 'job_specs', return_value=[('lanes', [cid], 'synthetic', 0, build)]):
+            s.build_feeds(s.local_now(), {}, {}, force=True)
+            self.assertEqual(s.row_metas(cid, 'tv', s.LANG, who='both'), [])
+
     def plan(self, person='household'):
         from skald.rowplan import plan
         return plan(self.s, person)['rows']
+
+    def test_documentary_and_studio_labels_resolve_translation_keys(self):
+        from skald.rowplan import label
+        s = self.s
+        with patch.object(s, 'LANG', 'de-DE'):
+            self.assertEqual(label(s, s.rid('wonder'), s.LANG), 'Wunder unserer Welt')
+            self.assertEqual(label(s, s.rid('hbo'), s.LANG), 'HBO')
+
+    def test_deferred_lane_season_survives_localized_name(self):
+        import datetime
+        s = self.s
+        cid = s.rid('lane1')
+        theme = {'kind': 'lane', 'key': 'k:42', 'name': 'Synthetic winter theme', 'source': ['k:42', 'Synthetic winter theme']}
+        def build(lang):
+            s.theme_months(theme, allow_llm=True)
+            return {cid: {'tv': cards(20)}, '_names': {cid: {'title': 'Erfundene Winterwelt', 'name': theme['name'], 'lane': theme['key']}}}
+        with patch.object(s, 'local_now', return_value=datetime.datetime(2026, 10, 14, 18)), \
+                patch.object(s, 'OR_KEY', 'fake'), patch.object(s, 'openrouter', return_value={'choices': [{'message': {'content': '{"months": [12]}'}}]}), \
+                patch.object(s, '_langs', {s.LANG}), patch.object(s, 'connectors_tick'), \
+                patch.object(s, 'job_specs', return_value=[('lanes', [cid], 'synthetic', 0, build)]):
+            s.build_feeds(s.local_now(), {}, {}, force=True)
+            self.assertEqual(s._feeds[cid, s.LANG]['names'].get('months'), [12])
+            self.assertEqual(s.row_metas(cid, 'tv', s.LANG, who='both'), [])
+
+    def test_legacy_localized_pin_finds_season_by_theme_name(self):
+        s = self.s
+        theme = {'kind': 'lane', 'name': 'Synthetic winter theme', 'source': ['k:42', 'Synthetic winter theme']}
+        s.theme_months(theme, [12])
+        cid = self.put('lane1', cards(20), lane='k:43', title='Synthetic everyday theme', months='any')
+        s._shown[cid, s.LANG] = {'metas': {'tv': cards(20)}, 'names': {'lane': 'k:42', 'title': 'Erfundene Winterwelt'}}
+        with patch.object(s, 'get_model', return_value={'names': {'k:42': theme['name']}}):
+            self.assertEqual(s.row_months(cid, s.LANG), [12])
 
     def test_every_registered_row_and_hidden_codes(self):
         s = self.s
@@ -252,7 +353,10 @@ class RowPlan(unittest.TestCase):
 
     def test_fewer_rechecks_projected_home_on_apply(self):
         s = self.s
-        fallback = [self.put(key, cards(6, 100+i*100)) for i, key in enumerate(('foryou', 'week', 'because', 'leap', 'catchup', 'upcoming'))]
+        # Weekly cards serve only with this week's stamp.
+        week = lambda xs: [{**x, '_week_start': s.week_start(), '_week': {'together': 'Synthetic reason'}} for x in xs]
+        fallback = [self.put(key, (week if key == 'week' else list)(cards(6, 100+i*100)))
+                    for i, key in enumerate(('foryou', 'week', 'because', 'leap', 'catchup', 'upcoming'))]
         self.put('mood1', cards(6))
         cfg = commands.config(s)
         cfg['household']['home'] = {'family_caps': {'mood': 1, 'lane': 0}}
@@ -453,7 +557,7 @@ class RowPlan(unittest.TestCase):
         pool = cards(2, 900)  # an empty pool now skips the decision
         self.enterContext(patch.object(s, 'taste_hint', return_value='synthetic taste'))
         for why_code, budget in (('BudgetExceeded', True), ('TimeoutError', False)):
-            with patch.object(s, 'decide', return_value={'source': 'fallback', 'why': why_code}):
+            with patch.object(s, 'decide', return_value={'source': 'fallback', 'why': why_code, 'answer': {'months': None}}):
                 self.assertIsNone(s.themed_row({}, {'seen': set(), 'negative': set()}, theme, pool, s.LANG, cid))
             status = why(s, cid)['ai_sourcing']
             self.assertEqual(status['skipped_by_budget'], budget)
@@ -514,7 +618,7 @@ class RowPlan(unittest.TestCase):
         theme = dict(kind='mood', key='quiet', name='Quiet stories', source=['calm'])
         pool = cards(2, 900)  # an empty pool now skips the decision
         with patch.object(s, 'taste_hint', return_value='synthetic taste'), \
-                patch.object(s, 'decide', return_value={'source': 'llm', 'answer': {'fits_now': False}}):
+                patch.object(s, 'decide', return_value={'source': 'llm', 'answer': {'fits_now': False, 'months': 'any'}}):
             self.assertEqual(s.themed_row({}, {}, theme, pool, s.LANG, cid), [])
         self.assertTrue(why(s, cid)['ai_sourcing']['fresh'])
         with patch.object(s, 'rank_by_taste', return_value=[]):
@@ -525,7 +629,7 @@ class RowPlan(unittest.TestCase):
         self.assertEqual((s._shown, s._shown_scoped, s._learn, s._feeds), before)
         s._theme_sources.clear()
         with patch.object(s, 'taste_hint', return_value='synthetic taste'), \
-                patch.object(s, 'decide', return_value={'source': 'cache', 'answer': {'fits_now': False}}):
+                patch.object(s, 'decide', return_value={'source': 'cache', 'answer': {'fits_now': False, 'months': 'any'}}):
             s.themed_row({}, {}, theme, pool, s.LANG, cid)
         self.assertTrue(why(s, cid)['ai_sourcing']['reused_today'])
 

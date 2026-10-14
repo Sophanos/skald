@@ -59,7 +59,7 @@ class LanesR3(unittest.TestCase):
         for fid, xs in groups.items():
             self.facet(xs, fid)
         with patch.object(s, 'get_model', return_value=model), \
-                patch.object(s, 'lane_titles', side_effect=lambda fid, lang: [(x['id'], 'movie', x) for x in groups[fid]]), \
+                patch.object(s, 'lane_titles', side_effect=lambda fid, lang, **kw: [(x['id'], 'movie', x) for x in groups[fid]]), \
                 patch.object(s, 'rank_by_taste', side_effect=lambda m, xs: [(None, [], *x) for x in xs]), \
                 patch.object(s, 'themed_row', side_effect=source or (lambda m, p, theme, items, *a, **kw: items)), \
                 patch.object(s, 'lane_title', side_effect=lambda fid, *a: f'Title {fid}'), redirect_stdout(io.StringIO()):
@@ -72,7 +72,7 @@ class LanesR3(unittest.TestCase):
             if not s.row_enabled(cid):
                 continue
             xs = cards(14, 1000+i*100)
-            rows = {'movie': xs, 'series': []} if cid == rid('top10', s.CONFIG) else {'series': xs} if cid == rid('episodes', s.CONFIG) else {'tv': xs}
+            rows = {'movie': xs, 'series': []} if cid in (rid('top10', s.CONFIG), rid('toprated', s.CONFIG)) else {'series': xs} if cid == rid('episodes', s.CONFIG) else {'tv': xs}
             s._feeds[cid, 'de-DE'] = {'metas': rows}
             front += xs if cid in s.MOODS_ROWS else xs[:12]
             if cid not in s.MOODS_ROWS:
@@ -138,6 +138,8 @@ class LanesR3(unittest.TestCase):
         for x in xs[:11]:
             x['genres'] = ['Animation']
         for title, allowed in (('Animated Favorites', False), ('Anime Favorites', True)):
+            for x in xs:
+                x['_row'] = {'anime_lane': allowed}
             s._learn['lanes']['k:1'] = {'title': title}
             built = self.build({'k:1': xs})
             self.put(rid('lane1', s.CONFIG), xs, 'k:1')
@@ -164,11 +166,25 @@ class LanesR3(unittest.TestCase):
 
     def test_animation_guard_after_twenty_card_limit(self):
         s, xs = self.s, cards(30)
+        for x in xs:
+            x['_row'] = {'anime_lane': False}
         for x in xs[:11]:
             x['genres'] = ['Animation']
         self.put(rid('lane1', s.CONFIG), xs, 'k:1')
         self.assertTrue(s.lane_allowed(xs, 'Animated Favorites'))
         self.assertEqual(s.served_row(rid('lane1', s.CONFIG), 'tv', 'de-DE', s._profiles['household'], set(), (set(), set())), [])
+
+    def test_legacy_anime_pin_serves_unchanged_until_rebuilt(self):
+        s, xs = self.s, cards(20)
+        for x in xs:
+            x['genres'] = ['Animation']
+        self.put(s.LANES[0], xs, 'k:1')
+        s._feeds[s.LANES[0], 'de-DE']['names']['title'] = 'Anime Favorites'
+        before = copy.deepcopy(s._feeds[s.LANES[0], 'de-DE'])
+        with patch.object(s, 'is_anime', return_value=True), patch.object(s, 'row_eligible', return_value=True):
+            row = s.served_row(s.LANES[0], 'tv', 'de-DE', s._profiles['household'], set(), (set(), set()))
+        self.assertEqual(len(row), 20)
+        self.assertEqual(s._feeds[s.LANES[0], 'de-DE'], before)
 
     def test_bench_title_learning_tired_and_no_reuse(self):
         s = self.s

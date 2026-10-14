@@ -320,8 +320,8 @@ class ConfigTests(unittest.TestCase):
                 self.assertEqual(s.SCOPES, {"ana": "ana", "ben": "ben", "cy": "cy", "together": "both"})
                 self.assertEqual(s.ROW_OWNER, {rid('ana', s.CONFIG): "ana", rid('cy', s.CONFIG): "cy"})
                 rows = {cid: name for cid, _, name in s.feed_rows()}
-                self.assertEqual(rows[rid('week', s.CONFIG)], "✨ This Week for Ana Maria & Benny & Cee")
-                self.assertEqual(rows[rid('ana', s.CONFIG)], "For Ana Maria")
+                self.assertEqual(rows[rid('week', s.CONFIG)], "✨ New This Week")
+                self.assertEqual(rows[rid('ana', s.CONFIG)], "Picks for Ana Maria")
                 with patch.object(s, "pin_shown"):
                     self.assertEqual(s.manifest(s.LANG, "ana")["name"], "Skald · Ana Maria")
                     self.assertEqual(s.manifest(s.LANG, "together")["name"], "Skald · Together")
@@ -332,7 +332,7 @@ class ConfigTests(unittest.TestCase):
                 self.assertIn('"ana": "Ana Maria"', s.REMOTE_JS)
                 self.assertEqual(set(s.GUEST_ROW_POLICY), set(s.DEDUPE_ORDER))
                 self.assertTrue(set(s.ROW_OWNER) <= s.MIXED & s.REMOTE_ROWS)
-                self.assertTrue(s.member_pick({"id": "tmdb:1", "type": "movie", "description": "For Ana Maria: mystery"}, "ana"))
+                self.assertTrue(s.member_pick({"id": "tmdb:1", "type": "movie", "description": "For Ana Maria: mystery", "_row": {"for": ["ana"], "personal": True}}, "ana"))
             finally:
                 close_server(s)
 

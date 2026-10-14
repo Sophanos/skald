@@ -29,7 +29,7 @@ class SettingsCommands(unittest.TestCase):
 
     def test_glm_fallback_and_override(self):
         spec = self.s.DECISIONS['parse_command']
-        self.assertEqual(spec['ver'], 12)
+        self.assertEqual(spec['ver'], 13)
         fallback = spec['llm']['fallback']
         self.assertEqual(fallback['timeout'], 6)
         body = fallback['prompt']([{'query': 'hide anime'}])
@@ -333,7 +333,7 @@ class SettingsCommands(unittest.TestCase):
 
     def test_route_prompt_meaning_and_version_cache(self):
         spec = self.s.DECISIONS['route_query']
-        self.assertEqual(spec['ver'], 6)
+        self.assertEqual(spec['ver'], 7)
         criteria = spec['llm']['prompt']([{'query': 'Create a new catalog about psygoloy crime'}])['questions']['route']['criteria']
         self.assertIn('change or remember something for later', criteria['command'])
         self.assertIn('changes nothing saved', criteria['request'])

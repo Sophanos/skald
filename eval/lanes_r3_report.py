@@ -64,7 +64,7 @@ def supply(snapshot, before):
             for other in s.DEDUPE_ORDER:
                 if other == cid:
                     break
-                for typ in ('movie', 'series') if other == rid('top10', s.CONFIG) else ('tv',) if other in s.MIXED else ('series',):
+                for typ in ('movie', 'series') if other in (rid('top10', s.CONFIG), rid('toprated', s.CONFIG)) else ('movie',) if other == rid('digital', s.CONFIG) else ('tv',) if other in s.MIXED else ('series',):
                     above = s.mark_above(above, other, s.row_metas(other, typ, 'de-DE'))
             built = s.row_list(cid, 'tv', 'de-DE')
             ids = {x['id'] for x in built}
@@ -78,7 +78,7 @@ def supply(snapshot, before):
         for cid in s.DEDUPE_ORDER:
             if cid in s.LANES:
                 break
-            for typ in ('movie', 'series') if cid == rid('top10', s.CONFIG) else ('tv',) if cid in s.MIXED else ('series',):
+            for typ in ('movie', 'series') if cid in (rid('top10', s.CONFIG), rid('toprated', s.CONFIG)) else ('movie',) if cid == rid('digital', s.CONFIG) else ('tv',) if cid in s.MIXED else ('series',):
                 above = s.mark_above(above, cid, s.row_metas(cid, typ, 'de-DE'))
         candidates = []
         model = s.get_model(False)

@@ -45,11 +45,20 @@ REGISTRY = {
     'shelf_from_results': _op('results', kids=True, hint='shelf_from_results saves the shown results as a row or shelf named from the last search: "save this as a row". Use only with shown results context; kind null values [] person null.'),
     'taste_drivers': _op('read', kids=True, hint='taste_drivers reads what shapes this person\'s picks, with drivers and correction previews; changes nothing: kind null values [], language the speaker\'s BCP 47 language code (en, de, sr-latn or sr-cyrl). '
                         '"what shapes my picks?", "warum empfiehlst du mir so viele Krimis?", "zašto mi stalno nudiš anime?" are taste_drivers. A why question about one named title is explain; asking for titles now is a search.'),
+    'home_reach': _op('read', kids=True, hint='home_reach checks whether the best unseen known taste matches appear on Home, read only; kind null values [], person only if named. "are my best matches on my home?" is home_reach. A title named Best Matches at Home is a search; a why question about one title is explain.'),
     'home_plan': _op('home', kids=True, hint='home_plan explains home rows, read only: "why these rows?" values [], "why does Because show this" values [because], "why don\'t I see mood rows" values [moods]; kind null. Values [lanes] explain the lane family.'),
     'home_more': _op('home', hint='home_more raises a household row family cap: "more mood rows" values [mood]; "more lane rows" values [lane]; kind null.'),
     'home_fewer': _op('home', hint='home_fewer lowers a household row family cap: "fewer lane rows" values [lane]; "fewer mood rows" values [mood]; kind null.'),
     'row_refresh': _op('home', hint='row_refresh requests new picks for one household row, kind null values [row id]. Use the current row context for "this"; without row context use ask slot change and ask which row. Use [] if a row reference is unresolved. Resolve a named dynamic row to its id from the row context. Title names like Refresh This Row are searches, not commands.'),
+    'ai_status': _op('read', kids=True, hint='ai_status reads saved household AI credit and spending; changes nothing and never refreshes: kind null values [] person null, language en, de, sr-latn or sr-cyrl. Questions about remaining AI credit, budget or exhausted AI calls use ai_status. Title searches and requests to change a budget do not.'),
+    'week_picks': _op('read', kids=True, hint='week_picks reads saved new-and-worthwhile weekly picks, never changes settings: kind null, values [number of weeks, weeks back], each within the last 8 calendar weeks. '
+                     'This week is [1,0], last week [1,1], last 3 weeks [3,0]. Person only if named. '
+                     '"what was new last week?", "show this week\'s picks", "was war letzte Woche neu?", "šta je bilo novo prošle nedelje?" are week_picks. '
+                     'A title called Invented Last Week is a title search, op null. A request for fresh recommendations now is a search, not saved picks.'),
 }
+REGISTRY['row_names'] = _op('read', kids=True, hint='row_names lists what the household rows are called, their label keys and sources; changes nothing: kind null values [] person null. '
+    '"What are my rows called?", "Wie heißen meine Reihen?", "Kako se zovu naši redovi?" are row_names. '
+    'A title called Row Names or a request for films about names is a search. Renaming a row is row_rename, with values [row id,new label].')
 OPS = tuple(REGISTRY)
 BASE = ('op', 'kind', 'values', 'person')
 STEP = {'op': (*OPS, None), 'kind': ('movie', 'tv', 'series', 'genre', 'people', 'languages', 'countries', 'similar', 'mood', 'title', None),
@@ -427,6 +436,8 @@ def row_id(name):
     from .members import ROW_KEYS
     name = re.sub(r'^(?:the )| (?:row|reihe)$', '', name.strip().casefold()).strip()
     aliases = {'top 10': 'top10', 'top rated': 'toprated', 'top rated movies': 'toprated',
+               'top rated series': 'toprated', 'best movies': 'toprated', 'best series': 'toprated',
+               'die besten filme': 'toprated', 'die besten serien': 'toprated',
                'latest digital releases': 'digital', 'for you': 'foryou', 'new to you': 'newtoyou',
                'continue watching': 'episodes', 'continue watching & new episodes': 'episodes'}
     return aliases.get(name, name if name in ROW_KEYS else None)
@@ -444,7 +455,7 @@ def edit_rows(cfg, change, s):
     count = 2 if op in ('row_rename', 'row_move') else 1
     if kind is not None or len(values) != count or values[0] not in ROW_KEYS:
         raise ValueError('row id or values')
-    rows = list(cfg['household'].get('rows', [key for key in ROW_KEYS if key not in ('digital', 'toprated', 'newtoyou')]))
+    rows = list(cfg['household'].get('rows', [key for key in ROW_KEYS if key not in ('digital', 'newtoyou')]))
     if op == 'row_rename':
         label = values[1]
         if not isinstance(label, str) or not label.strip() or len(label) > 100 or any(ord(c) < 32 for c in label):
@@ -674,7 +685,7 @@ def register(s):
         body = request(batch[0], fallback_model, fallback_effort)
         body['max_tokens'] = 1200
         return body
-    s.decision('parse_command', ver=12, lane='search', cap=None, ttl=30*s.DAY,
+    s.decision('parse_command', ver=13, lane='search', cap=None, ttl=30*s.DAY,
         inp={'query': str, 'last': (str, None), 'shown': (str, [str, 30], None), 'rows': ([{'id': str, 'label': str}, 100], None)}, out=OUT,
         norm=lambda inp: {**s.route_norm(inp), **({'rows': inp['rows']} if inp.get('rows') is not None else {})}, rule=rule, params={},
         llm={'path': '/api/v1/chat/completions', 'model': model, 'batch': 1, 'timeout': 6,
@@ -804,10 +815,43 @@ def preview(s, text, viewer=None, bound=None, answer=None, scope=None, prior=Non
         return reset_preview(s, text, change, viewer, bound)
     if change['op'] == 'redo' or change['op'] == 'undo' and change['values']:
         return history_preview(s, text, change, viewer, bound)
-    if change['op'] in ('settings', 'shelf_list', 'history', 'taste_drivers'):
+    if change['op'] == 'week_picks':
+        if change['kind'] is not None or len(change['values']) != 2:
+            raise ValueError('weekly history needs [weeks, weeks back]')
+        actor = bound if bound in s.PEOPLE else viewer
+        target = shelf_scope(s, change['person'], viewer, bound) if actor in s.PEOPLE or change['person'] else None
+        if actor in s.PEOPLE and target not in (actor, 'together'):
+            raise PermissionError('This read applies to another member')
+        data = s.week_history(change['values'][0], person=target, offset=change['values'][1])
+        lang = change['language'] or s.LANG
+        description = '\n'.join(r['week'] + '\n' + '\n'.join(p['title'] + ': ' + p['reason'] for p in r['picks']) for r in data['weeks'])
+        return dict(read_only=True, people=[target] if target else [], name=s.t('week.history', lang=lang),
+                    description=description or s.t('week.empty', lang=lang), week_picks=data)
+    if change['op'] in ('settings', 'shelf_list', 'history', 'taste_drivers', 'ai_status', 'row_names', 'home_reach'):
         if change['kind'] is not None or change['values']:
             raise ValueError('read-only settings command')
+        if change['op'] == 'ai_status':
+            from .ai import text as ai_text
+            data = s.ai_status()
+            description = ai_text(data, change['language'] or s.LANG, detailed=True)
+            return dict(read_only=True, people=[], name=description.splitlines()[0], description=description, ai=data)
+        if change['op'] == 'home_reach':
+            from .reach import view, text as reach_text
+            actor = bound if bound in s.PEOPLE else viewer
+            target = change['person'] or actor or 'household'
+            target = 'together' if target == 'both' else target
+            if target != 'household' or actor in (*s.PEOPLE, s.GUEST) or bound == s.GUEST:
+                target = shelf_scope(s, target, viewer, bound)
+            if actor in s.PEOPLE and target not in (actor, 'together'):
+                raise PermissionError('This read applies to another member')
+            data = view(s, target if target in (*s.PEOPLE, 'together') else None)
+            return dict(read_only=True, people=[], name='Best matches on Home', description=reach_text(data), reach=data)
         target = shelf_scope(s, change['person'], viewer, bound)
+        if change['op'] == 'row_names':
+            from .row_names import view
+            data = view(s.DATA, s.CONFIG, s.LANG)
+            return dict(read_only=True, people=[target], name='Row names', row_names=data,
+                        description='\n'.join(row['id'] + ': ' + str(row['label']) for row in data['rows']))
         if change['op'] == 'taste_drivers':
             from .alignment import view, text as alignment_text
             actor = bound if bound in s.PEOPLE else viewer
@@ -1154,28 +1198,59 @@ def wall_time(s, target, now, local):
     return guess - (offset(guess) - offset(now))
 
 def find_title(s, change):
-    """A title the household watched wins; otherwise one TMDB match."""
+    """A watched title wins; otherwise one stored title or one TMDB match."""
     title = change['values'][0].strip()
     hits = {(e['key'], e['kind']): e for e in (getattr(s, '_profiles', {}).get('household') or {}).get('entries', [])
             if str(e.get('title', '')).casefold() == title.casefold() and change['kind'] in (None, e.get('kind'))}
     if len(hits) == 1:
         e = next(iter(hits.values()))
         return {'key': e['key'], 'kind': e['kind'], 'title': e['title'], 'year': str(e.get('year') or '')}
+    with s._facets_lock:
+        for slot, rec in s._facets.items():
+            kind = rec.get('kind') or slot.partition('@')[2] or 'movie'
+            if slot.startswith('tmdb:') and str(rec.get('title', '')).casefold() == title.casefold() and change['kind'] in (None, kind):
+                key = slot.partition('@')[0]
+                hits[key, kind] = {'key': key, 'kind': kind, 'title': rec['title'], 'year': str(rec.get('y') or '')}
+    with s._feeds_lock:
+        for store in (s._feeds, s._shown, *s._shown_scoped.values()):
+            for row in store.values():
+                for cards in (row.get('metas') or {}).values():
+                    if not isinstance(cards, list):
+                        continue
+                    for card in cards:
+                        kind = 'movie' if card.get('type') == 'movie' else 'tv'
+                        if card.get('type') in ('movie', 'series', 'tv') and str(card.get('name', '')).casefold() == title.casefold() and change['kind'] in (None, kind):
+                            key = card['id']
+                            hits.setdefault((key, kind), {'key': key, 'kind': kind, 'title': card['name'],
+                                                        'year': str(card.get('releaseInfo') or '')[:4]})
+    if len(hits) == 1:
+        return next(iter(hits.values()))
     return resolve(s, {**change, 'op': 'seen'})
 
 def watched_by(s, key):
     return [e for e in (getattr(s, '_profiles', {}).get('household') or {}).get('entries', []) if e['key'] == key]
 
-def explain_text(s, item, who):
-    info = s.explain(item['key'], item['kind'])
+def explain_text(s, item, who, info=None):
+    info = s.explain(item['key'], item['kind'], person=who) if info is None else info
     label = s.LABELS.get(who, 'you') if who else 'the household'
     lines = []
+    if info.get('toprated'):
+        pick = info['toprated']
+        lines.append(f"Top Rated position {pick['position']}: rating {pick['rating']}, taste match {pick['taste_match']} of 100.")
     if info.get('reasons'):
         lines.append('Because: '+'; '.join(str(r) for r in info['reasons']))
     mine = (info.get('per_person') or {}).get(who) or {}
     pct = mine.get('percentile', info.get('percentile'))
     if pct is not None:
         lines.append('Match for '+label+': '+str(pct)+' of 100')
+    rank = mine if who else info
+    if rank.get('known_rank') is not None:
+        lines.append('Unseen known rank for '+label+': '+str(rank['known_rank'])+' of '+str(rank['known_unseen']))
+    if rank.get('home') is not None:
+        rows = rank['home']['rows']
+        lines.append('On Home: '+', '.join(rows) if rows else 'Absent from Home.')
+    if info.get('feeling_catalog_rows'):
+        lines.append('From the tagged catalog in feeling rows: '+', '.join(info['feeling_catalog_rows']))
     if (mine.get('memory') or {}).get('vetoed'):
         lines.append('A remembered dislike of '+label+' keeps titles like this out of the rows.')
     if who in s.PEOPLE and item['key'] in s.deferred_keys(who):
@@ -1191,7 +1266,8 @@ def title_preview(s, text, change, viewer, bound, *_):
     if op == 'explain':
         who = bound if bound in s.PEOPLE else viewer if viewer in s.PEOPLE else None
         item = find_title(s, change)
-        return dict(read_only=True, people=[], name='Why '+item['title']+' is in the picks', description=explain_text(s, item, who))
+        info = s.explain(item['key'], item['kind'], person=who)
+        return dict(read_only=True, people=[], name='Why '+item['title']+' is in the picks', description=explain_text(s, item, who, info), explanation=info)
     targets = people(s, None if op == 'reattribute' else change['person'], viewer, bound)
     to = None
     if op == 'reattribute':

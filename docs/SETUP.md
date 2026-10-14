@@ -179,6 +179,18 @@ natural-language search, mood shelves and weekly picks. Rows work without it.
 Every OpenRouter call counts against a daily limit per task and a monthly cost cap.
 `AI_MONTHLY_USD` sets the cap (default 3 US dollars); when it is reached, search falls back to TMDB titles and rows keep their last build.
 
+The worker checks OpenRouter key credit once per household day (05:00 rollover),
+including after restarts. `skald ai status --json` reads the saved numbers offline;
+`skald ai status --refresh` checks once now. `skald setup --status` and Commander
+show low or exhausted credit. The warning logs once per day when credit is below
+20% of the key limit or below $1. Keys without a limit say “no limit set”.
+To change the warning, add `"ai": {"credit_warn_fraction": 0.2, "credit_warn_usd": 1}`
+to `skald.json`. The fraction accepts 0..1; dollars must be finite and nonnegative.
+The check stores only numeric credit fields and timestamps in `usage.json`;
+the reset period is stored as a numeric code. It never stores the provider key
+or raw error text. Failed checks keep the last good numbers. The last AI failure
+records a fixed reason from an HTTP status or exception type.
+
 Embeddings use OpenRouter's `/api/v1/embeddings` with `google/gemini-embedding-2`
 and 256 dimensions. Set `SKALD_EMBED_MODEL` to any OpenRouter embedding id to
 override it, then restart the engine. Skald keeps the old model active while it
@@ -203,7 +215,7 @@ The optional `row_prefix` in household config sets catalog ids, for example
 digits, starting with a letter. Existing households keep their prefix in
 `DATA/legacy.json`; stored row ids are not rewritten.
 
-Choose home rows with `skald setup rows episodes,foryou,top10,digital,toprated`. This saves `household.rows`; Skald keeps its usual row order and search still works. Valid keys are episodes, foryou, week, upcoming, catchup, rewatch, because, leap, top10, people (For NAME), moods, lanes, docs, studios, anime, shelves, digital, toprated and newtoyou. The opt-in Latest Digital Releases lists movies released digitally in your country in the last 60 days, most popular first; Top Rated Movies uses TMDB ratings and at least 200 votes. The opt-in New to You row (newtoyou) rotates through the household, one member or Together each day, and mixes what that person keeps loving with a kind of story they have not tried yet; rejecting a pick there counts only lightly against their taste. All three respect age and hide settings. Run `skald setup rows all` to restore the default rows, without these three opt-in lists. Changes ask AIOStreams to refresh its rows.
+Choose home rows with `skald setup rows episodes,foryou,top10,digital,toprated`. This saves `household.rows`; Skald keeps its usual row order and search still works. Valid keys are episodes, foryou, week, upcoming, catchup, rewatch, because, leap, top10, people (For NAME), moods, lanes, docs, studios, anime, shelves, digital, toprated and newtoyou. An explicit list keeps exactly your choice. Without a list, Best Movies and Best Series (Top Rated) are on. Their source refreshes daily from ten TMDB movie pages and five series pages. Movies need 200 votes; series need 100, a lower floor for their smaller audiences that still avoids tiny samples. News, reality, talk and documentary series stay out. Unseen picks use 65% relative taste match and 35% TMDB rating, followed by your discovery and focus preferences, with up to 20 titles per type. Saved taste facts supply the match; titles without those facts use TMDB genres without AI calls. The opt-in Latest Digital Releases lists movies released digitally in your country in the last 60 days, most popular first. The opt-in New to You row (newtoyou) rotates through the household, one member or Together each day, and mixes what that person keeps loving with a kind of story they have not tried yet; rejecting a pick there counts only lightly against their taste. All three respect age and hide settings. Run `skald setup rows all` to restore the default rows, including Top Rated and without the two opt-in lists. Changes ask AIOStreams to refresh its rows.
 
 Each member can set discovery, years, unwanted genres, hidden categories and focus:
 

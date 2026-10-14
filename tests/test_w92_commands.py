@@ -365,7 +365,7 @@ class ReviewFixes(Household):
         self.say('hide Top Rated')
         self.confirm()
         card = self.say('show Top Rated and move Top Rated before For You')
-        self.assertIn('Move Top Rated Movies before For You', card['description'])
+        self.assertIn('Move Best Movies before For You', card['description'])
         self.confirm()
         self.assertNotIn('toprated', self.s.CONFIG['household'].get('hidden_rows', []))
 

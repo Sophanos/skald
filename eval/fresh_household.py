@@ -41,6 +41,8 @@ def smoke(count, setup=None, keyless=False):
     def details(kind, tid):
         title, year = ('The Matrix', '1999') if tid == 603 else ('Example series', '2009') if tid == 1419 else (titles[(tid-9000000) % len(titles)], '2025')
         documentary = bool(setup and 9100000 <= tid < 9100200)
+        if documentary:
+            title = f'Invented documentary {tid} Card'
         return {**fixture, 'id': tid, 'title' if kind == 'movie' else 'name': title,
                 'release_date' if kind == 'movie' else 'first_air_date': year + '-01-01',
                 'genres': [{'id': 99, 'name': 'Documentary'}] if documentary else [{'id': 28, 'name': 'Action'}],
@@ -169,7 +171,7 @@ def smoke(count, setup=None, keyless=False):
                 names = {row['id']: row['name'] for row in manifest['catalogs']}
                 assert not any(rid('', s.CONFIG) + p in names for p in people), 'default member shelves'
                 row_names = {cid: name for cid, _, name in s.feed_rows(s.LANG)}
-                assert row_names[rid('week', s.CONFIG)] == '✨ This Week for ' + ' & '.join(p.title() for p in people), 'week label'
+                assert row_names[rid('week', s.CONFIG)] == '✨ New This Week', 'week label'
                 catalogs = [(cid, typ) for cid, typs, _ in s.feed_rows(s.LANG)
                             for typ in (('tv',) if cid in s.MIXED and 'tv' in typs else typs)]
                 rows = {cid + ':' + typ: s.row_metas(cid, typ, s.LANG) for cid, typ in catalogs}

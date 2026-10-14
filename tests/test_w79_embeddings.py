@@ -84,6 +84,62 @@ class EmbeddingSwitchTests(unittest.TestCase):
         s.save_emb()
         self.assertEqual(json.loads(Path(self.temp.name, 'emb.json').read_text())['model'], NEW)
 
+    def test_provider_failure_finishes_taste_build_keeps_old_and_missing_vectors(self):
+        s = self.s
+        self.old_cache(tuple(f'tmdb:{i}' for i in range(1, 6)), NEW)
+        entries = [dict(key=f'tmdb:{i}', kind='movie', title=f'Synthetic Story {i}', weight=1,
+                        signal='loved', explicit=True, by=['ana'], age=0, item={}) for i in range(1, 7)]
+        p = {'entries': entries, 'seen': set(), 'negative': set()}
+        old = s.femb('tmdb:1', 'movie')
+        with patch.object(s, 'openrouter', side_effect=OSError('synthetic provider failure')), \
+                patch.object(s, 'ensure_facets'), patch.object(s, 'tag_experiences'), \
+                patch.object(s, 'tmdb', return_value={'results': [{'id': 99}]}), \
+                patch.object(s, 'person_entries', return_value=entries), \
+                patch('builtins.print') as logged:
+            model = s.build_model(p)
+        self.assertIsNotNone(model['vec'])
+        self.assertTrue(all(model['pvec'].values()))
+        self.assertIs(s.femb('tmdb:1', 'movie'), old)
+        self.assertIsNone(s.femb('tmdb:6', 'movie'))
+        self.assertEqual(sum('emb' in str(c) for c in logged.call_args_list), 1)
+        self.assertFalse(any('synthetic provider failure' in str(c) for c in logged.call_args_list))
+
+    def test_ranking_and_same_feeling_fallback_sanitize_provider_error_once(self):
+        from test_w108_source import card
+        s = self.s
+        self.old_cache(('tmdb:1',), NEW)
+        old = s.femb('tmdb:1', 'movie')
+        p = {'entries': [dict(key='tmdb:1', kind='movie', title='Synthetic Seed', signal='loved',
+                              by=['ana', 'ben', 'together'], weight=4)], 'seen': set(), 'negative': set()}
+        items = [(f'tmdb:{i}', 'movie', card(i)) for i in range(1, 10)]
+        s._profiles['household'] = p
+        marker = 'synthetic-private-provider-marker'
+        def detail(path, **kw):
+            return {'results': [{'id': i, 'title': f'Synthetic Story {i}', 'vote_count': 500,
+                                  'vote_average': 8} for i in range(1, 10)]} if path.startswith('movie/') else {'results': []}
+        with patch.object(s, 'openrouter', side_effect=OSError(marker)) as provider, \
+                patch.object(s, 'ensure_facets'), patch.object(s, 'tag_experiences'), \
+                patch.object(s, 'frec', return_value={'title': 'Synthetic Story', 'x': {'cozy_case': 2}}), \
+                patch.object(s, 'get_model', return_value={'aff': {}}), \
+                patch.object(s, 'score_key', side_effect=lambda m, k, **kw: (70 if s.femb(k, 'movie') else 60, [])), \
+                patch.object(s, 'match_pct', side_effect=lambda m, sc, *a: sc), patch.object(s, 'reasons', return_value=[]), \
+                patch.object(s, 'pool_seeds', return_value=[{'key': 'tmdb:1', 'id': 1, 'kind': 'movie', 'title': 'Synthetic Seed'}]), \
+                patch.object(s, 'tmdb', side_effect=detail), patch.object(s, 'tired_keys', return_value={}), \
+                patch.object(s, 'themed_row', return_value=None), patch.object(s, 'feeling_pool', return_value=items), \
+                patch.object(s, 'polish_row', side_effect=lambda xs: xs), patch.object(s, 'balance_row', side_effect=lambda xs: xs), \
+                patch.object(s, 'tone_ok', return_value=True), patch('builtins.print') as logged:
+            with self.subTest(caller='rank_by_taste'):
+                self.assertEqual(len(s.rank_by_taste({}, items)), 9)
+            with self.subTest(caller='candidate_pool'):
+                self.assertEqual(len(s.candidate_pool(p)), s.POOL_PER_SEED)
+            with self.subTest(caller='Same Feeling fallback'):
+                self.assertEqual(len(s.leap_feed('en-US')[s.rid('leap')]['tv']), 9)
+        self.assertGreaterEqual(provider.call_count, 3)
+        self.assertIs(s.femb('tmdb:1', 'movie'), old)
+        self.assertIsNone(s.femb('tmdb:2', 'movie'))
+        self.assertFalse(any(marker in str(c) for c in logged.call_args_list))
+        self.assertEqual(sum('keeping available vectors' in str(c) for c in logged.call_args_list), 1)
+
     def test_override_is_requested(self):
         s = self.load_server('synthetic/embedding')
         with patch.object(s, 'OR_KEY', 'synthetic'), patch.object(s, 'title_text', return_value='1'), \

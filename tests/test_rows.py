@@ -523,6 +523,8 @@ class BuilderRows(unittest.TestCase):
     def test_seen_new_season_exception_and_negatives(self):
         s = self.s
         cards = [s.row_meta(self.item(990400 + i), 'series', 'tv', {}, {}, note='Starts 20 Oct') for i in range(4)]
+        for card in cards:
+            card['_row']['when'] = '2026-10-20'
         cards[1]['_row']['status'] = 'Ended'
         p = {'seen': {x['id'] for x in cards}, 'negative': {'tmdb:990403'},
              'entries': [{'key': x['id'], 'title': x['name'], 'item': {'completed': i == 2}} for i, x in enumerate(cards)]}

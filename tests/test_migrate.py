@@ -122,6 +122,8 @@ class Migrations(unittest.TestCase):
         self.assertEqual(migrate.MIGRATIONS[3], migrate.local_row_metrics)
         self.assertEqual(migrate.MIGRATIONS[4], migrate.settings_history_v4)
         self.assertEqual(migrate.MIGRATIONS[5], migrate.monthly_history)
+        self.assertEqual(migrate.FORMAT, 5)
+        self.assertEqual(max(migrate.MIGRATIONS), 5)
         for enabled in (None, False, True):
             for version in (1, 2, 3, 4, 5):
                 with self.subTest(enabled=enabled, version=version):
@@ -137,6 +139,32 @@ class Migrations(unittest.TestCase):
                         self.assertIn(main(['setup', '--status', '--json'], out=out), (0, 1))
                         self.assertEqual(json.loads(out.getvalue())['data_format'], version)
                     self.assertEqual({p.name: p.read_bytes() for p in self.data.iterdir()}, before)
+
+    def test_optional_season_fields_load_without_migration_or_schema_knowledge(self):
+        from decide_kit import close_server, load_server
+        self.assertEqual(migrate.FORMAT, 5)
+        self.assertNotIn(6, migrate.MIGRATIONS)
+        self.marker(5)
+        learning = {'lanes': {'k:42': {'title': 'Synthetic winter theme'}}, 'seasons': {'synthetic-key': [12]}}
+        (self.data/'learn.json').write_text(json.dumps(learning))
+        cid = members.rid('lane1', members.fresh_config(['ana', 'ben']))
+        feeds = {cid+'|en-US': {'names': {'lane': 'k:42', 'title': 'Synthetic winter theme', 'months': [12]}, 'metas': {'tv': []}}}
+        (self.data/'feeds.json').write_text(json.dumps(feeds))
+        before = (self.data/'learn.json').read_bytes()
+        old_feeds = (self.data/'feeds.json').read_bytes()
+        s = load_server(self.data)
+        self.addCleanup(close_server, s)
+        s._learn.pop('seasons')
+        # The unchanged legacy loader reads known state without interpreting optional fields.
+        with patch.object(migrate, 'ensure', side_effect=AssertionError('no migration')), \
+                patch.object(s, 'season_fits', side_effect=AssertionError('no season knowledge')):
+            s.load_state()
+        self.assertEqual(s._learn['lanes'], learning['lanes'])
+        self.assertEqual(s._feeds[cid, 'en-US']['metas'], {'tv': []})
+        self.assertEqual(migrate.check(self.data)['format'], 5)
+        self.assertEqual((self.data/'learn.json').read_bytes(), before)
+        self.assertEqual((self.data/'feeds.json').read_bytes(), old_feeds)
+        self.assertFalse(migrate.rewrite_needed(self.data))
 
     def test_default_off_metrics_migration_creates_no_metric_files(self):
         config = members.fresh_config(['ana', 'ben'])

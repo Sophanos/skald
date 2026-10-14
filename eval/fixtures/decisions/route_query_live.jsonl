@@ -223,3 +223,13 @@
 {"q": "Together", "route": ["title"], "lang": "en", "tag": "w101-identity"}
 {"q": "Wir zwei", "route": ["title"], "lang": "de", "tag": "w101-identity"}
 {"q": "Nas dvoje", "route": ["title"], "lang": "sr", "tag": "w101-identity"}
+{"q": "How much AI credit is left?", "route": ["command"], "lang": "en", "tag": "w110-credit"}
+{"q": "Wie viel KI-Guthaben ist noch übrig?", "route": ["command"], "lang": "de", "tag": "w110-credit"}
+{"q": "Koliko nam je AI kredita ostalo?", "route": ["command"], "lang": "sr", "tag": "w110-credit"}
+{"q": "Колико нам је АИ кредита остало?", "route": ["command"], "lang": "sr", "tag": "w110-credit"}
+{"q": "How much AI credt do we have lef?", "route": ["command"], "lang": "en", "tag": "w110-credit"}
+{"q": "Reicht unser Budget beim KI-Anbieter noch für die nächsten Suchen?", "route": ["command"], "lang": "de", "tag": "w110-credit"}
+{"q": "Film Credit Garden", "route": ["title"], "lang": "en", "tag": "w110-credit"}
+{"q": "Film Kreditwald", "route": ["title"], "lang": "de", "tag": "w110-credit"}
+{"q": "Film Kreditni oblak", "route": ["title"], "lang": "sr", "tag": "w110-credit"}
+{"q": "Филм Кредитна река", "route": ["title"], "lang": "sr", "tag": "w110-credit"}

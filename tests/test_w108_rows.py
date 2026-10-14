@@ -41,6 +41,8 @@ class HonestRows(unittest.TestCase):
 
     def put(self, key, xs, pool=(), **names):
         cid = self.s.rid(key)
+        if key == 'week':
+            xs = [{**x, '_week': {'together': 'A recent taste match'}, '_week_start': self.s.week_start()} for x in xs]
         self.s._feeds[cid, self.s.LANG] = {'metas': {'tv': xs, 'pool': list(pool)}, 'names': names}
         return cid
 
@@ -200,12 +202,12 @@ class HonestRows(unittest.TestCase):
             s._facets[seed]['g'] = ['Drama']
             self.assertEqual(self.serve(cid), [])
 
-    def test_week_member_because_and_leap_receive_variety_cap(self):
+    def test_member_because_and_leap_receive_serving_variety_cap(self):
         s = self.s
         self.loose_filters()
         xs = cards(10)
         self.enterContext(patch.object(s, 'is_hero', side_effect=lambda x: x['id'] in {y['id'] for y in xs[:4]}))
-        for key in ('week', next(iter(s.ROW_OWNER.values())), 'because', 'leap'):
+        for key in (next(iter(s.ROW_OWNER.values())), 'because', 'leap'):
             with self.subTest(key=key):
                 cid = self.put(key, xs)
                 self.assertEqual(sum(s.is_hero(x) for x in self.serve(cid)), 2)

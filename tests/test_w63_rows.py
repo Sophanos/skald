@@ -175,11 +175,11 @@ class SelectedRows(unittest.TestCase):
         with patch.object(s, 'CONFIG', cfg), patch.object(s, 'pin_shown'), patch.object(s, 'feed', return_value={}):
             self.assertEqual([r[0] for r in s.feed_rows()], [s.rid(k) for k in ('episodes', 'top10', 'digital', 'toprated')])
             cats = s.manifest('en-US')['catalogs']
-            self.assertEqual([r['id'] for r in cats], [s.rid(k) for k in ('episodes', 'top10', 'top10', 'digital', 'toprated', 'search', 'search')])
+            self.assertEqual([r['id'] for r in cats], [s.rid(k) for k in ('episodes', 'top10', 'top10', 'digital', 'toprated', 'toprated', 'search', 'search')])
             self.assertEqual({j[0] for j in s.job_specs(s.local_now(), {})}, {'episodes', 'top10', 'digital', 'toprated'})
             self.assertEqual(s.row_metas(s.rid('because'), 'tv', 'en-US'), [])
         self.assertNotIn(s.rid('digital'), [r[0] for r in s.feed_rows()])
-        self.assertNotIn('toprated', {j[0] for j in s.job_specs(s.local_now(), {})})
+        self.assertIn('toprated', {j[0] for j in s.job_specs(s.local_now(), {})})
 
     def test_rows_reload_without_restart_and_disabled_cache(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {'DATA_DIR': temp, 'SKALD_CONFIG': ''}):
