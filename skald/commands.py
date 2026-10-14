@@ -1218,6 +1218,8 @@ def find_title(s, change):
                     if not isinstance(cards, list):
                         continue
                     for card in cards:
+                        if not isinstance(card, dict):
+                            continue
                         kind = 'movie' if card.get('type') == 'movie' else 'tv'
                         if card.get('type') in ('movie', 'series', 'tv') and str(card.get('name', '')).casefold() == title.casefold() and change['kind'] in (None, kind):
                             key = card['id']

@@ -6707,7 +6707,7 @@ def _needed_emb(pairs):
             for metas in (rec.get("metas") or {}).values():
                 if isinstance(metas, list):
                     needed.update((m["id"], "movie" if m["type"] == "movie" else "tv")
-                                  for m in metas if m.get("id", "").startswith("tmdb:")
+                                  for m in metas if isinstance(m, dict) and m.get("id", "").startswith("tmdb:")
                                   and m.get("type") in ("movie", "series", "tv"))
     return needed
 
@@ -7897,7 +7897,7 @@ def explain(key, kind=None, person=None):
     with _feeds_lock:
         catalog_rows = list(dict.fromkeys(cid for store in (_feeds, _shown, *_shown_scoped.values()) for (cid, lang), row in store.items() if lang == LANG
             for xs in (row.get('metas') or {}).values() if isinstance(xs, list) for x in xs
-            if x['id'] == key and (kind is None or kind == ('movie' if x['type'] == 'movie' else 'tv'))
+            if isinstance(x, dict) and x['id'] == key and (kind is None or kind == ('movie' if x['type'] == 'movie' else 'tv'))
             and (x.get('_row') or {}).get('feeling_source') == 'catalog'))
     return {"key": key, "title": rec.get("title"), "score": s, "percentile": pct, "confidence": conf,
             **home['household'], **top,
@@ -10085,7 +10085,7 @@ def feeling_pool(m, p, xs, lang, seeds=6, extra=(), seed=None, *, cid=None, pers
     with _feeds_lock:
         cached = {(x['id'], 'movie' if x['type'] == 'movie' else 'tv'): x
                   for store in (_feeds, _shown) for row in store.values()
-                  for cards in (row.get('metas') or {}).values() if isinstance(cards, list) for x in cards}
+                  for cards in (row.get('metas') or {}).values() if isinstance(cards, list) for x in cards if isinstance(x, dict)}
     exclusions = catalog_exclusions(cid or rid('foryou'), person)
     catalog, scores, missing = [], {}, 0
     for sc, _, key, kind in ranks[person]:
@@ -10951,7 +10951,7 @@ def catalog_picks(p, m, cid, person=None, lang=LANG, ranks=None):
                     for x in ((_feeds.get((cid, lang)) or {}).get('metas') or {}).get('tv', [])}
         cached = {(x['id'], 'movie' if x['type'] == 'movie' else 'tv'): x
                   for store in (_feeds, _shown) for row in store.values()
-                  for xs in (row.get('metas') or {}).values() if isinstance(xs, list) for x in xs}
+                  for xs in (row.get('metas') or {}).values() if isinstance(xs, list) for x in xs if isinstance(x, dict)}
     lists = []
     for who in viewers:
         if who not in ranks:

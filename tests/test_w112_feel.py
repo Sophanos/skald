@@ -236,6 +236,22 @@ class FeelingReachTests(unittest.TestCase):
         row = rowplan.why(s, 'newtoyou')
         self.assertEqual(row['candidate_sources'], {'catalog': 79, 'recommendations': 0, 'missing_cards': 1})
 
+    def test_saga_id_list_in_stored_rows_does_not_break_catalog_paths(self):
+        # Watch It Again stores its saga parts as a plain id list beside the cards.
+        s = self.s
+        meta = s.known_meta('tmdb:179', 'movie')
+        meta['_row']['feeling_source'] = 'catalog'
+        rewatch = {'metas': {'movie': [meta], 'sagas': ['tmdb:179', 'tmdb:180']}}
+        s._feeds[s.rid('rewatch'), s.LANG] = rewatch
+        s._shown[s.rid('rewatch'), s.LANG] = rewatch
+        s._shown_scoped['ana'] = {(s.rid('rewatch'), s.LANG): rewatch}
+        self.assertTrue(s.catalog_picks(self.p, self.m, s.rid('foryou')))
+        self.assertIn(s.rid('rewatch'), s.explain('tmdb:179', 'movie')['feeling_catalog_rows'])
+        s.catalog_drop(s.known_meta('tmdb:180', 'movie'), self.p, s.rid('foryou'), None)
+        self.assertIn(('tmdb:179', 'movie'), s._needed_emb([]))
+        self.assertEqual(commands.find_title(s, {'values': [meta['name']], 'kind': 'movie'})['key'], 'tmdb:179')
+        self.build()
+
     def test_explain_includes_catalog_source_of_pinned_cards(self):
         s = self.s
         meta = s.known_meta('tmdb:179', 'movie')
