@@ -72,14 +72,18 @@ class AbandonReadingTests(unittest.TestCase):
         self.assertEqual([read[n] for n in (1, 2, 3)], [("watched", 2.0, None)] * 3)
 
     def test_stopped_titles_never_explain_a_pick(self):
-        entries = [self.entry(n, "watched", 2.0) for n in (1, 2, 3)] + [self.entry(10, "abandoned", -1.5)]
+        opened = {**self.entry(11, "opened", .2), "opinions": {self.ana: {"signal": "abandoned", "weight": -1.5,
+                  "item": {}, "flags": [], "wsrc": "stremio"}}}
+        entries = [self.entry(n, "watched", 2.0) for n in (1, 2, 3)] + [opened, self.entry(10, "abandoned", -1.5)]
         self.s.read_abandoned(entries)
         self.assertEqual(entries[-1]["abandon"], "related")
+        self.assertEqual(opened["opinions"][self.ana]["abandon"], "related")
         profile = {"entries": entries, "genres": {}, "searches": [], "likes": "", "seen": set(), "negative": set()}
         with patch.object(self.s, "ensure_facets"), patch.object(self.s, "ensure_emb"):
             m = self.s.build_model(profile, enrich=False)
-        self.assertNotIn("tmdb:10", m["ent"])
-        self.assertFalse([fid for fid, hs in m["holders"].items() if any(k == "tmdb:10" for _, k in hs)])
+        for key in ("tmdb:10", "tmdb:11"):  # also when only the member's own opinion is the stop
+            self.assertNotIn(key, m["ent"])
+            self.assertFalse([fid for fid, hs in m["holders"].items() if any(k == key for _, k in hs)])
 
     def test_member_opinions_on_shared_titles_are_read_per_member(self):
         watched = [self.entry(n, "watched", 2.0, by=self.ben) for n in (1, 2, 3)]

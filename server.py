@@ -6238,6 +6238,13 @@ def _abandon_ties(rec, lead):
             | ({f"o:{rec['collection']}"} if rec.get("collection") else set()))
 
 
+def _stopped(e):
+    """A stop never explains a pick: true when every owner's own reading of the title is a given up one."""
+    opinions = e.get("opinions") or {}
+    values = [opinions.get(p) or e.get("shared") or e for p in _expand_together(e.get("by") or ())] or [e]
+    return all(v.get("abandon") for v in values)
+
+
 def _abandon_tied(stop, watched):
     """True when a stopped title shares a director or saga with their watched and loved titles, or a lead
     actor who carries two watched titles or one loved title."""
@@ -8029,7 +8036,7 @@ def build_model(p, enrich=True):
     global _seed_stats
     house = adult_profile(p)
     house = {**house, "entries": taste_entries(house["entries"])} if house else house
-    pos_entries = [e for e in house["entries"] if e["weight"] > 0 and not e.get("abandon")]  # a stop never explains a pick
+    pos_entries = [e for e in house["entries"] if e["weight"] > 0 and not _stopped(e)]
     pairs = enrichment_pairs(p, member_people())
     try:
         ensure_facets([(k, kind) for k, kind in pairs if not frec(k, kind)][:400])
