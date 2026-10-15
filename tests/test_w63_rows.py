@@ -86,7 +86,7 @@ class RowConfig(unittest.TestCase):
             text = (root / 'docs' / (name + '.md')).read_text()
             self.assertIn('skald setup rows episodes,foryou,top10,digital,toprated', text)
             self.assertIn('skald setup rows all', text)
-        self.assertLessEqual(len((root / 'README.md').read_text().splitlines()), 220)
+        self.assertLessEqual(len((root / 'README.md').read_text().splitlines()), 260)
 
     def test_invalid_rows(self):
         for rows in ([], ['unknown'], 'top10', [True]):

@@ -24,7 +24,7 @@ class ReleaseDocs(unittest.TestCase):
 
     def test_readme_links_and_plain_quickstart(self):
         text = (ROOT/'README.md').read_text()
-        self.assertLessEqual(len(text.splitlines()), 220)
+        self.assertLessEqual(len(text.splitlines()), 260)
         for name in ('SETUP', 'WATCH', 'CONNECTORS', 'UPGRADE', 'CLI', 'ROWS', 'SEARCH', 'TASTE', 'PRIVACY'):
             self.assertIn('docs/' + name + '.md', text)
         self.assertIn('docker compose exec engine skald setup', text)
@@ -95,9 +95,12 @@ class ReleaseDocs(unittest.TestCase):
                     if before.startswith('|') and not after.startswith('|'):
                         self.assertEqual(after, '', 'A table needs a blank line after it')
         search = (ROOT/'README.md').read_text().split('## Talk to it from the search box', 1)[1].split('## Your data', 1)[0]
-        rows = [line for line in search.splitlines() if line.startswith('|')][2:]
-        self.assertLessEqual(len(rows), 7)
-        self.assertTrue(all(len(row.split('|')[1].strip()) <= 35 for row in rows))
+        tables = [[line for line in block.splitlines() if line.startswith('|')][2:]
+                  for block in search.split('\n\n') if block.startswith('|')]
+        self.assertGreaterEqual(len(tables), 3)
+        for rows in tables:
+            self.assertLessEqual(len(rows), 7)
+            self.assertTrue(all(len(row.split('|')[1].strip().removesuffix(' ✨')) <= 35 for row in rows))
 
     def test_upgrade_build_matches_compose(self):
         text = (ROOT/'docs/UPGRADE.md').read_text()

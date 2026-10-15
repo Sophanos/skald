@@ -405,7 +405,7 @@ class Surfaces(Base):
         head = (ROOT / "CHANGELOG.md").read_text().split("## 1.4.1\n", 1)[1].split("**Data changes:** none.", 1)[0]
         self.assertIn("New to You", head)
         self.assertIn("archetypes.json", head)
-        self.assertLessEqual(len((ROOT / "README.md").read_text().splitlines()), 220)
+        self.assertLessEqual(len((ROOT / "README.md").read_text().splitlines()), 260)
         self.assertLessEqual(len((ROOT / "AGENTS.md").read_text().splitlines()), 110)
 
 

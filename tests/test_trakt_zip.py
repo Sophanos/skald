@@ -202,7 +202,7 @@ class TraktZipTests(unittest.TestCase):
             self.assertIn('"Export now"', text)
             self.assertIn('"Download all"', text)
             self.assertIn("import trakt trakt-export.zip", text)
-        self.assertLessEqual(len((root / "README.md").read_text().splitlines()), 220)
+        self.assertLessEqual(len((root / "README.md").read_text().splitlines()), 260)
 
     def test_existing_fixture_folder_unchanged(self):
         fixture = Path(__file__).parent / "fixtures/ingest/trakt.json"

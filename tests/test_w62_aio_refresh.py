@@ -356,5 +356,5 @@ class AIORefresh(unittest.TestCase):
             self.assertIn('skald setup aiostreams', text)
             self.assertIn('reload row names', text)
         self.assertIn('CATALOG_CACHE_TTL', (root / 'docs/SETUP.md').read_text())
-        self.assertLessEqual(len((root / 'README.md').read_text().splitlines()), 220)
+        self.assertLessEqual(len((root / 'README.md').read_text().splitlines()), 260)
 

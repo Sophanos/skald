@@ -177,34 +177,69 @@ See [all sources, commands and limits](docs/CONNECTORS.md#sources).
 ✨ rows need OpenRouter. Each member and Together get their own rows; each member can choose discovery style, release years and unwanted genres.
 Get Ready brings earlier saga films or unfinished seasons together before a new release. Each viewer sees only their own reasons for catching up. Screenshots show a test household. See [all rows and settings](docs/ROWS.md).
 
-## People in your household
-
-Add people from search: "Add my mother Vesna", "Add Vesna" or "Add Kim, she is 12". A child without an age gets a question; reply, then confirm with `yes NN`. German: "Meine Mutter Vesna wohnt jetzt bei uns". Serbian: "Dodaj mamu Vesnu".
-
-Current household adults can ask "What did Kim watch this week?", "What does Kim like?" or "When is Kim around?" to read a child's plays, taste and watching days. Guests and away adults cannot do this. Watching days come only from the child's own Odin/AIOStreams login and keep 56 days of dates, with no titles or times. Shared logins never count. Skald shows dates and counts without guessing where the child is. [Privacy](docs/PRIVACY.md#childrens-watching-days).
-
-"Add Marko as a guest for 3 days" adds a visitor without changing household taste. "a catalog for Marko and me with heist movies for 3 days" adds a shelf on your Home. Both end after the last local day; saved guest history stays.
-
-"Ben moved out" removes him and keeps his data; `undo` restores him. "Forget Ben" previews permanent erasure on the server command line. "Ben is away until 1 November" pauses an adult's influence on household picks until after that day; "Ben is back" returns him sooner. Ask "what changed this week" and undo by name or id, keeping unrelated newer changes. [People and controls](docs/CLI.md#household-people-and-controls).
-
 ## Talk to it from the search box
 
-No extra app needed: the search field in Odin or Stremio finds titles, teaches Skald and changes your rows.
+No extra app needed. The search field in Odin or Stremio finds titles ("Dune" searches as usual), teaches Skald what you like and changes your rows, in English, German and Serbian at the same time. ✨ marks what needs OpenRouter; short fixed phrases such as "hide anime" work without a key, free wording needs one.
 
 <img src="docs/images/skald-search.jpg" alt="Odin search for anime I haven't watched, showing Skald AI results for a test household" width="960">
 
-| You type | Skald |
+| Find | Skald |
 |---|---|
-| "cozy mystery for a rainy evening" | Picks for tonight that fit your taste. |
-| "anime I haven't watched" | Searches around your own history. |
-| "why is Arrival in my picks" | Tells you what it learned. |
+| "cozy mystery for a rainy evening" ✨ | Picks for tonight that fit your taste. |
+| "anime I haven't watched" ✨ | Searches around your own history. |
+| "why is Arrival in my picks" | Explains the pick. Changes nothing. |
 | "what do you know about me" | Shows your taste, shelves and settings. |
-| "make me a row of heist films" | Adds a heist shelf to your rows. |
-| "Ben watched Arrival, not me" | Moves the watch, and the taste, to Ben. |
-| "hide anime for Ana" | Changes Ana's rows. |
 
-Changes show a card with a `yes NN` code: type it to apply, `undo` to take it back. "Forget Ben" only previews erasure and shows the command. Erase runs only from the server command line: `python -m skald members forget ben --person ana`. An adult can erase an adult, child or guest. Shared watches keep teaching whoever stays, without Ben's name; add `--shared drop` to remove those watches too. If Skald saved Ben's Odin login or mapping, it removes that copy and reminds you to remove access in Odin and AIOStreams. It cannot be undone. Plain titles like "Dune" search as usual. To erase the whole household, preview `python -m skald erase --household --json`. Confirm the matching plan, then type ERASE. Scripts and `--json` require `--confirm ERASE`; see the [CLI confirmations](docs/CLI.md#household-people-and-controls). This deletes personal data, saved logins and all backups inside Skald's DATA folder. Addon tokens, the format marker, setup addresses and server lock files stay, along with an empty erase marker. Existing addon links answer with empty rows; run setup again and restart Skald. Search "erase everything" only previews this command. Backups outside Skald's data folder are not touched; delete them yourself.
-Commands work in English, German and Serbian at the same time, with no language switch. AI requests and new shelves need OpenRouter. [Everything you can type](docs/SEARCH.md).
+| Teach it | Skald |
+|---|---|
+| "I loved Dark", "I hated Dune" | Likes or dislikes the title. |
+| "I already watched Arrival" | Marks it seen. |
+| "Arrival is not for me, too slow" | Rates it down and keeps the reason. |
+| "Skip Arrival tonight" | Hides it for tonight. Your taste stays the same. |
+| "Ben watched Arrival, not me" | Moves your watch, and the taste, to Ben. |
+
+| Change your rows | Skald |
+|---|---|
+| "hide anime for Ana" | Changes Ana's rows. |
+| "make me a row of heist films" ✨ | Adds a heist shelf. "for us" makes it a Together shelf. |
+| "stop the sunday shelf" | Stops a shelf. |
+| "rename For You to Ana Picks" | Renames the row. |
+
+| People and family | Skald |
+|---|---|
+| "Add my mother Vesna" | Adds a member. A name alone works too. |
+| "My girlfriend Lena is moving in" | Adds Lena. Also in German and Serbian. |
+| "Add Kim, she is 12" | Adds a child. Kim's rows follow her age. |
+| "Add Marko as a guest for 3 days" | A visitor who does not change household taste. |
+| "Ben is away until 1 November" | Pauses Ben's influence on household picks. |
+| "What did Kim watch this week?" | A parent reads a child's plays. |
+| "When is Kim around?" | A parent sees a child's watching days. |
+
+**Every change is previewed.** A card whose name starts with a `yes NN` code shows what would change. Type the code within ten minutes to apply it, `undo` to take it back. Read-only questions such as "why is Arrival in my picks" change nothing and need no code.
+"what changed this week" lists the last seven days with ids. "undo the AI budget" or "undo ID" reverts one change and keeps newer, unrelated ones. Right after a change, "no, I meant Ben" fixes it.
+More: [everything you can type](docs/SEARCH.md), [how corrections teach](docs/TASTE.md#correct-it), [commands by task](docs/CLI.md).
+
+## People in your household
+
+- **Up to six active people**, children and guests included. Each has their own rows, and so does Together, which ranks by the adults. Guest visits and shelves end after the last local day; saved guest history stays.
+- **Odin plays count for the right person.** A play goes to the member whose login played; otherwise to Who's watching, and without one to Together. `skald plays` shows new plays per person and `skald plays person ben off` stops reading one ([Odin plays](docs/CLI.md#odin-plays)).
+- **Child reads** are for current adults only. Guests and away adults cannot ask, and adults cannot read each other's plays. Watching days come only from the child's own Odin/AIOStreams login, keep 56 days of dates and hold no titles or times. Shared logins never count. Skald shows dates and counts without guessing where the child is. [Privacy](docs/PRIVACY.md#childrens-watching-days).
+
+## Leaving and erasing
+
+- **"Ben moved out"** removes him from the household and keeps his data. `undo` restores him.
+- **"Forget Ben"** and **"erase everything"** only preview in search and show the server command. Erasing runs only from the server command line and cannot be undone.
+- **One person:** `python -m skald members forget ben --person ana`. An adult can erase an adult, child or guest.
+- **Whole household:** preview with `python -m skald erase --household --json`, confirm the matching plan, then type ERASE. Scripts and `--json` require `--confirm ERASE`; see the [CLI confirmations](docs/CLI.md#household-people-and-controls).
+
+<details>
+<summary>The fine print</summary>
+
+- **One person:** shared watches keep teaching whoever stays, without Ben's name; add `--shared drop` to remove those watches too. If Skald saved Ben's Odin login or mapping, it removes that copy and reminds you to remove access in Odin and AIOStreams.
+- **Household:** deletes personal data, saved logins and all backups inside Skald's DATA folder. Keeps addon tokens, the format marker, setup addresses and server lock files, along with an empty erase marker. Existing addon links answer with empty rows; run setup again and restart Skald.
+- **Backups outside** Skald's data folder are not touched. Delete them yourself. More in [Privacy](docs/PRIVACY.md#leaving-guests-and-forgetting).
+
+</details>
 
 ## Your data
 

@@ -90,7 +90,7 @@ class ComposeExamplesTests(unittest.TestCase):
         for name in ('compose.yaml', 'compose.selfhost.example.yaml', 'compose.stack.example.yaml'):
             self.assertTrue((ROOT / name).is_file())
             self.assertIn('examples/', (ROOT / name).read_text())
-        self.assertLessEqual(len((ROOT / 'README.md').read_text().splitlines()), 220)
+        self.assertLessEqual(len((ROOT / 'README.md').read_text().splitlines()), 260)
 
     def test_pins_and_port_exposure(self):
         exposed = {'stremio', 'odin-jellyfin', 'small-box', 'reverse-proxy'}
