@@ -4,6 +4,13 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.7.1 (not released yet)
+
+One-click Stremio install. With an HTTPS address, `skald setup --watch stremio` prints a `stremio://` link for the household, each member and Together: open it on the device that has Stremio and the addon installs. `skald addon-url --stremio` adds those links and a Stremio Web link (`web.stremio.com`) to the printed URLs, `--person NAME` picks one member, and `--qr` prints that member's link as a QR code to scan with a phone. `--json` returns the links under `install`. Without the new flags `addon-url` prints the same lines as before. `skald setup aiostreams` also prints a `stremio://` link next to the AIOStreams Stremio URL. The QR code is drawn in the terminal by Skald itself, with no new dependency. The links and the QR code contain the private addon token.
+Docs: `docs/CONNECTORS.md` starts with a table to choose a source: what each needs and whether we tested it.
+
+**Data changes:** none (FORMAT stays 5); no migration.
+
 ## 1.7.0
 
 Personal weekly picks are back as their own row, right after ✨ New This Week: "✨ This Week for Ana & Ben" ("✨ Diese Woche für Ana & Ben"). Once a week, one AI call picks up to 3 titles for each adult and 3 for everyone together, from any year, that the household has not seen, given up on or hidden. Each card says who it is for and, when the AI linked the pick to one of that person's favourites, which one ("For Ana · like Arrival"). That text comes from fixed strings, not from the AI. Children and guests do not see adults' picks, and a title in New This Week does not show here the same week. Without OpenRouter, or when the AI budget is used up, the row stays empty that week. `python -m skald rows week --weeks 2 --person ana --json` and asking in search ("I missed our personal recommendations from last week") also return these picks for the last 8 weeks. Households that chose their own row list keep it; turn the row on with `python -m skald setup rows <your rows>,weekpicks` or by searching "show the weekpicks row".

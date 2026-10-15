@@ -16,6 +16,23 @@ and recent plays. A failed test exits with an error.
 Account names are hidden by default; `--show` reveals unmapped names locally.
 Counts follow the existing adapters' limits; they are a preview, not a full audit.
 
+## Choose a source
+
+Start with the app you already watch in. Each row is one command on the server unless it says laptop.
+
+| You watch or track with | Connect | You need | Tested by us |
+|---|---|---|---|
+| Odin or another Jellyfin app through AIOStreams | AIOStreams database | nothing; mount the database read-only | yes |
+| Stremio | Stremio | your Stremio login once, or its auth key | sample data only |
+| Trakt | a Trakt export file (laptop) or a Trakt account | the export: nothing; the account: a Trakt API app, which may need VIP | sample files only |
+| PublicMetaDB | PublicMetaDB | a free key per person | yes |
+| MDBList | MDBList | a free key, and MDBList must already record your plays | partly |
+| A Jellyfin or Plex server | Jellyfin or Plex | an API key or account token | not yet |
+| Netflix, IMDb, Letterboxd, YouTube, Chrome | an export file (laptop) | the export file | sample files only |
+
+Fewest steps: AIOStreams database or Stremio. Without an account anywhere, import a file.
+You can connect several sources; Skald folds the same title together.
+
 ## Sources
 
 Accounts connect on the server; exports import on a laptop. Trakt works both ways.

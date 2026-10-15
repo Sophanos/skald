@@ -423,8 +423,12 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None, secret
                 lines.extend(['Odin / Jellyfin app:  server  ' + public + '/jellyfin',
                               '                      user    ' + login['uuid']])
                 if not args.json and not private:
+                    stremio = public + '/stremio/' + login['uuid'] + '/' + encrypted + '/manifest.json'
                     lines.extend(['                      password ' + login['password'] + '   (shown once; also saved privately in DATA)',
-                                  'Stremio (optional):   ' + public + '/stremio/' + login['uuid'] + '/' + encrypted + '/manifest.json'])
+                                  'Stremio (optional):   ' + stremio])
+                    links = recipes.stremio_links(stremio)
+                    if links:
+                        lines.append('                      one click  ' + links['app'])
         result = {'ok': True, 'lines': lines}
     except Exception as error:
         hint = 'AIOStreams setup failed; check its address, access key and login, then retry with skald setup aiostreams' if private else str(error) if isinstance(error, ValueError) else 'AIOStreams response incomplete; check its settings'
@@ -1083,6 +1087,11 @@ def run(args):
         saved['watch'] = watch
         write_private(data/'setup.json', json.dumps(saved) + '\n')
         lines.extend(recipes.recipe(watch, urls[0], cfg['region']['lang'], s.addon_urls(internal_base)[0].replace(token, '<addon-token>') if internal_base and args.json else s.addon_urls(internal_base)[0] if internal_base else None).splitlines())
+        if watch == 'stremio' and recipes.stremio_links(base):
+            lines.append('Install with one click: open your link on the device that has Stremio.')
+            lines.extend(('Household' if p == 'household' else 'Together' if p == 'together' else cfg['household']['labels'][p])
+                         + ': ' + recipes.stremio_links(url)['app'] for p, url in zip(['household', *s.SCOPES], urls))
+            lines.append('QR code for a phone: skald addon-url --stremio --qr --person NAME --base ' + base)
         if args.connect or not saved.get('taste') and not cfg['connectors']:
             args.connect = ask(args.connect, 'Taste source: trakt, mdblist, stremio, pmdb, jellyfin, plex, aiostreams-db, files', 'files', '--connect')
             if args.connect == 'aiostreams-db':

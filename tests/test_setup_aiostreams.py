@@ -123,6 +123,7 @@ class AIOStreamsTests(unittest.TestCase):
         self.assertEqual(text.count('server  https://aio.example.org/jellyfin'), 1)
         self.assertEqual(text.count('user    a1b2c3d1-fake'), 1)
         self.assertEqual(text.count('fake-password'), 1)
+        self.assertEqual(text.count('one click  stremio://aio.example.org/stremio/a1b2c3d1-fake/'), 1)
         self.fake.calls.clear()
         code, text = self.run_setup()
         self.assertEqual(code, 0, text)

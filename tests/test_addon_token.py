@@ -259,6 +259,30 @@ class AddonTokenTests(unittest.TestCase):
         self.assertEqual(self.process(str(ROOT / "server.py"), "--rotate-addon-token", "--base", "https://user:pass@host").returncode, 2)
         self.assertEqual((self.data / "addon.json").read_bytes(), before)
 
+    def test_stremio_install_links_and_qr(self):
+        urls = self.s.addon_urls("https://host.example")
+        output = self.process("-m", "skald", "addon-url", "--base", "https://host.example", "--stremio", "--json")
+        self.assertEqual((output.returncode, output.stderr), (0, ""))
+        data = json.loads(output.stdout)
+        self.assertEqual(data["urls"], urls)
+        self.assertEqual([i["member"] for i in data["install"]], ["household", "ana", "ben", "together"])
+        ana = data["install"][1]
+        self.assertEqual(ana["url"], urls[1])
+        self.assertEqual(ana["stremio"], urls[1].replace("https://", "stremio://", 1))
+        self.assertEqual(ana["web"], "https://web.stremio.com/#/addons?addon=" + urllib.parse.quote(urls[1], safe=""))
+        text = self.process("-m", "skald", "addon-url", "--base", "https://host.example", "--stremio", "--person", "ben", "--qr")
+        self.assertEqual((text.returncode, text.stderr), (0, ""))
+        self.assertIn(urls[2].replace("https://", "stremio://", 1), text.stdout)
+        self.assertNotIn(urls[1], text.stdout)
+        self.assertIn("\x1b[30;107m", text.stdout)
+        self.assertEqual(self.process("-m", "skald", "addon-url", "--base", "https://host.example", "--qr").returncode, 2)
+        plain = self.process("-m", "skald", "addon-url", "--base", "http://skald:8080", "--stremio", "--json")
+        self.assertEqual(plain.returncode, 0)
+        self.assertEqual({i["stremio"] for i in json.loads(plain.stdout)["install"]}, {None})
+        self.assertIn("HTTPS", self.process("-m", "skald", "addon-url", "--base", "http://skald:8080", "--stremio").stdout)
+        # Without the new flags the output stays one URL per line.
+        self.assertEqual(self.process("-m", "skald", "addon-url", "--base", "https://host.example").stdout.splitlines(), urls)
+
 
 if __name__ == "__main__":
     unittest.main()

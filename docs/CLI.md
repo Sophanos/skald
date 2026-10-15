@@ -281,6 +281,7 @@ values and defaults. Fact correction is not implemented yet.
 |---|---|
 | Docker start | Build and run Skald: `docker compose up -d --build` |
 | `addon-url` | Print installation links: `skald addon-url --base https://tv.example.org` |
+| `addon-url --stremio` | Add one-click Stremio links (app and Stremio Web) for HTTPS addresses; `--person NAME` picks one member, `--qr` prints its QR code: `skald addon-url --base https://tv.example.org --stremio --person alex --qr` |
 | `doctor` | Check a local copy and import state: `skald --snapshot /path/copy doctor` |
 | `doctor keys` | Check saved title identifiers: `skald --snapshot /path/copy doctor keys` |
 | `backup list` | List DATA backups: `skald backup list --data /data` |

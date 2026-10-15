@@ -175,6 +175,9 @@ def parser():
     addon = cmd(commands, "addon-url")
     addon.add_argument("--base")
     addon.add_argument("--rotate-addon-token", action="store_true")
+    addon.add_argument("--stremio", action="store_true", help="also print one-click Stremio install links (HTTPS only)")
+    addon.add_argument("--person", choices=(*PEOPLE, "together", "household"), help="only this member's link")
+    addon.add_argument("--qr", action="store_true", help="print a QR code of the Stremio app link; needs --person")
     taste = cmd(commands, "taste").add_subparsers(dest="taste", required=True)
     person(cmd(taste, "show"))
     align = cmd(taste, "align")
@@ -1351,7 +1354,33 @@ def main(argv=None, out=None):
             result = subprocess.run(command, capture_output=True, text=True)
             if result.returncode:
                 raise ValueError(result.stderr.strip() or "could not create addon URLs")
-            print(json.dumps({"urls": result.stdout.splitlines()}) if args.json else result.stdout.rstrip("\n"), file=out)
+            urls = result.stdout.splitlines()
+            if not (args.stremio or args.qr or args.person):
+                print(json.dumps({"urls": urls}) if args.json else result.stdout.rstrip("\n"), file=out)
+                return 0
+            from . import qr, recipes
+            if args.qr and not args.person:
+                raise ValueError("--qr needs --person NAME")
+            install = []
+            for url in urls:
+                parts = url.split("/")
+                member = parts[-2] if parts[-3] == "p" else "household"
+                if args.person in (None, member):
+                    links = recipes.stremio_links(url) or {}
+                    install.append({"member": member, "url": url, "stremio": links.get("app"), "web": links.get("web")})
+            if args.json:
+                print(json.dumps({"urls": urls, "install": install}), file=out)
+                return 0
+            for item in install:
+                print(item["member"] + ": " + item["url"], file=out)
+                if item["stremio"]:
+                    print("  Stremio app: " + item["stremio"], file=out)
+                    print("  Stremio Web: " + item["web"], file=out)
+                if args.qr and item["stremio"]:
+                    print("Scan with the phone that has Stremio:", file=out)
+                    print(qr.terminal(item["stremio"]), file=out)
+            if not install[0]["stremio"]:
+                print("Install links need an HTTPS address; use --base https://YOUR_ADDRESS.", file=out)
             return 0
         if args.command in ("trakt", "login"):
             if args.snapshot or args.live:

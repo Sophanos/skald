@@ -35,7 +35,8 @@ AIOStreams is a separate project with its own [docs and licence](https://github.
 We reference its published image. Configure its stream addons for playback.
 
 Stremio direct — should work, not yet tested by us.
-Open the printed member URL (or Together) in Stremio → Install.
+Open your printed stremio:// link (or Together's) on the device that has Stremio → Install.
+Or paste the member URL into Stremio's addon search. `skald addon-url --stremio --qr --person NAME` prints a QR code for a phone.
 Skald only adds rows and search; keep your stream addons for playback.
 Stremio viewing reaches Skald directly: run `skald setup --connect stremio --person NAME` for each account. Trakt stays an option: turn it on in Stremio and run `skald setup --connect trakt`. You can also connect MDBList or import history.
 Get a free key at mdblist.com/preferences; record plays with its Plex webhook or Emby/Jellyfin plugins.

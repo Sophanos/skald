@@ -517,6 +517,9 @@ not a missing step. Status does not save these records or check the running engi
 Restart the engine after setup so it loads the saved settings, then install the printed URL.
 Allow time for the first rows to build. Title search works while rows are building.
 Print links again with `skald addon-url --base YOUR_ADDRESS`.
+With an HTTPS address, setup also prints `stremio://` links: open one on the device that has Stremio and it installs with one click.
+Add `--stremio` to `addon-url` for those links and a Stremio Web link; `--stremio --qr --person NAME` prints a QR code to scan with a phone.
+The links and the QR code contain the private addon token. Do not share them.
 Rotate a leaked addon link with `skald addon-url --rotate-addon-token --base YOUR_ADDRESS`.
 That replaces every installed link. Reinstall them in your apps.
 
