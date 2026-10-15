@@ -54,9 +54,9 @@ Never commit DATA, watch history, credentials, tokens or private snapshots.
 
 ## Keep the project working
 
-Skald owns every watch rule; Stremio, Trakt and Jellyfin apps (Odin) only deliver raw history,
-so name rules after Skald. classify() in `server.py` decides watched, interest, given up or opened;
-connectors pass it progress and dates (Trakt and PMDB still keep their own thresholds).
+Skald owns every watch rule; Stremio, Trakt and Jellyfin apps (Odin) only deliver raw history, so
+name rules after Skald. classify() in `server.py` decides watched, interest, given up or opened, and
+read_abandoned() weighs each given up title; Trakt and PMDB still keep their own thresholds.
 Build every row and catalog id with rid(); never use a literal prefix.
 Never rewrite stored ids. A stored DATA shape change needs a numbered migration
 in `skald/migrate.py`, a bump of FORMAT, and a migration test.

@@ -232,6 +232,16 @@ class StremioTests(unittest.TestCase):
         self.assertEqual(sorted((i['id'], i['signal']) for i in items), [('tmdb:3', 'watched'), ('tmdb:31', 'watched')])
         self.assertNotIn('tmdb:31', [c.args[0]['id'] for c in resolve.call_args_list])
 
+    def test_rewatched_films_count_as_loved(self):
+        self.rows = [item(41, state={'timesWatched': 21, 'lastWatched': STAMP}),
+                     item(42, state={'timesWatched': 1, 'lastWatched': STAMP})]
+        with patch.object(self.s, '_http_get', side_effect=self.fake), patch.object(self.s, 'tmdb_details', side_effect=self.resolve):
+            self.s._connector_stremio(self.c, NOW)
+        items = {i['id']: i for i in self.s.read_trakt()}
+        self.assertEqual((items['tmdb:41']['signal'], items['tmdb:41']['plays']), ('loved', 21))
+        self.assertIn('comfort', items['tmdb:41']['flags'])
+        self.assertEqual(items['tmdb:42']['signal'], 'watched')
+
     def test_trakt_rating_wins(self):
         rated = {'id': 'tmdb:4', 'type': 'movie', 'rating': 2, 'signal': 'disliked', 'weight': -3}
         self.s.CONFIG['connectors']['trakt_api'] = {'accounts': {self.person: 'file:synthetic.token'}}

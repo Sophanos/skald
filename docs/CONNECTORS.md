@@ -302,13 +302,15 @@ The engine syncs automatically: one library request, one likes-service key looku
 per person, with 10-second request timeouts. Unchanged library state, including `_mtime`,
 reuses resolved titles; repeat syncs add no duplicate events. IMDb ids resolve through TMDB.
 
-Watched means a positive watch count or watched flag, or at least 70% progress.
+Watched means a positive watch count or watched flag, or at least 70% progress. A film watched
+two or more times counts as loved, like a Trakt replay.
 The watch time comes from `lastWatched`. A retained library item without a watch becomes
 an added interest; partial progress alone does not count as a watch. Titles watched outside
 the library count as watched. A started film follows the same rule as player history: stopped
 between 3% and 30% more than two days ago counts as given up, a later point counts as interest,
 and under 3% counts as only opened. Each sync reads the current position, so a film you resume
-or finish changes to interest or watched. Other removed and temporary items add no signals. Loved maps to rating 10 and liked to 8,
+or finish changes to interest or watched. How much a given up title counts is Skald's reading
+in `docs/TASTE.md`. Other removed and temporary items add no signals. Loved maps to rating 10 and liked to 8,
 including titles outside the library. An explicit Trakt rating for the same member/title wins.
 Loves and likes come from Stremio's likes service and are best effort. If they are unavailable,
 the library still syncs and Skald keeps that person's cached likes.

@@ -10,10 +10,11 @@ One-click Stremio install. With an HTTPS address, `skald setup --watch stremio` 
 Stremio sign-in by link. `skald setup --connect stremio` with a blank key prompt prints a Stremio link and a QR code; sign in to Stremio there and setup continues by itself, so nobody copies a key or types a password into Skald. If Stremio cannot create a link, setup falls back to the private email and password prompts. The one-click install links and the `--qr` code now use the Stremio Web link, which installs to the Stremio account on every device.
 Fix: Stremio titles watched outside the library now count as watched. Stremio keeps them as removed items, and Skald skipped them, so most Stremio viewing was missing.
 Stremio started films follow the shared watch rule used for player history: stopped early more than two days ago counts as given up, later as interest; resuming or finishing updates it on the next sync. Stremio items with TMDB ids are read too.
+Given up titles count by what they relate to, for every history source. A title stopped early that shares a director, saga or lead actor with something the member watched or loved counts as a small plus (they went back to it); one close to their taste counts as unsure and comes first in Find your taste until they answer, even after the interview is done; anything else counts as a small minus, a third of before. Pressing abandon or not for us still counts in full. A Stremio film watched two or more times now counts as loved, like a Trakt replay.
 Fix: Stremio requests now send a User-Agent. Stremio refused requests without one, so loves and likes were always reported as unavailable.
 Docs: `docs/CONNECTORS.md` starts with a table to choose a source: what each needs and whether we tested it.
 
-**Data changes:** FORMAT stays 5; no migration. Each `stremio-NAME.history.json` moves from version 1 to 3 on its next sync, which maps the library again; older builds ignore the version and read it as before.
+**Data changes:** FORMAT stays 5; no migration. Each `stremio-NAME.history.json` moves from version 1 to 4 on its next sync, which maps the library again; older builds ignore the version and read it as before.
 
 ## 1.7.0
 

@@ -5102,7 +5102,7 @@ def _stremio_login(email, password):
     return key
 
 
-STREMIO_RULES = 3  # bump when _stremio_item rules change so cached rows are mapped again
+STREMIO_RULES = 4  # bump when _stremio_item rules change so cached rows are mapped again
 STREMIO_LINK = "https://link.stremio.com/api/v2/"
 
 
@@ -5157,10 +5157,13 @@ def _stremio_item(row, now):
     at = last if watched else None
     if at is not None:
         title["plays"] = [math.floor(at / 60 + 0.5)]
+        if kind == "movie" and (state.get("timesWatched") or 0) >= 2:
+            title["plays"].append(title["plays"][0] - 1)  # watched again: a favourite, as with Trakt replays
     exported = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     it = _trakt_import_history({"exported_at": exported, "movies": [title], "shows": []}, now)["items"][0]
     it.update(type=kind, played=watched, plays=max(1, state.get("timesWatched") or 0) if watched else 0,
-              signal=signal, weight=it["weight"] if at is not None else 2 if watched else SIGNAL_WEIGHT[signal])
+              signal=it["signal"] if at is not None else signal,
+              weight=it["weight"] if at is not None else 2 if watched else SIGNAL_WEIGHT[signal])
     if position:
         it["progress"] = round(position, 3)
         if signal == "abandoned" and last:
@@ -5174,7 +5177,7 @@ def _stremio_item(row, now):
 
 def _stremio_stronger(it, old):
     """Two Stremio rows for one title (IMDb and TMDB ids) keep the stronger signal."""
-    order = ("abandoned", "interest", "watched")
+    order = ("abandoned", "interest", "watched", "loved")
     return old is None or order.index(it["signal"]) > order.index(old["signal"])
 
 
@@ -6206,6 +6209,7 @@ def build_profile(items, searches, trakt=(), remote=True):
     """Household TV history plus the owner's Trakt history, folded in source precedence order."""
     now = time.time()
     entries, by_key, extra_seen = fold_events(event_stages(now, items, trakt, remote), now)
+    read_abandoned(entries)
     if player_history_active():
         extra_seen |= {it["id"] for it in items if (it.get("played") or it.get("episodes_played")) and attribute(it)[0] not in (GUEST, *guest_people(CONFIG))}
     entries.sort(key=lambda e: (-(e["weight"] / (1 + min(e["age"], 365) / 60)), e["age"]))
@@ -6216,6 +6220,72 @@ def build_profile(items, searches, trakt=(), remote=True):
     shared = [e for e in entries if set(e.get('by', ())) & set(member_people()) or 'together' in e.get('by', ())]
     return {"entries": entries, "genres": genre_w, "searches": searches, "likes": "",
             "seen": {e["key"] for e in shared} | extra_seen | history_seen(DATA), "negative": {e["key"] for e in shared if e["weight"] < 0}}
+
+
+# Skald's reading of a title someone started and stopped (from history, never a pressed "abandon"): tied to
+# something they watched or loved (same director, saga or lead actor) means they went back to it; about what
+# they like means unsure, asked in the interview row; anything else is a mild "not this". Ties and taste come
+# only from their watched and loved titles, so stopped titles never vouch for each other.
+ABANDON_READ = {"related": ("interest", .5), "unsure": ("abandoned", 0.0)}
+ABANDON_FAR = 1 / 3       # share of the stop's weight that stays as a mild "not this"
+ABANDON_CLOSE = .5        # share of a watched title's typical topic overlap that makes a stop unsure
+ABANDON_ABOUT = ("k:", "g:", "t:", "s:", "x:")  # what a title is about; people count as ties instead
+
+
+def _abandon_ties(rec, lead):
+    return ({f"d:{i}" for i, _ in rec.get("d") or []} | {f"a:{i}" for i, _ in (rec.get("a") or [])[:lead]}
+            | ({f"o:{rec['collection']}"} if rec.get("collection") else set()))
+
+
+def read_abandoned(entries):
+    """Reads each inferred abandon per member, in place: see ABANDON_READ."""
+    with _facets_lock:
+        store = dict(_facets)
+    df = {}
+    for r in store.values():
+        for fid, _ in facet_pairs(r):
+            if fid.startswith(ABANDON_ABOUT):
+                df[fid] = df.get(fid, 0) + 1
+    n_all = len(store) + 2
+    idf = {fid: math.log(n_all / (n + 1)) / math.log(n_all) for fid, n in df.items()}
+    loved, stops = {}, {}
+    for e in entries:
+        opinions, owners = e.get("opinions") or {}, _expand_together(e.get("by") or ())
+        for person in owners:
+            value = opinions.get(person) or e.get("shared") or e
+            if value["signal"] in ("loved", "liked", "watched") and value["weight"] > 0:
+                loved.setdefault(person, {})[(e["key"], e["kind"])] = frec(e["key"], e["kind"])
+        for value, people in ((e, owners), (e.get("shared"), owners), *((v, {p}) for p, v in opinions.items())):
+            if not value or value.get("signal") != "abandoned" or value is not e and value.get("wsrc") in ("remote", "interview"):
+                continue
+            if value is e and e.get("who") in ("remote", "told"):
+                continue
+            stops.setdefault(id(value), (value, e, set()))[2].update(people)
+    taste = {}
+    for person, recs in loved.items():
+        about = [{fid for fid, _ in facet_pairs(r) if fid.startswith(ABANDON_ABOUT)} for r in recs.values()]
+        count = {}
+        for fids in about:
+            for fid in fids:
+                count[fid] = count.get(fid, 0) + 1
+        n = len(about)
+        overlap = sorted(sum((count[f] - 1) / (n - 1) * idf.get(f, 0) for f in fids) for fids in about) if n > 1 else []
+        ties = set().union(*(_abandon_ties(r, 3) for r in recs.values()))
+        taste[person] = (ties, count, n, overlap[len(overlap) // 2] if overlap else 0)
+    for value, e, people in stops.values():
+        r = frec(e["key"], e["kind"])
+        reading = "far"
+        for person in people:
+            ties, count, n, bar = taste.get(person, (set(), {}, 0, 0))
+            if r and _abandon_ties(r, 2) & ties:
+                reading = "related"
+                break
+            score = sum(count.get(fid, 0) / n * idf.get(fid, 0) for fid, _ in facet_pairs(r)
+                        if fid.startswith(ABANDON_ABOUT)) if n else 0
+            if score > 0 and bar > 0 and score >= ABANDON_CLOSE * bar:
+                reading = "unsure"
+        signal, weight = ABANDON_READ.get(reading, ("abandoned", value["weight"] * ABANDON_FAR))
+        value.update(signal=signal, weight=weight, abandon=reading)
 
 
 SEED_WEIGHT = 2.0  # a title someone told us they love: timeless, so no recency
@@ -15698,20 +15768,31 @@ def interview_next(person):
     member = maturity(m, person)
     done_reason = "ready" if member["state"] == "ready" else "answers" if positives >= 20 and negatives >= 5 else None
     done = done_reason is not None
-    rated = {(e["key"], e["kind"]) for e in mine}
-    rated |= {(key, e["kind"]) for (key, who), e in active.items() if who == person}
-    rated |= {(e["key"], e["kind"]) for e in interview_skips() if e["who"] == person}
+    answered = {(key, e["kind"]) for (key, who), e in active.items() if who == person}
+    answered |= {(e["key"], e["kind"]) for e in interview_skips() if e["who"] == person}
+    rated = {(e["key"], e["kind"]) for e in mine} | answered
+    # Titles they stopped that Skald cannot read come first, even after the interview is done.
+    stops = []
+    for e in person_entries({"entries": entries}, person):
+        if e.get("abandon") == "unsure" and (e["key"], e["kind"]) not in answered and len(stops) < 3:
+            view = title_view(e["key"], e["kind"], person)
+            if view is not None:
+                stops.append({"key": e["key"], "kind": e["kind"], "title": view["title"],
+                              "year": str(frec(e["key"], e["kind"]).get("y") or ""), "experience": "abandoned"})
+    finished = done
+    if stops:
+        done, done_reason = False, None
     eligible = []
-    for key, kind, x, pop in interview_rank(() if done else ANCHORS, person if mine else None, m):
-        if done or (key, kind) in rated:
+    for key, kind, x, pop in interview_rank(() if finished else ANCHORS, person if mine else None, m):
+        if (key, kind) in rated:
             continue
         view = title_view(key, kind, person)
         if view is None:
             continue
         rec = frec(key, kind)
         eligible.append({"key": key, "kind": kind, "title": view["title"], "year": str(rec.get("y") or ""), "experience": x})
-    out, experiences = [], set()
-    for i in range(12):
+    out, experiences = list(stops), {"abandoned"}
+    for i in range(12 - len(stops)):
         left = [a for a in eligible if a["experience"] not in experiences]
         if not left:
             break

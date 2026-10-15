@@ -75,6 +75,26 @@ class InterviewTests(unittest.TestCase):
                 patch.object(self.s, "feed_rows", return_value=[]):
             self.assertEqual(self.s.remote_rows("de-DE"), {"rows": []})
 
+    def test_unsure_stops_come_first_until_answered_even_when_ready(self):
+        for a in self.s.ANCHORS[:40]:
+            self.e.interview("ana", self.answer(a))
+        key = "tmdb:900999"
+        self.s._facets[key] = {"title": "Synthetic stop", "kind": "movie", "y": "2021", "g": []}
+        stop = {"key": key, "id": 900999, "kind": "movie", "stype": "movie", "title": "Synthetic stop", "year": "2021",
+                "signal": "abandoned", "weight": 0.0, "age": 5, "item": {}, "who": "owner", "by": ["ana"],
+                "flags": [], "genres": [], "abandon": "unsure"}
+        profile = self.s._profiles["household"]
+        self.s._profiles["household"] = {**profile, "entries": profile["entries"] + [stop]}
+        self.s._interview_cache.clear()
+        view = self.s.interview_next("ana")
+        self.assertFalse(view["done"])
+        self.assertEqual([(a["key"], a["experience"]) for a in view["anchors"]], [(key, "abandoned")])
+        self.s.interview_answer({"key": key, "kind": "movie", "title": "Synthetic stop", "year": "2021",
+                                 "action": "not_for_us", "reasons": [], "who": "ana"})
+        view = self.s.interview_next("ana")
+        self.assertTrue(view["done"])
+        self.assertEqual(view["anchors"], [])
+
     def test_five_loves_learn_experience_and_progress(self):
         x = next(iter(self.s.EXPERIENCES))
         for a in [a for a in self.s.ANCHORS if a[2] == x][:5]:

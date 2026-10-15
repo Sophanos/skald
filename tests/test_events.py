@@ -280,6 +280,7 @@ class EventsTests(unittest.TestCase):
         by_key = {e['key']: e for e in entries}
         s.merge_imports(entries, by_key, NOW)
         base, _, _ = s.fold_events(s.event_stages(NOW, s.read_history(), s.read_trakt(), False), NOW)
+        s.read_abandoned(base)
         s._merge_import_events(base, {e['key']: e for e in base}, NOW, s.import_events(NOW))
         self.assertEqual(dump(sorted(entries, key=lambda e: e['key'])), dump(sorted(base, key=lambda e: e['key'])))
         # New imports attach to remote slots; told claims stay locked.

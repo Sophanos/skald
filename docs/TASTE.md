@@ -46,7 +46,8 @@ Raw exports stay on the laptop. See [import commands](CLI.md#import-history) for
 | A new evening starts | OpenRouter can choose moods from weekday, season and recent watching, with a penalty for yesterday's moods. | Once per logical day, starting at 05:00; rule rotation is the fallback. |
 | A mapped person watches, or you set Who's watching? | Plays credit the mapped person, otherwise the active session; Together ranking uses adult members. | When history is read; without a session, unmapped plays count as Together. |
 | Learned memory goes without new evidence | Its influence fades; preferences explicitly told to Skald keep their strength. | Learned strength halves every 180 days. |
-| You abandon or dislike titles | Negative signals lower taste fit; opening a title is only a hint. | On the next taste update and row build. |
+| You dislike a title | It lowers taste fit. | On the next taste update and row build. |
+| You stop a title early | Same director, saga or lead actor as something you watched counts as a small plus; close to your taste counts as unsure and Find your taste asks you; anything else is a small minus. A title you stopped never vouches for another. Opening a title is only a hint. | On the next taste update and row build. |
 | You change `skald setup prefs` | Discovery style, years and genre exclusions shape rows; child age limits also filter search. | Next row request; apps may cache briefly. |
 | Two positive titles share a director or creator | A `More from` shelf can show their unseen work if enough suitable titles remain. | Next theme build; needs at least eight unseen candidates. |
 
