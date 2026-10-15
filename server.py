@@ -5102,6 +5102,7 @@ def _stremio_login(email, password):
     return key
 
 
+STREMIO_RULES = 2  # bump when _stremio_item rules change so cached rows are mapped again
 STREMIO_LINK = "https://link.stremio.com/api/v2/"
 
 
@@ -5175,7 +5176,7 @@ def _connector_stremio(c, now, budget=None, *, readonly=False):
         raw = row.get("_id")
         if not isinstance(raw, str):
             continue
-        previous = old.get("library", {}).get(raw, {})
+        previous = old.get("library", {}).get(raw, {}) if old.get("version") == STREMIO_RULES else {}
         it = previous.get("item") if row == previous.get("state") else _stremio_item(row, now)
         records[raw] = {"state": row, "item": it}
         if it:
@@ -5220,7 +5221,7 @@ def _connector_stremio(c, now, budget=None, *, readonly=False):
             ident = it['type'], it['imdb']
             merged = {**it, **items.get(ident, {}), **{field: it[field] for field in ('signal', 'weight', 'rating') if field in it}}
             items[ident] = likes[cache_key] = merged
-    doc = {"version": 1, "source": "stremio", "library": records, "likes": likes, "items": list(items.values())}
+    doc = {"version": STREMIO_RULES, "source": "stremio", "library": records, "likes": likes, "items": list(items.values())}
     if readonly:
         return doc, None, {"plays_30d": sum(it.get("plays", 0) for it in doc["items"]
             if it.get("played") and now - 30 * DAY <= (it.get("at") or 0) / 1000 <= now), "likes_available": likes_available}

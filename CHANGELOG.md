@@ -12,7 +12,7 @@ Fix: Stremio titles watched outside the library now count as watched. Stremio ke
 Fix: Stremio requests now send a User-Agent. Stremio refused requests without one, so loves and likes were always reported as unavailable.
 Docs: `docs/CONNECTORS.md` starts with a table to choose a source: what each needs and whether we tested it.
 
-**Data changes:** none (FORMAT stays 5); no migration.
+**Data changes:** FORMAT stays 5; no migration. Each `stremio-NAME.history.json` moves from version 1 to 2 on its next sync, which maps the library again; older builds ignore the version and read it as before.
 
 ## 1.7.0
 

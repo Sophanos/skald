@@ -196,6 +196,14 @@ class StremioTests(unittest.TestCase):
             self.rows[0]['_mtime'] = '2026-10-11T12:00:00Z'
             self.assertEqual(self.s._connector_stremio(self.c, NOW + 120)[0], [])
 
+    def test_cached_rows_from_older_rules_are_mapped_again(self):
+        watched = item(5, removed=True, temp=True, state={'timesWatched': 1, 'lastWatched': STAMP})
+        self.rows = [watched]
+        self.s._connector_write('stremio-' + self.person + '.history', {'version': 1, 'library': {'tt5': {'state': watched, 'item': None}}, 'likes': {}, 'items': []})
+        with patch.object(self.s, '_http_get', side_effect=self.fake), patch.object(self.s, 'tmdb_details', side_effect=self.resolve):
+            self.s._connector_stremio(self.c, NOW)
+        self.assertEqual({i['id']: i['signal'] for i in self.s.read_trakt() if i['id'] == 'tmdb:5'}, {'tmdb:5': 'watched'})
+
     def test_trakt_rating_wins(self):
         rated = {'id': 'tmdb:4', 'type': 'movie', 'rating': 2, 'signal': 'disliked', 'weight': -3}
         self.s.CONFIG['connectors']['trakt_api'] = {'accounts': {self.person: 'file:synthetic.token'}}
