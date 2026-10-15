@@ -23,7 +23,7 @@ Start with the app you already watch in. Each row is one command on the server u
 | You watch or track with | Connect | You need | Tested by us |
 |---|---|---|---|
 | Odin or another Jellyfin app through AIOStreams | AIOStreams database | nothing; mount the database read-only | yes |
-| Stremio | Stremio | your Stremio login once, or its auth key | sample data only |
+| Stremio | Stremio | sign in once through a link, or its auth key | library yes; likes sample data only |
 | Trakt | a Trakt export file (laptop) or a Trakt account | the export: nothing; the account: a Trakt API app, which may need VIP | sample files only |
 | PublicMetaDB | PublicMetaDB | a free key per person | yes |
 | MDBList | MDBList | a free key, and MDBList must already record your plays | partly |
@@ -282,12 +282,14 @@ skald connectors test stremio
 skald setup --status
 ```
 
-Paste the auth key at the private prompt, or leave it blank to enter email and password
-at private prompts. The password goes once to Stremio login and is never saved.
-Only the auth key is saved under DATA/credentials/ with mode 0600, separately per person.
+Leave the key prompt blank. Setup prints a Stremio link and its QR code: open the link
+(or scan the code with a phone), sign in to Stremio, and setup continues by itself within
+five minutes. Skald never sees the password. If Stremio cannot create a link, setup asks for
+email and password at private prompts instead; the password goes once to Stremio login and is
+never saved. Only the auth key is saved under DATA/credentials/ with mode 0600, separately per person.
 For scripts, `--yes --key-stdin` (or `--secret-stdin`) reads one auth key line from stdin.
 Never put keys or passwords in command arguments.
-To find your key, sign into Stremio Web and run this in the browser console:
+To find a key by hand, sign into Stremio Web and run this in the browser console:
 
 ```js
 JSON.parse(localStorage.getItem("profile")).auth.key
@@ -302,8 +304,8 @@ reuses resolved titles; repeat syncs add no duplicate events. IMDb ids resolve t
 
 Watched means a positive watch count or watched flag, or at least 70% progress.
 The watch time comes from `lastWatched`. A retained library item without a watch becomes
-an added interest; partial progress alone does not count as a watch. Removed items and
-unwatched temporary items do not add signals. Loved maps to rating 10 and liked to 8,
+an added interest; partial progress alone does not count as a watch. Titles watched outside
+the library count as watched; other removed items and unwatched temporary items do not add signals. Loved maps to rating 10 and liked to 8,
 including titles outside the library. An explicit Trakt rating for the same member/title wins.
 Loves and likes come from Stremio's likes service and are best effort. If they are unavailable,
 the library still syncs and Skald keeps that person's cached likes.
@@ -313,6 +315,7 @@ This removes the stored key and stops using that person's Stremio history; the h
 Replace a rejected key with `--key-stdin`. Authentication failures report “key rejected”; a
 rate limit stops the sync, preserves the last good history, and retries later.
 
-**Limits:** Stremio fields are best effort and have only been checked with synthetic data.
+**Limits:** Stremio fields are best effort. We tested the link sign-in and library sync with a real
+account in October 2026; loves and likes were checked with sample data only.
 Only IMDb movie and series ids are supported. Series state supplies the latest episode,
 not a complete episode history; absent watch timestamps stay unknown.

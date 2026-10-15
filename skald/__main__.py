@@ -1377,8 +1377,8 @@ def main(argv=None, out=None):
                     print("  Stremio app: " + item["stremio"], file=out)
                     print("  Stremio Web: " + item["web"], file=out)
                 if args.qr and item["stremio"]:
-                    print("Scan with the phone that has Stremio:", file=out)
-                    print(qr.terminal(item["stremio"]), file=out)
+                    print("Scan with a phone; it opens Stremio Web and installs to the Stremio account on every device:", file=out)
+                    print(qr.terminal(item["web"]), file=out)
             if not install[0]["stremio"]:
                 print("Install links need an HTTPS address; use --base https://YOUR_ADDRESS.", file=out)
             return 0

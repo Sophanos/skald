@@ -35,7 +35,7 @@ class SetupTests(unittest.TestCase):
         self.assertTrue((self.data/'.skald-household').exists())
         self.assertIn('Together:', out.getvalue())
         self.assertIn('rows work without it', out.getvalue())
-        self.assertIn('Together: stremio://tv.example/', out.getvalue())
+        self.assertIn('Together: https://web.stremio.com/#/addons?addon=https%3A%2F%2Ftv.example%2F', out.getvalue())
         self.assertIn('skald addon-url --stremio --qr --person NAME --base https://tv.example', out.getvalue())
         status = io.StringIO()
         self.assertEqual(main(['setup', '--status', '--json'], out=status), 0)

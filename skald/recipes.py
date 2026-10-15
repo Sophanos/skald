@@ -3,7 +3,7 @@ from urllib.parse import quote, urlsplit
 
 RECIPES = {
     'stremio': '''Stremio direct — should work, not yet tested by us.
-Open your printed stremio:// link (or Together's) on the device that has Stremio → Install.
+Open your printed one-click link (or Together's), sign in to Stremio and press Install; it then works on every device.
 Or paste the member URL into Stremio's addon search. `skald addon-url --stremio --qr --person NAME` prints a QR code for a phone.
 Skald only adds rows and search; keep your stream addons for playback.
 Stremio viewing reaches Skald directly: run `skald setup --connect stremio --person NAME` for each account. Trakt stays an option: turn it on in Stremio and run `skald setup --connect trakt`. You can also connect MDBList or import history.

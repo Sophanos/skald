@@ -5069,9 +5069,10 @@ class StremioRateLimited(ValueError):
 
 
 def _stremio_http(url, *, body=None, budget=None, text=False):
+    # Stremio's likes and link services refuse requests without a named client.
+    headers = {"User-Agent": "Skald/" + VERSION, **({"Content-Type": "application/json"} if body is not None else {})}
     try:
-        value = _http_get(url, {"Content-Type": "application/json"} if body is not None else None,
-                          body=body, budget=budget, **({'text': True} if text else {}))
+        value = _http_get(url, headers, body=body, budget=budget, **({'text': True} if text else {}))
     except urllib.error.HTTPError as error:
         if error.code in (401, 403):
             raise StremioKeyRejected() from None
@@ -5101,14 +5102,40 @@ def _stremio_login(email, password):
     return key
 
 
+STREMIO_LINK = "https://link.stremio.com/api/v2/"
+
+
+def _stremio_link_code():
+    """Start a device link; the person confirms it in a browser signed in to Stremio."""
+    result = _stremio_http(STREMIO_LINK + "create?type=Create").get("result")
+    if not isinstance(result, dict) or not all(isinstance(result.get(k), str) and result[k] for k in ("code", "link")):
+        raise SchemaMismatch()
+    return result["code"], result["link"]
+
+
+def _stremio_link_key(code, *, tries=100, wait=3):
+    """Poll until the link is confirmed (about five minutes); unconfirmed reads report an error."""
+    for _ in range(tries):
+        time.sleep(wait)
+        try:
+            result = _stremio_http(STREMIO_LINK + "read?type=Read&code=" + urllib.parse.quote(code, safe="")).get("result")
+        except ValueError:
+            continue
+        key = result.get("authKey") if isinstance(result, dict) else None
+        if isinstance(key, str) and key.strip():
+            return key
+    raise ValueError("Stremio link not confirmed in time; run setup again")
+
+
 def _stremio_item(row, now):
     raw, kind = row.get("_id"), row.get("type")
-    if not isinstance(raw, str) or not re.fullmatch(r"tt[0-9]+", raw) or kind not in ("movie", "series") or row.get("removed"):
+    if not isinstance(raw, str) or not re.fullmatch(r"tt[0-9]+", raw) or kind not in ("movie", "series"):
         return None
     state = row.get("state") or {}
     duration, progress = state.get("duration") or 0, state.get("timeWatched") or 0
     watched = (state.get("timesWatched") or 0) > 0 or (state.get("flaggedWatched") or 0) > 0 or duration > 0 and progress / duration >= 0.7
-    if row.get("temp") and not watched:
+    # Stremio stores titles watched outside the library as removed temporary items.
+    if (row.get("removed") or row.get("temp")) and not watched:
         return None
     title = _mdblist_title({"ids": {"imdb": raw}, "title": row.get("name")}, "movies" if kind == "movie" else "shows")
     if title is None:

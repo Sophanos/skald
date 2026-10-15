@@ -281,7 +281,7 @@ values and defaults. Fact correction is not implemented yet.
 |---|---|
 | Docker start | Build and run Skald: `docker compose up -d --build` |
 | `addon-url` | Print installation links: `skald addon-url --base https://tv.example.org` |
-| `addon-url --stremio` | Add one-click Stremio links (app and Stremio Web) for HTTPS addresses; `--person NAME` picks one member, `--qr` prints its QR code: `skald addon-url --base https://tv.example.org --stremio --person alex --qr` |
+| `addon-url --stremio` | Add one-click Stremio links (app and Stremio Web) for HTTPS addresses; `--person NAME` picks one member, `--qr` prints a QR code of its Stremio Web link: `skald addon-url --base https://tv.example.org --stremio --person alex --qr` |
 | `doctor` | Check a local copy and import state: `skald --snapshot /path/copy doctor` |
 | `doctor keys` | Check saved title identifiers: `skald --snapshot /path/copy doctor keys` |
 | `backup list` | List DATA backups: `skald backup list --data /data` |
@@ -299,8 +299,8 @@ Settings → API → Create. Use the private prompt or `--yes --key-stdin`.
 `skald connectors test pmdb` reads each account without saving history.
 See [PMDB](CONNECTORS.md#publicmetadb-pmdb) for signals and limits.
 
-Stremio: run `skald setup --connect stremio --person alex`. Paste the auth key privately,
-or leave it blank for private email and password prompts. Scripts use `--yes --key-stdin`.
+Stremio: run `skald setup --connect stremio --person alex`. Leave the key prompt blank,
+then open the printed link (or scan its QR code) and sign in to Stremio. Scripts use `--yes --key-stdin`.
 Run `skald connectors test stremio` to check it and `skald setup --status` for connections.
 Disconnect with `skald setup --disconnect stremio --person alex`.
 See [Stremio](CONNECTORS.md#stremio) for finding the key and sync limits.

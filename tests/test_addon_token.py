@@ -274,7 +274,8 @@ class AddonTokenTests(unittest.TestCase):
         self.assertEqual((text.returncode, text.stderr), (0, ""))
         self.assertIn(urls[2].replace("https://", "stremio://", 1), text.stdout)
         self.assertNotIn(urls[1], text.stdout)
-        self.assertIn("\x1b[30;107m", text.stdout)
+        from skald import qr
+        self.assertIn(qr.terminal("https://web.stremio.com/#/addons?addon=" + urllib.parse.quote(urls[2], safe="")), text.stdout)
         self.assertEqual(self.process("-m", "skald", "addon-url", "--base", "https://host.example", "--qr").returncode, 2)
         plain = self.process("-m", "skald", "addon-url", "--base", "http://skald:8080", "--stremio", "--json")
         self.assertEqual(plain.returncode, 0)

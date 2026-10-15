@@ -45,7 +45,7 @@ class StremioTests(unittest.TestCase):
         self.rows = [item(1, state={'timesWatched': 1, 'lastWatched': STAMP}),
             item(2, temp=True, state={'flaggedWatched': 1, 'lastWatched': STAMP}),
             item(3, type='series', state={'duration': 1000, 'timeWatched': 700, 'lastWatched': STAMP, 'video_id': 'tt3:1:2'}),
-            item(4), item(5, removed=True, state={'timesWatched': 1, 'lastWatched': STAMP}), item(6, temp=True), item(7, _id='other'), item(8, type='channel'),
+            item(4), item(5, removed=True, temp=True, state={'timesWatched': 1, 'lastWatched': STAMP}), item(6, temp=True), item(13, removed=True), item(7, _id='other'), item(8, type='channel'),
             item(9, temp=True, state={'duration': 1000, 'timeWatched': 699}),
             item(10, state={'duration': 1000, 'timeWatched': 699})]
 
@@ -58,7 +58,7 @@ class StremioTests(unittest.TestCase):
             return {'result': self.rows}
         if '/getAddonKey?' in url:
             return {'key': ADDON_KEY}
-        self.assertIsNone(headers)
+        self.assertEqual(headers, {'User-Agent': 'Skald/' + self.s.VERSION})
         self.assertIn('/user=' + urllib.parse.quote(ADDON_KEY, safe='') + '/', url)
         return {'metas': [{'id': 'tt11', 'type': 'movie', 'name': 'Outside'}] if '/loved/' in url and '/movie/' in url else
                          [{'id': 'tt4', 'type': 'movie', 'name': 'Liked'}] if '/liked/' in url and '/movie/' in url else []}
@@ -171,8 +171,8 @@ class StremioTests(unittest.TestCase):
             events, cursor, stats = self.s._connector_stremio(self.c, NOW)
             self.assertEqual(http.call_count, 6)
             items = {i['id']: i for i in self.s.read_trakt()}
-            self.assertEqual(set(items), {'tmdb:1', 'tmdb:2', 'tmdb:3', 'tmdb:4', 'tmdb:10', 'tmdb:11'})
-            for n in (1, 2, 3):
+            self.assertEqual(set(items), {'tmdb:1', 'tmdb:2', 'tmdb:3', 'tmdb:4', 'tmdb:5', 'tmdb:10', 'tmdb:11'})
+            for n in (1, 2, 3, 5):
                 self.assertEqual(items['tmdb:' + str(n)]['signal'], 'watched')
                 self.assertTrue(items['tmdb:' + str(n)]['played'])
             self.assertEqual(items['tmdb:3']['last_episode'], [1, 2])
@@ -342,7 +342,7 @@ class StremioTests(unittest.TestCase):
             self.s._connector_stremio(self.c, NOW)
         self.assertIn(name, data_files(self.s.CONFIG))
         with Engine(self.data) as engine:
-            self.assertEqual(len(engine._server.read_trakt()), 6)
+            self.assertEqual(len(engine._server.read_trakt()), 7)
             self.assertFalse((engine._work/'credentials').exists())
         self.s.backup_state(NOW)
         archive = self.data/'backups'/('state-' + self.s.online_day(NOW)[0] + '.tar.gz')
@@ -373,15 +373,72 @@ class StremioTests(unittest.TestCase):
             requests.append(req)
             self.assertNotIn(KEY, str(req.headers))
             self.assertNotIn(PASSWORD, str(req.headers))
+            self.assertEqual(req.get_header('User-agent'), 'Skald/' + self.s.VERSION)
             body = json.loads(req.data) if req.data else None
             self.assertEqual(req.get_method(), 'POST' if body else 'GET')
-            result = self.fake(req.full_url, **({'body': body} if body else {}))
+            result = self.fake(req.full_url, {'User-Agent': req.get_header('User-agent')}, **({'body': body} if body else {}))
             return io.BytesIO(json.dumps(result).encode())
         with patch.object(self.s, '_connector_open', side_effect=transport), patch.object(self.s, 'tmdb_details', side_effect=self.resolve):
             self.assertEqual(self.s._stremio_login('synthetic@example.test', PASSWORD), KEY)
             self.s._connector_stremio(self.c, NOW)
         self.assertEqual(len(requests), 7)
         self.assertEqual(len([req for req in requests if req.get_method() == 'GET']), 5)
+
+    def test_connect_by_link_without_key_or_password(self):
+        from skald import setup, members
+        from skald.__main__ import parser
+        (self.data/'skald.json').write_text(json.dumps(members.validate_config(self.s.CONFIG)))
+        self.s.CONFIG['connectors'].pop('stremio', None)
+        reads, waits = iter([{'error': {'code': 101, 'message': 'Invalid or expired token'}}, TimeoutError(),
+                             {'result': {'authKey': KEY}}]), []
+        def fake(url, headers=None, **kw):
+            self.assertEqual(headers['User-Agent'], 'Skald/' + self.s.VERSION)
+            if url == 'https://link.stremio.com/api/v2/create?type=Create':
+                return {'result': {'success': True, 'code': 'AB12', 'link': 'https://link.stremio.com/AB12'}}
+            if url == 'https://link.stremio.com/api/v2/read?type=Read&code=AB12':
+                value = next(reads)
+                if isinstance(value, Exception):
+                    raise value
+                return value
+            return self.fake(url, headers, **kw)
+        output = io.StringIO()
+        args = parser().parse_args(['setup', '--connect', 'stremio', '--person', self.person])
+        with patch.dict('os.environ', {'DATA_DIR': str(self.data), 'SKALD_CONFIG': str(self.data/'skald.json')}), redirect_stdout(output), \
+                patch.object(self.s, '_http_get', side_effect=fake), patch.object(self.s, 'tmdb_details', side_effect=self.resolve), \
+                patch('skald.setup.getpass.getpass', return_value=''), patch.object(self.s.time, 'sleep', side_effect=waits.append):
+            lines = []
+            result = setup.configure_connector(self.s, args, lambda v, label, default, flag: v or default, lines, lambda: None)
+        self.assertTrue(result['ok'])
+        self.assertEqual(waits, [3, 3, 3])
+        self.assertIn('https://link.stremio.com/AB12', lines)
+        self.assertIn('\x1b[30;107m', output.getvalue())
+        saved = json.loads((self.data/'skald.json').read_text())
+        path = self.data/'credentials'/saved['connectors']['stremio']['accounts'][self.person][5:]
+        self.assertEqual(path.read_text(), KEY)
+        self.assertNotIn(KEY, output.getvalue() + '\n'.join(lines))
+
+    def test_link_times_out_and_falls_back_to_email(self):
+        with patch.object(self.s, '_http_get', return_value={'error': {'code': 101, 'message': 'Invalid or expired token'}}), \
+                patch.object(self.s.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(ValueError, 'not confirmed'):
+                self.s._stremio_link_key('AB12')
+        self.assertEqual(sleep.call_count, 100)
+        from skald import setup, members
+        from skald.__main__ import parser
+        (self.data/'skald.json').write_text(json.dumps(members.validate_config(self.s.CONFIG)))
+        self.s.CONFIG['connectors'].pop('stremio', None)
+        def fake(url, headers=None, **kw):
+            if 'link.stremio.com' in url:
+                raise urllib.error.HTTPError(url, 503, 'down', {}, None)
+            return self.fake(url, headers, **kw)
+        lines = []
+        args = parser().parse_args(['setup', '--connect', 'stremio', '--person', self.person])
+        with patch.dict('os.environ', {'DATA_DIR': str(self.data), 'SKALD_CONFIG': str(self.data/'skald.json')}), \
+                patch.object(self.s, '_http_get', side_effect=fake), patch.object(self.s, 'tmdb_details', side_effect=self.resolve), \
+                patch('skald.setup.getpass.getpass', side_effect=['', 'synthetic@example.test', PASSWORD]):
+            result = setup.configure_connector(self.s, args, lambda v, label, default, flag: v or default, lines, lambda: None)
+        self.assertTrue(result['ok'])
+        self.assertIn('Stremio link unavailable; sign in with email and password instead', lines)
 
     def test_connect_preserves_other_person(self):
         from skald import setup, members

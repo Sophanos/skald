@@ -472,8 +472,8 @@ For a free history and watchlist source, get a key at mdblist.com/preferences an
 Use the Plex webhook from MDBList Preferences or its Emby/Jellyfin plugins to record plays.
 See [MDBList](CONNECTORS.md#mdblist) for scripts, limits and disconnecting.
 For Stremio viewing, library interests and likes, run
-`skald setup --connect stremio --person alex` for each account. Paste the auth key privately,
-or leave it blank to enter email and password privately. Only the auth key is saved.
+`skald setup --connect stremio --person alex` for each account. Leave the key prompt blank,
+then open the printed link (or scan its QR code) and sign in to Stremio. Only the auth key is saved.
 Scripts can use `--yes --key-stdin`; `skald setup --status` shows each connection.
 See [Stremio](CONNECTORS.md#stremio) for finding the key, checks and disconnecting.
 Secrets go through a private prompt, `--secret-stdin`, or a named environment variable.
@@ -517,7 +517,7 @@ not a missing step. Status does not save these records or check the running engi
 Restart the engine after setup so it loads the saved settings, then install the printed URL.
 Allow time for the first rows to build. Title search works while rows are building.
 Print links again with `skald addon-url --base YOUR_ADDRESS`.
-With an HTTPS address, setup also prints `stremio://` links: open one on the device that has Stremio and it installs with one click.
+With an HTTPS address, setup also prints one-click Stremio Web links: open one, sign in to Stremio and press Install; it then works on every device.
 Add `--stremio` to `addon-url` for those links and a Stremio Web link; `--stremio --qr --person NAME` prints a QR code to scan with a phone.
 The links and the QR code contain the private addon token. Do not share them.
 Rotate a leaked addon link with `skald addon-url --rotate-addon-token --base YOUR_ADDRESS`.

@@ -22,7 +22,7 @@ import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from . import members, recipes, connectors, remote, guide
+from . import members, recipes, connectors, remote, guide, qr
 from .intake import write_private
 
 
@@ -276,6 +276,21 @@ def keep_catalog_places(s, config, manifest, person, *, first_added=False):
     return None
 
 
+def stremio_link(s, lines, show):
+    """Connect Stremio without a key: the person opens a link (or scans it) and signs in there."""
+    try:
+        code, link = s._stremio_link_code()
+    except ValueError:
+        lines.append('Stremio link unavailable; sign in with email and password instead')
+        show()
+        return s._stremio_login(secret(False, 'Stremio email'), secret(False, 'Stremio password'))
+    lines.extend(['Open this link and sign in to Stremio (or scan the code with a phone):', link])
+    show()
+    print(qr.terminal(link), flush=True)
+    print('Waiting for Stremio (up to five minutes)...', flush=True)
+    return s._stremio_link_key(code)
+
+
 def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None, secret_input=None, private=False):
     url = None
     def request(address, **kwargs):
@@ -428,7 +443,7 @@ def setup_aiostreams(s, args, saved, ask, lines, show, *, transport=None, secret
                                   'Stremio (optional):   ' + stremio])
                     links = recipes.stremio_links(stremio)
                     if links:
-                        lines.append('                      one click  ' + links['app'])
+                        lines.append('                      one click  ' + links['web'])
         result = {'ok': True, 'lines': lines}
     except Exception as error:
         hint = 'AIOStreams setup failed; check its address, access key and login, then retry with skald setup aiostreams' if private else str(error) if isinstance(error, ValueError) else 'AIOStreams response incomplete; check its settings'
@@ -616,7 +631,7 @@ def _configure_connector(s, args, ask, lines, show, stage, published, *, initial
         c = {'kind': 'player', 'enabled': True, 'auth': None, 'options': opts}
     else:
         instructions = {'pmdb': 'Create a personal PublicMetaDB key at https://publicmetadb.com: Settings → API → Create. Paste it privately.',
-            'stremio': 'Paste your Stremio auth key privately, or leave it blank to sign in with email and password.',
+            'stremio': 'Paste your Stremio auth key privately, or leave it blank to connect with a link in your browser.',
             'mdblist': 'Get a free API key at https://mdblist.com/preferences. Paste it privately.',
             'trakt_api': 'Create a Trakt API app at https://trakt.tv/oauth/applications (may require VIP). Use its client id and an access token from your authorized account.',
             'jellyfin': 'Create an API key in Jellyfin: Dashboard → Advanced → API Keys → Add.',
@@ -640,9 +655,9 @@ def _configure_connector(s, args, ask, lines, show, stage, published, *, initial
         else:
             if args.yes and not args.secret_stdin:
                 raise ValueError('secret needed; use --secret-stdin or --auth-env VARIABLE')
-            key = secret(args.secret_stdin, cid + ' secret') if cid != 'stremio' or args.secret_stdin else getpass.getpass('Stremio auth key (blank for email login): ').strip()
+            key = secret(args.secret_stdin, cid + ' secret') if cid != 'stremio' or args.secret_stdin else getpass.getpass('Stremio auth key (blank to connect in your browser): ').strip()
             if cid == 'stremio' and not key:
-                key = s._stremio_login(secret(False, 'Stremio email'), secret(False, 'Stremio password'))
+                key = stremio_link(s, lines, show)
             auth = stage(key, cid.removesuffix('_api') + '-' + person if cid in ('trakt_api', 'mdblist', 'stremio', 'pmdb') else cid)
         if cid in ('mdblist', 'stremio', 'pmdb'):
             accounts = dict(previous.get('accounts', {}))
@@ -1088,9 +1103,9 @@ def run(args):
         write_private(data/'setup.json', json.dumps(saved) + '\n')
         lines.extend(recipes.recipe(watch, urls[0], cfg['region']['lang'], s.addon_urls(internal_base)[0].replace(token, '<addon-token>') if internal_base and args.json else s.addon_urls(internal_base)[0] if internal_base else None).splitlines())
         if watch == 'stremio' and recipes.stremio_links(base):
-            lines.append('Install with one click: open your link on the device that has Stremio.')
+            lines.append('Install with one click: open your link, sign in to Stremio and press Install; it then works on every device.')
             lines.extend(('Household' if p == 'household' else 'Together' if p == 'together' else cfg['household']['labels'][p])
-                         + ': ' + recipes.stremio_links(url)['app'] for p, url in zip(['household', *s.SCOPES], urls))
+                         + ': ' + recipes.stremio_links(url)['web'] for p, url in zip(['household', *s.SCOPES], urls))
             lines.append('QR code for a phone: skald addon-url --stremio --qr --person NAME --base ' + base)
         if args.connect or not saved.get('taste') and not cfg['connectors']:
             args.connect = ask(args.connect, 'Taste source: trakt, mdblist, stremio, pmdb, jellyfin, plex, aiostreams-db, files', 'files', '--connect')
