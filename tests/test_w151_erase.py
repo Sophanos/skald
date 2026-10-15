@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 from test_api import raw_request
 from test_w92_commands import Household
-from skald import commands as c, erase, history, leave, members, plays, setup
+from skald import commands as c, erase, history, leave, members, migrate, plays, setup
 from skald.__main__ import main
 
 
@@ -377,6 +377,7 @@ with (data/'erase.lock').open('a') as lock:
         self.assertEqual(list(self.root.glob('.commands-*')), [])
 
     def test_wish_cannot_reappear_after_erase_before_history_lock(self):
+        migrate.ensure(self.root)
         plan = c.preview(self.s, '', 'ana', answer=dict(op='wish', values=['invented quiet mysteries']))
         locked = history.locked
         erased = False

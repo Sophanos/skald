@@ -62,10 +62,10 @@ REGISTRY = {
     'home_fewer': _op('home', hint='home_fewer lowers a household row family cap: "fewer lane rows" values [lane]; "fewer mood rows" values [mood]; kind null.'),
     'row_refresh': _op('home', hint='row_refresh requests new picks for one household row, kind null values [row id]. Use the current row context for "this"; without row context use ask slot change and ask which row. Use [] if a row reference is unresolved. Resolve a named dynamic row to its id from the row context. Title names like Refresh This Row are searches, not commands.'),
     'ai_status': _op('read', kids=True, hint='ai_status reads saved household AI credit and spending; changes nothing and never refreshes: kind null values [] person null, language en, de, sr-latn or sr-cyrl. Questions about remaining AI credit, budget or exhausted AI calls use ai_status. Title searches and requests to change a budget do not.'),
-    'week_picks': _op('read', kids=True, hint='week_picks reads saved new-and-worthwhile weekly picks, never changes settings: kind null, values [number of weeks, weeks back], each within the last 8 calendar weeks. '
+    'week_picks': _op('read', kids=True, hint='week_picks reads saved weekly picks, never changes settings: kind null, values [number of weeks, weeks back], each within the last 8 calendar weeks. '
                      'This week is [1,0], last week [1,1], last 3 weeks [3,0]. Person only if named. '
-                     '"what was new last week?", "show this week\'s picks", "was war letzte Woche neu?", "šta je bilo novo prošle nedelje?" are week_picks. '
-                     'A title called Invented Last Week is a title search, op null. A request for fresh recommendations now is a search, not saved picks.'),
+                     'The weeks field holds new-and-worthwhile releases; personal holds saved personal and together picks from any year. '
+                     'Use the meaning of saved weekly recommendations in any language. A title name or request for fresh recommendations now is a search, not saved picks.'),
 }
 REGISTRY['row_names'] = _op('read', kids=True, hint='row_names lists what the household rows are called, their label keys and sources; changes nothing: kind null values [] person null. '
     '"What are my rows called?", "Wie heißen meine Reihen?", "Kako se zovu naši redovi?" are row_names. '
@@ -493,6 +493,7 @@ def row_id(name):
                'top rated series': 'toprated', 'best movies': 'toprated', 'best series': 'toprated',
                'die besten filme': 'toprated', 'die besten serien': 'toprated',
                'latest digital releases': 'digital', 'for you': 'foryou', 'new to you': 'newtoyou',
+               'something different': 'newtoyou', 'similar, but different': 'leap',
                'continue watching': 'episodes', 'continue watching & new episodes': 'episodes'}
     return aliases.get(name, name if name in ROW_KEYS else None)
 
@@ -746,7 +747,8 @@ def command_prompt(s):
               'Row ids: episodes,foryou,week,upcoming,catchup,rewatch,ready,because,leap,top10,people,moods,lanes,docs,studios,anime,shelves,digital,toprated,newtoyou. '
               'Row context lists row ids and labels, including hidden rows marked (hidden); use them for requests to show a row again. Resolve named rows to those ids. It does not select a current row for the word this. '
               'Last confirmed row action gives the row id, hide/show action and time for this scope; use it to resolve references to that row. '
-              'Top 10 maps to top10, top rated to toprated, Latest Digital Releases to digital, For You to foryou, New to You to newtoyou. '
+              'Top 10 maps to top10, top rated to toprated, Latest Digital Releases to digital, For You to foryou. '
+              'Something Different / Mal was anderes, New to You and Fresh Finds map to newtoyou; Similar, but Different / Ähnlich, aber anders maps to leap. '
               'shelf_add kind null, values [theme, always] or [theme, days, hours] (comma-separated mon,tue,wed,thu,fri,sat,sun or weekdays/weekend/daily; clock hour window 05-12 or 18-24). '
               'Creating, adding or making a catalog, row, shelf or list about/for/with/of a theme is shelf_add [theme,always]. '
               'German examples: neue Reihe mit, erstelle einen Katalog über. Preserve theme text and typos. Best catalog of crime movies is a one-off search, op null. '
@@ -1043,7 +1045,7 @@ def _preview(s, text, viewer=None, bound=None, answer=None, scope=None, prior=No
             raise PermissionError('This read applies to another member')
         data = s.week_history(change['values'][0], person=target, offset=change['values'][1])
         lang = s.CONFIG['region'].get('row_lang') or change['language'] or s.LANG
-        description = '\n'.join(r['week'] + '\n' + '\n'.join(p['title'] + ': ' + p['reason'] for p in r['picks']) for r in data['weeks'])
+        description = '\n'.join(r['week'] + '\n' + '\n'.join(p['title'] + ': ' + p['reason'] for p in r['picks']) for r in [*data['weeks'], *data.get('personal', [])])
         return dict(read_only=True, people=[target] if target else [], name=s.t('week.history', lang=lang),
                     description=description or s.t('week.empty', lang=lang), week_picks=data)
     if change['op'] in ('settings', 'shelf_list', 'history', 'taste_drivers', 'ai_status', 'row_names', 'home_reach'):
@@ -1075,7 +1077,9 @@ def _preview(s, text, viewer=None, bound=None, answer=None, scope=None, prior=No
             data = view(s.DATA, s.CONFIG)
             return dict(read_only=True, people=[target], name=s.t('command.row_names', lang=s.CONFIG['region'].get('row_lang', 'en')), row_names=data,
                         description='\n'.join(([data['lab_paused_reason']] if data.get('lab_paused_reason') else []) +
-                                              [row['id'] + ': ' + str(row['label']) for row in data['rows']]))
+                                              [row['id'] + ': ' + str(row['label']) + ' (' + row['source'] +
+                                               ('; ' + row['seed'] + (', ' + row['seed_title'] if row.get('seed_title') else '') if row.get('seed') else '') + ')'
+                                               for row in data['rows']]))
         if change['op'] == 'taste_drivers':
             from .alignment import view, text as alignment_text
             actor = bound if bound in s.PEOPLE else viewer
@@ -1545,9 +1549,11 @@ def member_preview(s, text, change, viewer, bound, *, base=None):
                          " without "+s.LABELS[name]+"'s name. To remove them too, add --shared drop."
                          for p, n in forgotten['counts']['shared'].items()] if forgotten['shared'] == 'keep' else
                         [str(n)+' shared watches stop teaching '+s.LABELS[p] for p, n in forgotten['counts']['shared'].items()])
-        description = '\n'.join([s.t('plays.days_deleted', count=n) if key == 'watching_days' else str(n)+' '+key+' deleted' for key, n in forgotten['counts'].items() if key != 'shared'] +
-            shared_lines + ['This cannot be undone.' if forgotten['shared'] == 'keep' else 'Shared titles stay seen. This cannot be undone.',
-            'Existing private settings copies stay unchanged.'] +
+        description = '\n'.join([s.t('plays.days_deleted' if key == 'watching_days' else 'forget.'+key+'_deleted', count=n)
+            if key in ('watching_days', 'searches', 'decisions', 'daily', 'suggestions', 'wishes', 'settings_copies') else str(n)+' '+key+' deleted'
+            for key, n in forgotten['counts'].items() if key not in ('shared', 'backups')] +
+            shared_lines + ['This cannot be undone.' if forgotten['shared'] == 'keep' else 'Shared titles stay seen. This cannot be undone.'] +
+            ([s.t('forget.backups_preview', count=forgotten['counts']['backups'])] if forgotten['counts']['backups'] else []) +
             ([leave.odin_reminder(s.LABELS[name])] if forgotten['odin'] else []) + [erase])
     elif op in ('member_away', 'member_back'):
         description = 'Own profile, link, rows and shelves stay saved. '+('Only their own picks keep learning.' if op == 'member_away' else 'Household learning resumes.')

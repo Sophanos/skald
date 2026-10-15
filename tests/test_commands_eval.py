@@ -15,6 +15,19 @@ from decide_kit import load_server, close_server
 
 
 class CommandEval(unittest.TestCase):
+    def test_current_row_names_keep_legacy_names_in_the_hint(self):
+        s, _ = ev.synthetic_spec('/synthetic')
+        prompt = commands.command_prompt(s)
+        self.assertIn('Something Different / Mal was anderes, New to You and Fresh Finds map to newtoyou; '
+                      'Similar, but Different / Ähnlich, aber anders maps to leap.', prompt)
+        for text, op, row in (
+            ('add the Something Different row', 'row_show', 'newtoyou'),
+            ('hide Similar, but Different', 'row_hide', 'leap'),
+        ):
+            with self.subTest(text=text):
+                answer = commands.parse_local(text, s)
+                self.assertEqual((answer['op'], answer['values']), (op, [row]))
+
     def test_away_hint_uses_the_named_last_day(self):
         prompt = commands.command_prompt(ev.synthetic_spec('/synthetic')[0])
         self.assertIn('until is the last day away, exactly the day the user names', prompt)
@@ -279,32 +292,32 @@ class CommandEval(unittest.TestCase):
             self.assertEqual(ev.main(['--fixture', '--json', str(dest)], out=out), 0)
             reports = json.loads(dest.read_text())
             report = reports[0]
-            # Merged fixture totals include child reads and their title look-alike.
-            self.assertEqual(report['count'], 973)
-            self.assertEqual(len(report['results']), 973)
+            # Merged fixture totals include weekly recall, forget backups, renamed rows and title look-alikes.
+            self.assertEqual(report['count'], 997)
+            self.assertEqual(len(report['results']), 997)
             self.assertEqual(report['no_answer'], 147)
-            self.assertEqual(sum(r['op_ok'] for r in report['results']), 821)
-            self.assertEqual(sum(r['full_ok'] for r in report['results']), 820)
-            self.assertEqual(report['now_count'], 973)
-            self.assertEqual(report['now_op_accuracy'], 821 / 973)
-            self.assertEqual(report['now_full_accuracy'], 820 / 973)
+            self.assertEqual(sum(r['op_ok'] for r in report['results']), 845)
+            self.assertEqual(sum(r['full_ok'] for r in report['results']), 844)
+            self.assertEqual(report['now_count'], 997)
+            self.assertEqual(report['now_op_accuracy'], 845 / 997)
+            self.assertEqual(report['now_full_accuracy'], 844 / 997)
             self.assertEqual((report['next_count'], report['next_op_accuracy'], report['next_full_accuracy']), (0, 0, 0))
             self.assertEqual(report['by_tier'], {
                 'followup': {'now_count': 45, 'op_accuracy': 1, 'full_accuracy': 1},
-                'base': {'now_count': 400, 'op_accuracy': 340 / 400, 'full_accuracy': 340 / 400},
-                'hard': {'now_count': 528, 'op_accuracy': 436 / 528, 'full_accuracy': 435 / 528},
+                'base': {'now_count': 412, 'op_accuracy': 352 / 412, 'full_accuracy': 352 / 412},
+                'hard': {'now_count': 540, 'op_accuracy': 448 / 540, 'full_accuracy': 447 / 540},
             })
             self.assertEqual([r['tier'] for r in report['results']],
                              [c.get('tier', 'base') for c in ev.load_cases()])
             self.assertIn('by-tier now accuracy:', out.getvalue())
-            self.assertIn('base 400 cases op 85.00% full 85.00%', out.getvalue())
-            self.assertIn('hard 528 cases op 82.58% full 82.39%', out.getvalue())
+            self.assertIn('base 412 cases op 85.44% full 85.44%', out.getvalue())
+            self.assertIn('hard 540 cases op 82.96% full 82.78%', out.getvalue())
             self.assertEqual([r['contract'] for r in report['results']],
                              [c['contract'] for c in ev.load_cases()])
             self.assertIn('all op accuracy', out.getvalue())
             self.assertIn('now op accuracy', out.getvalue())
             self.assertIn('now full accuracy', out.getvalue())
-            self.assertIn('973', out.getvalue())
+            self.assertIn('997', out.getvalue())
             self.assertEqual(ev.evaluate(ev.load_cases()), reports)
 
     def test_live_metrics_request_and_secret_safe_output(self):

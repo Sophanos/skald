@@ -12,6 +12,23 @@ from decide_kit import close_server, fixture_rows, load_server, run_type
 
 
 class DecisionMetricsTests(unittest.TestCase):
+    def test_replay_rows_do_not_share_daily_call_cap(self):
+        with tempfile.TemporaryDirectory() as data:
+            server = load_server(data)
+            self.addCleanup(close_server, server)
+            answer = {"choice": "title", "confidence": .93, "watched": "any", "list": "taste"}
+            rows = [{"in": {"query": f"Synthetic independent query {i}"}, "expect": answer,
+                     "recorded": {"answers": {"route": {"choice": "title", "confidence": .93},
+                                              "watched": {"choice": "any"}, "list": {"choice": "taste"}}},
+                     "note": "Synthetic independent decision"} for i in range(3)]
+            path = Path(data, "rows.jsonl")
+            path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            with patch.dict(server.AI_CAPS, {"search": 1}):
+                metrics = run_type(server, "route_query", str(path))
+            self.assertEqual(metrics["sources"], {"llm": 3})
+            self.assertEqual(metrics["llm_calls"], 3)
+            self.assertEqual(metrics["acc"], 1)
+
     def test_live_case_loader_has_accepted_routes_and_optional_fields(self):
         rows = decisions.live_cases()
         self.assertEqual(len(rows), 235)  # Ten AI credit and title-lookalike routing cases.

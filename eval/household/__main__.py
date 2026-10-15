@@ -42,6 +42,8 @@ def _worker():
         sys.path.insert(0, str(source))
         from skald.engine import Engine
         request = json.load(sys.stdin)
+        details = request.get('row_details', False)
+        options = {'lang': request['lang'], 'details': True} if details else {}
         random.seed(protocol.SAMPLING_SEED)
         with tempfile.TemporaryDirectory() as temp:
             data = Path(temp)
@@ -49,15 +51,33 @@ def _worker():
             for name, value in request['inputs'].items():
                 if name in snapshot.INPUTS:
                     value = {**value, 'history': {'source': 'file'}, 'connectors': {}} if name == 'skald.json' else value
+                    if name == 'skald.json' and details:
+                        from skald.i18n import _chain, _STRINGS
+                        region = {**value['region'], 'lang': request['lang']}
+                        # Keep matching label stamps, including de for a de-DE request.
+                        if 'row_lang' in region and next(c for c in _chain(region['row_lang']) if c in _STRINGS) != next(
+                                c for c in _chain(request['lang']) if c in _STRINGS):
+                            region.pop('row_lang')
+                        value = {**value, 'region': region}
                     text = '\n'.join(json.dumps(v) for v in value) if name.endswith('.jsonl') else json.dumps(value)
                     (data / name).write_text(text, encoding='utf-8')
             rows = []
             for origin in request['origins']:
                 with patch('time.time', return_value=origin), Engine(data, source / 'server.py') as engine:
                     for member in request['members']:
-                        home = adapter.replay_home(engine._server, now=origin, who=member,
-                                                   scope=member, enabled=True)
-                        rows.append({'specs': home['row_specs'], 'rankings': home['rankings']})
+                        home = adapter.replay_home(engine._server, now=origin,
+                                                   who='both' if member == 'together' else member,
+                                                   scope=member, enabled=True, **options)
+                        value = {'specs': home['row_specs'], 'rankings': home['rankings']}
+                        if details:
+                            value['rows'] = [
+                                {'position': i, 'id': row['id'], 'type': row['type'], 'label': row['name'],
+                                 'count': None if row['network_attempts'] else len(row['metas']),
+                                 'cards': [{'id': m['id'], 'name': m.get('name', '')} for m in row['metas'][:10]],
+                                 'network_attempts': row['network_attempts'],
+                                 'status': 'needs network, not built offline' if row['network_attempts'] else 'built'}
+                                for i, row in enumerate(home['rows'], 1)]
+                        rows.append(value)
             value = {'code': 'NETWORK_BLOCKED'} if attempts else {'code': 'OK', 'homes': rows}
     except BaseException:
         value = {'code': 'WORKER_ERROR'}
@@ -100,7 +120,8 @@ def _compare(args):
         raise ValueError('INVALID_INPUT')
     state = doc['inputs']
     config = state['skald.json']
-    members = config['household']['members']
+    members = [p for p in config['household']['members']
+               if p not in config['household'].get('retired', [])]
     if not members or not all(name in state for name in ('history.json', 'facets.json', 'emb.json')):
         raise ValueError('MISSING_INPUT')
     # CLI generation is an intake clock marker, not a production write fence.
@@ -167,15 +188,23 @@ def main(argv=None):
         parser = Parser(prog='python3.12 -m eval.household', allow_abbrev=False)
         commands = parser.add_subparsers(dest='command', required=True, parser_class=Parser)
         for name, flags in (('freeze', ('data', 'out')), ('compare', ('snapshot', 'a', 'b', 'out')),
+                            ('diff', ('snapshot', 'a', 'b')),
                             ('check-share', ())):
             command = commands.add_parser(name, allow_abbrev=False)
             for flag in flags:
                 command.add_argument('--' + flag, required=True)
             if name == 'check-share':
                 command.add_argument('file')
+            if name == 'diff':
+                command.add_argument('--member')
+                command.add_argument('--lang', default='en-US')
+                command.add_argument('--json', action='store_true')
         args = parser.parse_args(argv)
         if args.command == 'compare':
             return _compare(args)
+        if args.command == 'diff':
+            from eval.household.diff import run
+            return run(args, _replay)
         if args.command == 'freeze':
             if Path(args.out).resolve().is_relative_to(Path(args.data).resolve()):
                 raise ValueError('INVALID_OUTPUT')

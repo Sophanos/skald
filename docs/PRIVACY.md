@@ -62,9 +62,13 @@ including someone already removed. The adult cannot be away or erase themselves.
 It removes that person's personal history, ratings, imports, history summaries,
 preferences, names, shelves (including shared shelves), personal row ideas, saved
 commands, memory and interview answers, title corrections and linked clients.
+Their search and decision records, personal counts in the daily job log, dismissed
+suggestions, saved wishes and old legacy settings copy are removed before the
+fresh backup is taken.
 Their sync accounts, saved sync data and credentials no longer used by another
 account are removed. Their personal and Together row metrics are erased, derived
 taste and row caches are cleared, and household row-play learning starts again.
+Unusable quarantined memory copies are discarded with those caches.
 Other people's own ratings and data stay.
 
 Shared watches keep teaching the people who stay, with the erased name removed.
@@ -76,14 +80,23 @@ back. After forgetting, no information about that person is sent anywhere;
 their inputs are excluded from later learning and sync results. It cannot retract
 requests already sent to services before the forget.
 
-Backups made before forgetting still contain the old data. Daily archives keep the
-newest 14 distinct backup dates. Among the remaining older dates, they also keep
+After a successful forget, Skald deletes every older file in DATA/backups,
+including daily and weekly archives, pre-migration archives, private settings
+copies and leftover temporary backup files. It then takes one fresh verified
+backup of the household that remains. This applies to adults, away adults,
+children and guests. A failed forget keeps the old backups as a safety net.
+If the fresh backup fails, the old copies stay deleted and Skald tells you that
+no backup exists until the next daily backup.
+Copies the server owner makes outside DATA, such as host-level deploy backups,
+are outside Skald and must be removed by the owner.
+
+On normal days, daily archives keep the newest 14 distinct backup dates.
+Among the remaining older dates, they also keep
 the oldest saved date in each of up to eight most recent ISO calendar weeks represented.
 They are pruned as newer backups replace them, not after a fixed number of days.
 The newest three pre-migration archives are
-kept separately. Private `backups/pre-people-*.json` settings copies, including the
-one made before forgetting, have no automatic expiry. Forget does not rewrite any
-of these backups; remove old copies yourself if they must not retain the person.
+kept separately. Private `backups/pre-people-*.json` settings copies have no
+automatic expiry; a successful forget deletes them along with the other backups.
 
 Skald removes its saved copy of the person's AIOStreams login and its login mapping.
 When either existed, the preview and result remind you: "Ben's Odin login and its

@@ -32,8 +32,8 @@ Ready-to-run [Compose setups](examples/README.md) cover LAN apps, existing AIOSt
 Without AI, home rows, title search and short commands such as "hide anime" work. An [OpenRouter](https://openrouter.ai) key adds:
 
 - **Search that understands requests**, like "anime I haven't watched" or "cozy mystery for a rainy evening", checked against your history.
-- **Picks:** ✨ For You and ✨ This Week, plus tonight's mood shelves.
-- **Experience tags** on titles, which fill `Picks for <member>`, `Same Feeling as <title>`, mood shelves and Fresh Finds.
+- **Picks:** ✨ For You, ✨ New This Week and ✨ This Week for Ana & Ben, plus tonight's mood shelves.
+- **Experience tags** on titles, which fill `Picks for <member>`, `Same Feeling as <title>`, mood shelves and Something Different.
 - **Free wording** for commands and wish shelves, and sorting of unclear import matches.
 
 Cost is capped: AI calls stop at 3 US dollars a month by default (`AI_MONTHLY_USD`), with daily limits per task.
@@ -170,7 +170,7 @@ See [all sources, commands and limits](docs/CONNECTORS.md#sources).
 
 <img src="docs/images/skald-home.jpg" alt="Odin home showing Skald rows for a test household" width="960">
 
-- **Picked for you**, built from taste: ✨ For You, ✨ New This Week, `Picks for <member>`, `Because You Love <title>`, `Same Feeling as <title>`, `From <maker>`, Watch It Again, Coming Soon, mood, theme and wish shelves, Fresh Finds.
+- **Picked for you**, built from taste: ✨ For You, ✨ New This Week, ✨ `This Week for <people>`, `Picks for <member>`, `Because You Liked <title>`, `Same Feeling as <title>`, `From <maker>`, Watch It Again, Coming Soon, mood shelves such as Cozy Mysteries, theme and wish shelves, Something Different.
 - **Catalogs**, plain lists filtered by your history: Continue Watching, Catch Up, Top 10, Anime This Week, `Anime · <season> <year>`, Latest Digital Releases, Best Movies, Best Series.
 
 ✨ rows need OpenRouter. Each member and Together get their own rows; each member can choose discovery style, release years and unwanted genres.
@@ -235,6 +235,7 @@ More: [everything you can type](docs/SEARCH.md), [how corrections teach](docs/TA
 <summary>The fine print</summary>
 
 - **One person:** shared watches keep teaching whoever stays, without Ben's name; add `--shared drop` to remove those watches too. If Skald saved Ben's Odin login or mapping, it removes that copy and reminds you to remove access in Odin and AIOStreams.
+- **Backups after forget:** old backups in Skald's DATA folder still hold Ben, so a forget that fully succeeds deletes them all and takes one fresh backup without him. The preview counts them. A forget that fails leaves backups alone.
 - **Household:** deletes personal data, saved logins and all backups inside Skald's DATA folder. Keeps addon tokens, the format marker, setup addresses and server lock files, along with an empty erase marker. Existing addon links answer with empty rows; run setup again and restart Skald.
 - **Backups outside** Skald's data folder are not touched. Delete them yourself. More in [Privacy](docs/PRIVACY.md#leaving-guests-and-forgetting).
 

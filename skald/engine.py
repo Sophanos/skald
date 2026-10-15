@@ -544,7 +544,7 @@ class Engine:
 
     def week(self, weeks=1, person=None):
         s = self._server
-        latest = max((r['week'] for r in s._learn.get('week', [])), default=None)
+        latest = max((r['week'] for key in ('week', 'weekpicks') for r in s._learn.get(key, [])), default=None)
         return s.week_history(weeks, person, week=latest)
 
     def rows(self, lang=None):

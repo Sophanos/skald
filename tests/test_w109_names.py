@@ -100,9 +100,9 @@ class Names(unittest.TestCase):
         from skald.row_names import describe
         s = self.s
         cases = [
-            ('mood1', {'mood': 'cozy', 'title': 'Old English'}, 'Ein gemütlicher Krimiabend', 'row.mood.cozy'),
+            ('mood1', {'mood': 'cozy', 'title': 'Old English'}, 'Gemütliche Krimis', 'row.mood.cozy'),
             ('lane1', {'lane': 'd:1', 'maker': True, 'name': 'Invented Maker', 'title': 'Old English'}, 'Mehr von Invented Maker', 'row.maker'),
-            ('because', {'label_key': 'row.seed.loved', 'fields': {'title': 'Invented Seed'}, 'title': 'Old English'}, 'Weil du Invented Seed liebst', 'row.seed.loved')]
+            ('because', {'label_key': 'row.seed.loved', 'fields': {'title': 'Invented Seed'}, 'title': 'Old English'}, 'Weil dir Invented Seed gefallen hat', 'row.seed.loved')]
         for key, names, expected, label_key in cases:
             cid = s.rid(key)
             with self.subTest(key=key), patch.object(s, 'feed', return_value={'names': names}):
@@ -400,7 +400,7 @@ class Names(unittest.TestCase):
                 if key.startswith('row.'):
                     with self.subTest(lang=lang, key=key):
                         self.assertNotIn('&', value)
-                        if not key.startswith('row.top10'):
+                        if not key.startswith(('row.top10', 'row.seed.')) and key != 'row.weekpicks':
                             self.assertLessEqual(len(value.split()), 4)
 
     def test_ai_prompt_and_cached_word_limit(self):

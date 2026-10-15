@@ -717,7 +717,7 @@ def text_output(args, data, out):
             line(ready.text(data))
             return
         if args.rows_action == "week":
-            for week in data['weeks']:
+            for week in [*data['weeks'], *data.get('personal', [])]:
                 line(week['week'])
                 for pick in week['picks']:
                     line(f"  {pick['member']}: {pick['title']} ({pick['id']}) · {pick['reason']}")

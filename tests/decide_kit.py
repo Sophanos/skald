@@ -90,6 +90,9 @@ def run_type(server, name, fixtures=None):
         for row in rows:
             if name in SETUP:
                 SETUP[name](server)
+            # Recorded rows are independent decisions, not one day's traffic.
+            with server._usage_lock:
+                server._usage["calls"].clear()
             replay.arm(row["recorded"])
             result = server.decide(name, row["in"])
             server.check(server.DECISIONS[name]["out"], result["answer"])

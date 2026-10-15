@@ -80,9 +80,14 @@ def _sanitize(doc, *, config=False, members=()):
     taste = {"household": {"likes": str, "rewatch_collections": [int]},
              "people": {p: {"type": str, "loves": [str], "prefs": prefs} for p in members}}
     schema = {"v": int, "row_prefix": str, "taste": taste,
-              "region": {"lang": str, "tz": str, "country": str},
+              "region": {"lang": str, "row_lang": str, "tz": str, "country": str},
               "household": {"members": [str], "labels": {p: str for p in (*members, "pair")},
                             "member_rows": [str], "rows": [str], "row_order": [str],
+                            "rows_from_default": bool, "retired_rows": [str],
+                            "home": {"family_caps": {"mood": int, "lane": int}},
+                            "guests": [str], "retired": [str], "away": [str],
+                            "guest_until": {p: str for p in members},
+                            "away_until": {p: str for p in members}, "ages": {p: int for p in members},
                             "row_labels": {r: str for r in hh.get("rows", []) + hh.get("row_order", [])},
                             "shelves": int, "archived": {"*": str}, "trakt_member": str,
                             "experiences": {p: [str] for p in members}}}

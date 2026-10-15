@@ -707,7 +707,8 @@ class Leave(Household):
         self.assertTrue(any(e['key'] == 'tmdb:990001' and 'ana' in e['by'] for e in p['entries']))
         c.undo(self.s, ['ana'])
         self.assertNotIn('ben', c.config(self.s)['household']['members'])
-        self.assertTrue(list((self.root / 'backups').glob('pre-people-*')))
+        self.assertFalse(list((self.root / 'backups').glob('pre-people-*')))
+        self.assertEqual(len(list((self.root / 'backups').glob('state-*.tar.gz'))), 1)
 
     def test_forget_after_remove_and_stale_preview(self):
         c.apply(self.s, self.plan('member_remove'))

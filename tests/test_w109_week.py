@@ -411,7 +411,7 @@ class Weekly(unittest.TestCase):
                {**valid, 'people': None}, {**valid, 'picks': None}, {**valid, 'picks': [{}]},
                {**valid, 'picks': [None]}, {**valid, 'picks': [{**pick, 'reason': ''}]},
                {**valid, 'picks': [{**pick, 'kind': 'bad'}]}, {**valid, 'cards': {}}]
-        expected = {'person': None, 'weeks': [{'week': week, 'picks': [pick]}]}
+        expected = {'person': None, 'weeks': [{'week': week, 'picks': [pick]}], 'personal': []}
         for records, kept in (([{}], []), ([reservation, valid, *bad], [reservation, valid]), (None, []), ({}, [])):
             with self.subTest(records=records):
                 path = self.root/'learn.json'
@@ -420,11 +420,11 @@ class Weekly(unittest.TestCase):
                 with Engine(self.root) as engine:
                     self.assertEqual(engine._server._learn['week'], kept)
                     args = parser().parse_args(['rows', 'week', '--json'])
-                    self.assertEqual(execute(args, engine, None, None), expected if kept else {'person': None, 'weeks': []})
+                    self.assertEqual(execute(args, engine, None, None), expected if kept else {'person': None, 'weeks': [], 'personal': []})
                     engine._server.local_now = lambda: self.now
                     result = commands.preview(engine._server, 'synthetic recall', answer={
                         'op': 'week_picks', 'kind': None, 'values': [1, 0], 'person': None})
-                    self.assertEqual(result['week_picks'], expected if kept else {'person': None, 'weeks': []})
+                    self.assertEqual(result['week_picks'], expected if kept else {'person': None, 'weeks': [], 'personal': []})
                 self.assertEqual(path.read_bytes(), before)
 
     def test_serving_skips_cached_cards_with_empty_scopes(self):

@@ -45,7 +45,9 @@ class CLIDecideTests(unittest.TestCase):
         self.assertFalse(self.state.exists())
 
     def test_eval_without_snapshot_text_and_json(self):
+        # CLI output is independent of machine speed; contract tests guard serving latency.
         with patch.dict(os.environ, {"SKALD_SNAPSHOT": ""}), \
+                patch("decide_kit.SERVING_P95_MS", float("inf")), \
                 patch("skald.__main__.Engine", side_effect=AssertionError("eval constructed Engine")), \
                 patch("skald.__main__.live.pull", side_effect=AssertionError("eval pulled snapshot")):
             data = self.cli("decide", "--eval")

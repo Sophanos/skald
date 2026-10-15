@@ -5,7 +5,7 @@ from pathlib import Path
 
 from . import i18n, members
 
-FIXED = {key: 'row.' + key for key in ('episodes', 'foryou', 'week', 'upcoming', 'catchup', 'rewatch', 'ready',
+FIXED = {key: 'row.' + key for key in ('episodes', 'foryou', 'week', 'weekpicks', 'upcoming', 'catchup', 'rewatch', 'ready',
          'because', 'because2', 'because3', 'leap', 'digital', 'toprated', 'family', 'newtoyou', 'hbo', 'paramount')}
 FIXED.update(airing='row.airing', nextseason='row.nextseason', doctrend='row.docs.trending',
              ready1='row.ready', ready2='row.ready',
@@ -51,6 +51,8 @@ def describe(cid, names, config, lang, lanes=None):
     hh, fields, source = config['household'], {}, 'fixed'
     label_key = FIXED.get(key)
     label = text(names.get('title')) or text(names.get('mixed'))
+    seed = dict(seed=text(names.get('seed')) or None,
+                seed_title=text(mapping(names.get('fields')).get('title')) or None) if key in ('because', 'because2', 'because3', 'leap') else {}
     group = next((group for group, ids in {
         'people': [*hh['member_rows'], *hh['archived']], 'moods': [f'mood{i}' for i in range(1, 5)],
         'lanes': [*[f'lane{i}' for i in range(1, 6)], 'lanebench1', 'lanebench2'],
@@ -60,8 +62,14 @@ def describe(cid, names, config, lang, lanes=None):
         'shelves': [key] if key.startswith('shelf_') else []}.items() if key in ids), key)
     custom = text(mapping(hh.get('row_labels')).get(group))
     if custom:
-        return dict(id=cid, key=None, label=custom, source='custom', missing=[])
-    if key in hh['member_rows'] or key in hh['archived']:
+        return dict(id=cid, key=None, label=custom, source='custom', missing=[], **seed)
+    if key == 'weekpicks':
+        adults = [p for p in members.active_people(config) if p not in members.guest_people(config) and
+                  config['taste'].get('people', {}).get(p, {}).get('prefs', {}).get('kids_age') is None]
+        labels = [hh['labels'][p] for p in adults]
+        people = i18n.t('weekpicks.join', lang, first=', '.join(labels[:-1]), last=labels[-1]) if len(labels) > 1 else next(iter(labels), '')
+        fields, source = {'people': people}, 'template'
+    elif key in hh['member_rows'] or key in hh['archived']:
         label_key, source = ('row.member' if key in hh['member_rows'] else 'row.archived'), 'template'
         fields = {'person': hh['labels'].get(key, hh['archived'].get(key, key))}
     elif key in ('top10', 'toprated'):
@@ -74,7 +82,7 @@ def describe(cid, names, config, lang, lanes=None):
         required = i18n._fields(i18n._STRINGS['en'][label_key])
         if not required <= fields.keys() or any(not isinstance(fields[k], str) for k in required):
             return dict(id=cid, key=label_key, label=label or describe(cid, {}, config, lang)['label'],
-                        source=source, missing=missing(label_key, lang))
+                        source=source, missing=missing(label_key, lang), **seed)
         fields = {k: fields[k] for k in required}
     elif text(names.get('mood')):
         label_key, source = 'row.mood.' + names['mood'], 'fixed'
@@ -104,10 +112,10 @@ def describe(cid, names, config, lang, lanes=None):
     elif key.startswith('because'):
         label_key = 'row.because'
         if label:
-            return dict(id=cid, key=label_key, label=label, source='template', missing=missing(label_key, lang))
+            return dict(id=cid, key=label_key, label=label, source='template', missing=missing(label_key, lang), **seed)
     elif key in ('leap', 'newtoyou') and label:
         return dict(id=cid, key='row.feeling' if key == 'leap' else 'row.newtoyou.named',
-                    label=label, source='template', missing=missing(label_key, lang))
+                    label=label, source='template', missing=missing(label_key, lang), **seed)
     elif key.startswith('shelf_'):
         return dict(id=cid, key=None, label=label or '', source='custom', missing=[])
     if key == 'nextseason':
@@ -119,7 +127,7 @@ def describe(cid, names, config, lang, lanes=None):
     if label_key and not isinstance(label_key, dict):
         label = i18n.t(label_key, lang, **fields)
     return dict(id=cid, key=label_key, label=label or i18n.t('row.picked', lang), source=source,
-                missing=missing(label_key, lang))
+                missing=missing(label_key, lang), **seed)
 
 
 def read(path):

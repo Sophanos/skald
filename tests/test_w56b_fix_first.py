@@ -68,9 +68,9 @@ class TogetherFixes(unittest.TestCase):
             return {name: stamp for name, _, stamp, _, _ in s.job_specs(s.local_now(), {'household': 'same'})}
         with patch.dict(s.CONFIG['household'], {'row_order': []}), patch.object(s, 'OR_KEY', 'synthetic'):
             before = stamps()
-            # Week now uses the calendar boundary and full people signature; other stamps stay unchanged.
+            # Weekly rows use the calendar boundary and full people signature; other stamps stay unchanged.
             self.assertIn('toprated', before)
-            self.assertEqual(hashlib.sha256(json.dumps({k: v for k, v in before.items() if k not in ('week', 'toprated', 'ready')}, sort_keys=True).encode()).hexdigest(), 'f11d7d332700d517c9563b7a82f58897199e9dda2d856af872acaff7013efd62')
+            self.assertEqual(hashlib.sha256(json.dumps({k: v for k, v in before.items() if k not in ('week', 'weekpicks', 'toprated', 'ready')}, sort_keys=True).encode()).hexdigest(), 'f11d7d332700d517c9563b7a82f58897199e9dda2d856af872acaff7013efd62')
             with self.prefs(ana={'kids_age': 8}):
                 child = stamps()
             with self.prefs(ana={'kids_age': 13}):

@@ -35,7 +35,7 @@ class Family(unittest.TestCase):
         with patch.object(s, 'pin_shown'), patch.object(s, 'feed', return_value={}):
             value = [s.manifest('en-US'), self.served(s.rid('leap'), cards(8), who='both'), self.prompt()]
         self.assertEqual([c['type'] for c in value[0]['catalogs'] if c['id'] == s.rid('toprated')], ['movie', 'series'])
-        value[0]['catalogs'] = [c for c in value[0]['catalogs'] if c['id'] not in s.BECAUSE_ROWS[1:] + [s.rid('toprated')]]
+        value[0]['catalogs'] = [c for c in value[0]['catalogs'] if c['id'] not in s.BECAUSE_ROWS[1:] + [s.rid('toprated'), s.rid('weekpicks')]]
         self.assertEqual(hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest(), '41560c17a0af274172aea43584430e25dee48dd7bd9cc67dc4fcbf3bb53eeb63')
         self.assertEqual(s.adult_people(), s.PEOPLE)
         self.assertNotIn('family', [j[0] for j in s.job_specs(s.local_now(), {})])

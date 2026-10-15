@@ -152,6 +152,8 @@ def label(s, cid, lang):
         fallback = s.t(s.STUDIOS[cid][0])
     elif cid in s.READY_ROWS:
         fallback = s.t('row.ready')
+    elif key == 'weekpicks':
+        fallback = s.row_names.describe(cid, {}, s.CONFIG, s.row_lang())['label']
     else:
         fallback = s.t('row.'+key)
     return s.row_name(cid, lang, fallback=fallback) or key
@@ -258,7 +260,7 @@ def plan(s, person=None, lang=None, *, cards=False, caps=None, viewer=None):
                 else:
                     xs = [x for typ in (('tv',) if 'tv' in types else types)
                           for x in (home.get((cid, typ), []) if who == s.GUEST else trace['served'].get((cid, typ), home.get((cid, typ), [])))]
-                minimum = 1 if who == s.GUEST or cid in s.SHELF_ROWS or cid in s.READY_ROWS or cid == s.rid('episodes') or cid == s.rid('top10') and s.kids_age(s.safety_subject(who)) is None else s.ROW_MIN
+                minimum = 1 if who == s.GUEST or cid in s.SHELF_ROWS or cid in s.READY_ROWS or cid in (s.rid('episodes'), s.rid('weekpicks')) or cid == s.rid('top10') and s.kids_age(s.safety_subject(who)) is None else s.ROW_MIN
                 if len(xs) >= minimum:
                     visible.append(cid)
                     composed[cid] = xs

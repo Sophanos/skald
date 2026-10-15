@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from . import history, metrics, plays, shelves
+from . import backup, history, metrics, plays, shelves
 from .intake import write_private
 
 
@@ -74,8 +74,9 @@ def prepare(s, cfg, person, before, shared='keep'):
     if cfg['household']['trakt_member'] == person:
         links.append(('trakt_member', person))
     counts = dict(feedback=0, history=0, imports=0, summaries=0, shelves=0, ideas=0,
+                  searches=0, decisions=0, daily=0, suggestions=0, wishes=0, settings_copies=0,
                   preferences=len(cfg['taste']['people'].get(person, {}).get('prefs', {})), labels=1, links=len(links),
-                  shared={p: 0 for p in s.PEOPLE if p != person})
+                  shared={p: 0 for p in s.PEOPLE if p != person}, backups=len(backup.person_backups(data)))
     days = plays.days_state(data)
     counts['watching_days'] = len(days.pop(person, []))
     if counts['watching_days']:
@@ -173,7 +174,8 @@ def prepare(s, cfg, person, before, shared='keep'):
                 ids = {r.get('id') for r in removed if r.get('origin') == 'imports.jsonl'}
                 doc['import_order'] = [i for i in doc['import_order'] if i not in ids]
             save(path.name, doc)
-    for name, field in (('feedback.jsonl', 'feedback'), ('wishes.jsonl', None), ('sessions.jsonl', None), ('undo.jsonl', None), ('memory.log.jsonl', None)):
+    for name, field in (('feedback.jsonl', 'feedback'), ('wishes.jsonl', None), ('sessions.jsonl', None),
+                        ('undo.jsonl', None), ('memory.log.jsonl', None), ('searches.jsonl', None), ('decisions.jsonl', None)):
         path = data / name
         if not path.exists():
             continue
@@ -181,7 +183,14 @@ def prepare(s, cfg, person, before, shared='keep'):
         if field:
             kept = evidence(rows, None, field, name)
         else:
-            kept = [r for r in rows if not contains(r, person)]
+            if name == 'searches.jsonl':
+                kept = [r for r in rows if r.get('p') != person]
+                counts['searches'] = len(rows)-len(kept)
+            elif name == 'decisions.jsonl':
+                kept = [r for r in rows if r.get('answer', {}).get('person') != person]
+                counts['decisions'] = len(rows)-len(kept)
+            else:
+                kept = [r for r in rows if not contains(r, person)]
             removed.extend(r for r in rows if r not in kept)
         if kept != rows:
             changes[name] = ''.join(json.dumps(r, ensure_ascii=False)+'\n' for r in kept)
@@ -217,6 +226,18 @@ def prepare(s, cfg, person, before, shared='keep'):
         kept = {p: [r for r in rows if not contains(r, person)] for p, rows in doc.items() if p != person}
         if kept != doc:
             save(path.name, kept)
+    path = data / 'legacy.json'
+    if path.exists() and contains(json.loads(path.read_text()), person):
+        changes[path.name] = None
+        counts['settings_copies'] = 1
+    path = data / 'daily.json'
+    if path.exists():
+        doc = json.loads(path.read_text())
+        out = doc.get('memory', {}).get('out', {})
+        if 'active_'+person in out:
+            out.pop('active_'+person)
+            counts['daily'] = 1
+            save(path.name, doc)
     from .setup import aiostreams_logins, state
     logins = aiostreams_logins(data)
     odin = person in logins or any(who == person for connector in cfg['connectors'].values()
@@ -254,7 +275,8 @@ def prepare(s, cfg, person, before, shared='keep'):
                 doc['stamp'] = None
                 doc['forgotten'].pop(person, None)
             save(path.name, doc)
-    for name, field in (('interview.json', None), ('clients.json', 'clients'), ('archetypes.json', 'items')):
+    for name, field in (('interview.json', None), ('clients.json', 'clients'), ('archetypes.json', 'items'),
+                        ('suggest-dismissed.json', None), ('wishes.json', None)):
         path = data / name
         if not path.exists():
             continue
@@ -262,6 +284,12 @@ def prepare(s, cfg, person, before, shared='keep'):
         rows = doc[field] if field else doc
         kept = ({k: v for k, v in rows.items() if k not in (person, 'household')} if name == 'archetypes.json' else
                 [r for r in rows if not contains(r, person)])
+        if name == 'suggest-dismissed.json':
+            kept = [r for r in rows if r.get('person') != person]
+            counts['suggestions'] = len(rows)-len(kept)
+        elif name == 'wishes.json':
+            kept = [r for r in rows if r.get('scope', r.get('person')) != person]
+            counts['wishes'] = len(rows)-len(kept)
         if kept != rows:
             if field:
                 doc[field] = kept
@@ -321,6 +349,8 @@ def apply(s, plan):
         with metrics._lock:
             checked = c.member_preview(s, '', plan['change'], plan['actor'], None)
             changes, state = prepare(s, cfg, person, plan['forget']['before'], plan['forget']['shared'])
+            # A migration or daily job can add backups without changing person data.
+            state['counts']['backups'] = plan['forget']['counts']['backups']
             if checked.get('read_only') or state != plan['forget'] or c.member_state(cfg, person) != plan['member']['before']:
                 raise ValueError('Person data changed; preview again')
             before_people(s, cfg)
@@ -344,6 +374,22 @@ def apply(s, plan):
         s.forget_connector(person)
         s.refresh_preferences()
         c.pending(s).clear()
-    s.aio_rows_changed()
+        if s._daily is not None:
+            s._daily_save()
+        s.aio_rows_changed()
+        backups_deleted = 0
+        for path in backup.person_backups(s.DATA):
+            path.unlink()
+            backups_deleted += 1
+        now = s.time.time()
+        name = 'state-'+s.online_day(now)[0]+'.tar.gz'
+        try:
+            fresh_backup = name if s.backup_state(now) else None
+        except Exception:
+            (Path(s.DATA)/'backups'/name).unlink(missing_ok=True)
+            fresh_backup = None
+    description = s.t('forget.backups_done', count=backups_deleted, name=fresh_backup) if fresh_backup else s.t('forget.backups_failed', count=backups_deleted)
+    if plan['forget']['odin']:
+        description += '\n'+odin_reminder(plan['member']['config_before']['household']['labels'][person])
     return {'name': 'Done: '+plan['name']+'. This cannot be undone.',
-            'description': odin_reminder(plan['member']['config_before']['household']['labels'][person]) if plan['forget']['odin'] else ''}
+            'description': description, 'backups_deleted': backups_deleted, 'fresh_backup': fresh_backup}

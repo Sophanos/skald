@@ -59,7 +59,7 @@ from types import SimpleNamespace
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.6.1"
+VERSION = "1.7.0"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -101,7 +101,8 @@ LEGACY = {
         "member_rows": [
             "ana"
         ],
-        "experiences": {}
+        "experiences": {},
+        "weekpicks_added": True
     },
     "taste": {
         "household": {
@@ -181,7 +182,7 @@ def invalid_json(_):
     raise ConfigError("skald.json")
 
 
-ROW_KEYS = ('episodes', 'foryou', 'week', 'upcoming', 'catchup', 'rewatch', 'ready', 'because', 'leap',
+ROW_KEYS = ('episodes', 'foryou', 'week', 'weekpicks', 'upcoming', 'catchup', 'rewatch', 'ready', 'because', 'leap',
             'top10', 'people', 'moods', 'lanes', 'docs', 'studios', 'anime', 'shelves', 'digital', 'toprated', 'family',
             'newtoyou', 'lab')
 
@@ -190,7 +191,7 @@ def fresh_config(members):
     return {"v": 1, "row_prefix": DEFAULT_ROW_PREFIX, "household": {"members": members,
             "labels": {**{p: p.title() for p in members}, "pair": "you both" if len(members) == 2 else "everyone"},
             "note": "", "archived": {}, "trakt_member": members[0] if members else "",
-            "member_rows": list(members) if FIRST_RUN_MEMBER_ROWS else [], "experiences": {}},
+            "member_rows": list(members) if FIRST_RUN_MEMBER_ROWS else [], "experiences": {}, "weekpicks_added": True},
             "taste": {"household": {"likes": "", "rewatch_collections": []}, "people": {p: {} for p in members}},
             "region": dict(DEFAULT_REGION), "addon": dict(DEFAULT_ADDON),
             "history": {"source": "none"}, "connectors": {}}
@@ -355,6 +356,12 @@ def validate_config(doc, *, data=None, environ=None):
     order = hh.get('row_order', [])
     need(isinstance(order, list) and all(isinstance(k, str) and k in ROW_KEYS for k in order) and
          len(set(order)) == len(order), 'household.row_order')
+    need(type(hh.get('weekpicks_added', False)) is bool, 'household.weekpicks_added')
+    if not doc['household'].get('weekpicks_added', False) and 'row_order' in hh and 'weekpicks' not in order:
+        values = list(order)
+        values.insert(values.index('week') + 1 if 'week' in values else 0, 'weekpicks')
+        hh['row_order'] = values
+    hh['weekpicks_added'] = True
     if 'home' in hh:
         from skald.rowplan import validate_home
         try:
@@ -1501,8 +1508,11 @@ def _decision_writer():
                 return
             if task and not isinstance(task, threading.Event):
                 data, rec, persist = task
-                with household_writable(data, household_erased) as allowed:
+                with history_locked(data), household_writable(data, household_erased) as allowed:
                     if not allowed:
+                        continue
+                    person = rec.get('answer', {}).get('person')
+                    if person in history_cutoffs(data) and person not in load_config(data, readonly=True)[0]['household']['members']:
                         continue
                     path = os.path.join(data, "decisions.jsonl")
                     if path not in lines:
@@ -2377,7 +2387,7 @@ def manifest(lang, scope=None):
                 if cid not in SHELF_ROWS and (cid in THEMED_ROWS or cid in READY_ROWS or feed(cid, lang) or (cid, lang) in _feeds_empty or cid == rid('family')) and (cid != rid('top10') or kids_age(safety_subject()) is not None):
                     # Count the cached composition of stored rows, with the catalog's viewer and pins.
                     metas = row_metas(cid, typ, lang, who=SCOPES[scope]) if scope is not None else row_metas(cid, typ, lang)
-                    if len(metas) < (1 if cid == rid('episodes') or cid in READY_ROWS else ROW_MIN):
+                    if len(metas) < (1 if cid in (rid('episodes'), rid('weekpicks')) or cid in READY_ROWS else ROW_MIN):
                         continue
                 if isinstance(name, dict):
                     rows.append({"type": typ, "id": cid, "name": name[typ]})
@@ -3113,7 +3123,7 @@ def health_snapshot():
     from skald import health
     hashes = {name: p.get('hash', '') for name, p in _profiles.items()}
     periods = {'episodes': 3 * 3600, 'upcoming': 6 * 3600, 'airing': 6 * 3600,
-               'top10': 12 * 3600, 'personal': 12 * 3600, 'week': 7 * 86400,
+               'top10': 12 * 3600, 'personal': 12 * 3600, 'week': 7 * 86400, 'weekpicks': 7 * 86400,
                'docsai': 7 * 86400, 'shelves': 60}
     feeds = {}
     with _feeds_lock:
@@ -3272,7 +3282,7 @@ BECAUSE_ROWS = [rid('because'), rid('because2'), rid('because3')]
 READY_ROWS = [rid('ready1'), rid('ready2')]
 THEMED_ROWS = set(MOODS_ROWS + LANE_ROWS + DOCS + STUDIO_ROWS + BECAUSE_ROWS + [rid('leap')])
 # Keep the player catalog order in sync (Top 10 has two catalogs).
-DEDUPE_ORDER = ([rid('episodes'), rid('foryou'), rid('week'), rid('because'), *READY_ROWS, rid('catchup'), rid('upcoming'),
+DEDUPE_ORDER = ([rid('episodes'), rid('foryou'), rid('week'), rid('weekpicks'), rid('because'), *READY_ROWS, rid('catchup'), rid('upcoming'),
                  rid('leap')] + list(ROW_OWNER) + [rid('rewatch'), rid('top10'), rid('digital'), rid('toprated')] + STUDIO_ROWS + MOODS_ROWS + BECAUSE_ROWS[1:] + DOCS + LANES
                 + [rid('airing'), rid('nextseason'), rid('newtoyou')])
 LAB_ROWS = []
@@ -3282,6 +3292,7 @@ GUEST_ROW_POLICY = {
     rid('episodes'): False,  # Resume household plays.
     rid('foryou'): False,  # Household taste shortlist.
     rid('week'): False,  # Joint member scores.
+    rid('weekpicks'): False,  # Personal adult picks.
     rid('because'): False,  # Household seed and shelf name.
     rid('catchup'): False,  # Household seen mask and taste.
     rid('upcoming'): False,  # Household taste and history.
@@ -3311,7 +3322,7 @@ GUEST_ROW_POLICY = {
 GUEST_ROW_POLICY.update(dict.fromkeys([*ROW_OWNER, *BECAUSE_ROWS, *READY_ROWS], False))
 GUEST_ROW_POLICY.update({rid('digital'): True, rid('toprated'): True})
 GUEST_ROWS = {cid for cid, allowed in GUEST_ROW_POLICY.items() if allowed}
-MIXED = ({rid('foryou'), rid('upcoming'), rid('catchup'), rid('rewatch'), rid('because'), rid('week'),
+MIXED = ({rid('foryou'), rid('upcoming'), rid('catchup'), rid('rewatch'), rid('because'), rid('week'), rid('weekpicks'),
           rid('leap'), rid('family'), rid('newtoyou')} | set(BECAUSE_ROWS) | set(READY_ROWS) | set(ROW_OWNER) | {rid(p) for p in ARCHIVED} | set(LANES) | set(MOODS_ROWS) | set(SHELF_ROWS) | set(DOCS) | set(STUDIO_ROWS))
 MIX = ("tv", "movie", "series")  # tv = both kinds in one row; movie / series = one kind only
 STAMP_V = "17.3"  # bump to rebuild every row once after a format change
@@ -3411,6 +3422,7 @@ def feed_rows(lang=LANG, profiles=True, who=None, *, home=None):
         (rid('episodes'), ("series",), t("row.episodes")),
         (rid('foryou'), MIX, t("row.foryou")),
         (rid('week'), MIX, t("row.week")),
+        (rid('weekpicks'), MIX, row_names.describe(rid('weekpicks'), {}, CONFIG, row_lang())['label']),
         (rid('upcoming'), MIX, t("row.upcoming")),
         (rid('catchup'), MIX, t("row.catchup")),
         (rid('rewatch'), MIX, t("row.rewatch")),
@@ -6376,7 +6388,7 @@ def refresh_profiles():
 # Titles shown on LEARN_TIRED days without a play sink to the end of their row and leave the AI rows.
 
 NEWTOYOU_REJECT = 0.2  # New to You picks change one axis on purpose; a no there counts a fifth of a normal no
-LEARN_ROWS = {rid('foryou'), rid('upcoming'), rid('catchup'), rid('rewatch'), rid('because'), rid('top10'), rid('week'),
+LEARN_ROWS = {rid('foryou'), rid('upcoming'), rid('catchup'), rid('rewatch'), rid('because'), rid('top10'), rid('week'), rid('weekpicks'),
               rid('leap')} | set(BECAUSE_ROWS) | set(ROW_OWNER) | set(DOCS) | set(STUDIO_ROWS)
 LEARN_VISIBLE = 20
 LEARN_WINDOW = 21
@@ -9174,8 +9186,10 @@ def write_search(record, timing=None):
     if getattr(_scoping, 'private_command', False):
         return
     try:
-        with household_writable(DATA, household_erased) as allowed:
+        with history_locked(DATA), household_writable(DATA, household_erased) as allowed:
             if not allowed:
+                return False
+            if record.get('p') in history_cutoffs(DATA) and record['p'] not in load_config(DATA, readonly=True)[0]['household']['members']:
                 return False
             with open(os.path.join(DATA, "searches.jsonl"), "a") as fh:
                 fh.write(json.dumps({**record, **({"timing": timing} if timing else {})}, ensure_ascii=False) + "\n")
@@ -11132,7 +11146,7 @@ def week_candidates(lang, extra=()):
     """Cached watchable releases only; a chart position alone is not a release."""
     today, found = local_now().date(), {}
     with _feeds_lock:
-        records = [v for (cid, l), v in sorted(_feeds.items(), key=lambda kv: kv[0][1] != LANG) if cid != rid('week')]
+        records = [v for (cid, l), v in sorted(_feeds.items(), key=lambda kv: kv[0][1] != LANG) if cid not in (rid('week'), rid('weekpicks'))]
     records.append({'metas': {'tv': extra}})
     for record in records:
         for xs in (record.get('metas') or {}).values():
@@ -11222,7 +11236,12 @@ def week_people():
 
 
 def load_week_history():
-    records = _learn.get('week', [])
+    for key in ('week', 'weekpicks'):
+        load_week_records(key)
+
+
+def load_week_records(key):
+    records = _learn.get(key, [])
     valid = []
     for r in records if isinstance(records, list) else []:
         try:
@@ -11232,14 +11251,14 @@ def load_week_history():
                 continue
             for p in r['picks']:
                 check({'id': str, 'member': str, 'reason': str, 'week': str,
-                       'kind': ('movie', 'tv'), 'title': str}, p)
+                       'kind': ('movie', 'tv'), 'title': str, **({'anchor': (str, None)} if key == 'weekpicks' else {})}, p)
                 if p['week'] != r['week']:
                     raise ValueError('pick week')
             valid.append(r)
         except (ValueError, TypeError, KeyError):
             continue
-    if 'week' in _learn:
-        _learn['week'] = sorted(valid, key=lambda r: r['week'])[-8:]
+    if key in _learn:
+        _learn[key] = sorted(valid, key=lambda r: r['week'])[-8:]
 
 
 def relabel_week(record):
@@ -11261,6 +11280,7 @@ def relabel_week(record):
 
 
 def week_history(weeks=1, person=None, offset=0, *, week=None):
+    _refresh_learning()
     if type(weeks) is not int or type(offset) is not int or not 1 <= weeks <= 8 or not 0 <= offset <= 8-weeks:
         raise ValueError('weeks and offset must fit within the last 8 weeks')
     if person is not None:
@@ -11277,7 +11297,13 @@ def week_history(weeks=1, person=None, offset=0, *, week=None):
                 relabel_week(record)
                 records.append({'week': record['week'], 'picks': [p for p in record['picks']
                                 if (person is None or p['member'] == person) and title_allowed(p['id'], p['kind'], person)]})
-    return {'person': person, 'weeks': records}
+        personal = []
+        for r in reversed(_learn.get('weekpicks', [])):
+            if start.isoformat() <= r['week'] <= end.isoformat():
+                personal.append({'week': r['week'], 'picks': [{**p, 'reason': weekpick_reason(p['member'], p.get('anchor'))}
+                    for p in r['picks'] if p['member'] in (*adult_people(), 'together') and
+                    (person is None or p['member'] == person) and title_allowed(p['id'], p['kind'], person)]})
+    return {'person': person, 'weeks': records, 'personal': personal}
 
 
 def week_spread(metas):
@@ -11376,6 +11402,112 @@ def week_feed(lang):
             _learn_dirty.set()
         save_learn()
         return {rid('week'): {'tv': copy.deepcopy(metas)}}
+
+
+WEEKPICKS_SYS = ('Pick up to 3 real, unseen titles from any release year for each supplied scope. '
+    'Return JSON {scope: [{"title": title, "year": year, "type": "movie" or "series", "anchor": loved_index}]}. '
+    'Use only supplied scope keys. Connect each pick to one title from that scope\'s own indexed loved list; '
+    'use null if no connection exists. Return results only, no prose. Do not pick seen, abandoned or hidden titles. '
+    'Prefer distinct titles across scopes and one great surprise over the obvious sequel.')
+_weekpicks_lock = threading.Lock()
+
+
+def weekpick_reason(person, anchor=None):
+    if person == 'together':
+        pair = LABELS['pair']
+        reason = (t('weekpicks.for', person=pair) if pair not in ('you both', 'everyone') else
+                  t('weekpicks.you' if len(adult_people()) == 1 else 'weekpicks.pair' if len(adult_people()) == 2 else 'weekpicks.all'))
+    else:
+        reason = t('weekpicks.for', person=LABELS[person])
+    return t('weekpicks.like', reason=reason, anchor=anchor) if isinstance(anchor, str) and anchor else reason
+
+
+def weekpick_cards(record):
+    cards = []
+    for x in copy.deepcopy(record.get('cards', [])):
+        scopes = {person: weekpick_reason(person, (x.get('_week_anchors') or {}).get(person))
+                  for person in x.get('_week', {}) if person in (*adult_people(), 'together')}
+        if scopes:
+            cards.append({**x, '_week': scopes, 'description': next(iter(scopes.values())) + ' · ' +
+                          ((x.get('_row') or {}).get('overview') or '')})
+    return cards
+
+
+def weekpicks_feed(lang):
+    """Reserve one extra weekly call; language and household changes never spend again."""
+    with _weekpicks_lock:
+        _refresh_learning()
+        start = week_start()
+        with _learn_lock:
+            history = _learn.setdefault('weekpicks', [])
+            previous = next((r for r in history if r['week'] == start), None)
+            if previous is not None:
+                return {rid('weekpicks'): {'tv': weekpick_cards(previous)}}
+            p, model = adult_profile(_profiles.get('household')), get_model(False)
+            if not p or not model:
+                return None
+            for r in history:
+                r.pop('cards', None)
+            record = {'week': start, 'people': week_people(), 'picks': []}
+            history[:] = sorted([*history, record], key=lambda r: r['week'])[-8:]
+            _learn_dirty.set()
+        attempt = save_learn() and _usage.get('weekpicks_week') != start
+        if attempt:
+            # Forget clears learning, but must not buy a second call in the same week.
+            attempt = save_usage({'weekpicks_week': start}, counters=False)
+        scopes, answer = {}, {}
+        taste = read_taste().get('people') or {}
+        for person in (*adult_people(), 'together'):
+            mine = [e['title'] for e in sorted(person_entries(p, person), key=lambda e: -e['weight'])
+                    if e['weight'] > 0 and person in e.get('by', ())][:12 if person != 'together' else 10]
+            affinities = [model.get('names', {}).get(f, f) for f, a in
+                          sorted((model.get('paff', {}).get(person) or {}).items(), key=lambda kv: -kv[1])
+                          if f.startswith('x') and a > 0][:5]
+            scopes[person] = {'loved': [{'i': i, 'title': title} for i, title in enumerate(mine)],
+                              'enjoys': affinities, 'type_hint': taste.get(person, {}).get('type')}
+        prompt = {'scopes': scopes, 'seen': [e['title'] for e in p['entries'][:60]]}
+        if attempt and OR_KEY and adult_people():
+            try:
+                answer = search_commands.parse_json(llm_text(WEEKPICKS_SYS,
+                    when_text() + '\n' + household_context() + '.\n' + json.dumps(prompt, ensure_ascii=False),
+                    4000, 150, 'feed', 'weekpicks', effort='medium'))
+            except Exception:
+                pass
+        cards, picks = {}, []
+        with _learn_lock:
+            recent = {pick['id'] for r in _learn.get('week', []) if r['week'] == start for pick in r['picks']}
+        for person, facts in scopes.items():
+            values = answer.get(person) if isinstance(answer, dict) else None
+            if not isinstance(values, list):
+                continue
+            who = 'both' if person == 'together' else person
+            masks = row_masks(who)
+            for value in values[:3]:
+                if not isinstance(value, dict) or not isinstance(value.get('title'), str) or not value['title'].strip() or \
+                        len(value['title']) > 300 or value.get('type') not in ('movie', 'series') or \
+                        type(value.get('year')) is not int or not 1800 <= value['year'] <= local_now().year:
+                    continue
+                stype, kind = value['type'], 'movie' if value['type'] == 'movie' else 'tv'
+                anchor_i = value.get('anchor')
+                anchor = facts['loved'][anchor_i]['title'] if type(anchor_i) is int and 0 <= anchor_i < len(facts['loved']) else None
+                reason = weekpick_reason(person, anchor)
+                got = row_search(stype, kind, [(value['title'], str(value['year']), stype, '')], lang)
+                for x in got[:1]:
+                    if x['id'] in recent or x['id'] in masks[0] | masks[2] or catalog_drop(x, p, rid('weekpicks'), who):
+                        continue
+                    if x['id'] in cards and person in cards[x['id']]['_week']:
+                        continue
+                    picks.append(dict(id=x['id'], member=person, reason=reason, week=start,
+                                      kind=kind, title=x['name'][:160], anchor=anchor))
+                    if x['id'] not in cards:
+                        cards[x['id']] = {**x, '_week': {}, '_week_anchors': {}, '_week_start': start}
+                    cards[x['id']]['_week'][person] = reason
+                    cards[x['id']]['_week_anchors'][person] = anchor
+        with _learn_lock:
+            record.update(picks=picks, cards=list(cards.values()))
+            _learn_dirty.set()
+        save_learn()
+        return {rid('weekpicks'): {'tv': weekpick_cards(record)}}
 
 
 # --- LLM rows ------------------------------------------------------------------
@@ -12437,6 +12569,12 @@ def _backup_credential_inodes():
 
 
 def backup_state(now, *, archive_name=None):
+    # Hold the forget lock before reading config or opening any member files.
+    with history_locked(DATA):
+        return _backup_state(now, archive_name=archive_name)
+
+
+def _backup_state(now, *, archive_name=None):
     import errno
     import stat
     import tarfile
@@ -12586,11 +12724,17 @@ _daily_lock = threading.Lock()
 
 
 def _daily_save():
-    with _daily_lock:
-        snap = json.dumps(_daily)
-    with household_writable(DATA, household_erased) as allowed:
+    with history_locked(DATA), _daily_lock, household_writable(DATA, household_erased) as allowed:
         if not allowed:
             return False
+        out = (_daily or {}).get('memory', {}).get('out', {})
+        forgotten = history_cutoffs(DATA)
+        if forgotten:
+            people = load_config(DATA, readonly=True)[0]['household']['members']
+            for person in forgotten:
+                if person not in people:
+                    out.pop('active_'+person, None)
+        snap = json.dumps(_daily)
         fd, tmp = tempfile.mkstemp(prefix=".daily-", suffix=".tmp", dir=DATA)
         try:
             with os.fdopen(fd, "w") as fh:
@@ -12702,6 +12846,7 @@ def job_specs(d, hashes):
         ("nextseason", [rid('nextseason')], day, 0, lambda l: {rid('nextseason'): anime_feed(l, True)}),
         ("newtoyou", [rid('newtoyou')], f"{day}/{hh}", 3600, newtoyou_feed),
         ("week", [rid('week')], f"new1/{week_start(d)}/{week_people()}", 0, week_feed),
+        ("weekpicks", [rid('weekpicks')], f"{week_start(d)}/{week_people()}", 0, weekpicks_feed),
     ]
     if SHELF_ROWS:
         specs.append(("shelves", SHELF_ROWS, d.strftime("%Y-%m-%d/%H/%M") + hh, 0, shelf_feed))
@@ -12719,7 +12864,7 @@ def job_specs(d, hashes):
             if person in hashes:
                 specs.append((person, [rid(person)], f"{day}/{hashes[person]}", 3 * 3600, lambda l, p=person: archived_feed(l, p)))
     shared = {"because", "rewatch", "upcoming", "catchup", "lanes", "leap", "moods", "docs", "studios", "personal", "week", "docsai",
-              "newtoyou", "ready"}
+              "newtoyou", "ready", "weekpicks"}
     for key, builder in (('digital', digital_feed), ('toprated', toprated_feed)):
         if row_enabled(rid(key)):
             specs.append((key, [rid(key)], 'wide1/'+day if key == 'toprated' else day, 0, lambda l, k=key, b=builder: {rid(k): b(l)}))
@@ -12753,7 +12898,7 @@ def forget_person_caches():
         with _remote_lock, _imports_lock, _person_model_lock, _taste_ring_lock:
             for store in (_remote_cache, _imports_cache, _person_models, _taste_ring):
                 store.clear()
-        for name in ('profile.json', 'taste_ring.json', 'learn.json', 'online.json', *SERVING_CACHES,
+        for name in ('profile.json', 'taste_ring.json', 'learn.json', 'online.json', 'memory.json.bad', *SERVING_CACHES,
                      *('health-cache-'+n for n in SERVING_CACHES)):
             Path(DATA, name).unlink(missing_ok=True)
 
@@ -13440,7 +13585,8 @@ def human_cards(metas, person=None):
     for i, meta in enumerate(metas):
         parts, overview = card_parts(meta)
         ready_note = (meta.get('_row') or {}).get('ready_note')
-        notes = [ready_note] if ready_note else [meta["_memory"]["why"]] if meta.get("_memory") and not child else []
+        weekpick_note = (meta.get('_row') or {}).get('weekpick_note') if not child else None
+        notes = [ready_note] if ready_note else [weekpick_note] if weekpick_note else [meta["_memory"]["why"]] if meta.get("_memory") and not child else []
         for part in (() if child else parts):
             if notes:
                 break
@@ -14027,7 +14173,7 @@ def row_eligible(meta, cid, lang, p, animation=None, *, seed=None):
         return upcoming_ok(meta)
     if cid in DOCS:
         return doc_ok(meta, cid)
-    curated = cid in {rid('foryou'), rid('week'), rid('leap'), rid('newtoyou')} | set(BECAUSE_ROWS) | set(ROW_OWNER) | set(MOODS_ROWS + LANE_ROWS + STUDIO_ROWS)
+    curated = cid in {rid('foryou'), rid('week'), rid('weekpicks'), rid('leap'), rid('newtoyou')} | set(BECAUSE_ROWS) | set(ROW_OWNER) | set(MOODS_ROWS + LANE_ROWS + STUDIO_ROWS)
     if curated:
         if animation is None:
             animation = row_animation(cid)
@@ -14390,18 +14536,32 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
             rowplan.observe(cid, code='not_today')
             return LaneRow([], names) if cid in LANE_ROWS else []
         franchises = getattr(above, 'franchises', {})
-        if cid == rid('week'):
+        if cid in (rid('week'), rid('weekpicks')):
             metas = []
             blocked = masks[0] | (masks[2] if len(masks) > 2 else set())
             for x in row_list(cid, typ, lang):
                 scopes = x.get('_week') or {}
+                if cid == rid('weekpicks'):
+                    scopes = {person: weekpick_reason(person, (x.get('_week_anchors') or {}).get(person))
+                              for person in scopes if person in (*adult_people(), 'together') and
+                              (who not in PEOPLE or person in (who, 'together')) and
+                              (who != GUEST and who not in guest_people(CONFIG) and kids_age(who) is None or person == 'together')}
                 if not scopes or x.get('_week_start') != week_start() or who in PEOPLE and not ({who, 'together'} & scopes.keys()):
                     continue
                 if x['id'] in blocked or not row_eligible(x, cid, lang, p):
                     continue
+                if cid == rid('weekpicks') and (x['id'] in above or catalog_drop(x, p, cid, who) or any(
+                        pick['id'] == x['id'] for r in _learn.get('week', []) if r['week'] == week_start() for pick in r['picks'])):
+                    continue
                 person = who if who in scopes else 'together' if 'together' in scopes else next(iter(scopes))
-                metas.append({**x, 'description': scopes[person] + ' · ' + ((x.get('_row') or {}).get('overview') or '')})
-            return metas if len(metas) >= ROW_MIN else []
+                card = {**x, '_week': scopes, 'description': scopes[person] + ' · ' + ((x.get('_row') or {}).get('overview') or '')}
+                if cid == rid('weekpicks'):
+                    card['_week_anchors'] = {person: (x.get('_week_anchors') or {}).get(person) for person in scopes}
+                    card['_row'] = {**(x.get('_row') or {}), 'weekpick_note': scopes[person]}
+                metas.append(card)
+            if cid == rid('weekpicks') and who in adult_people():
+                metas.sort(key=lambda x: who not in x['_week'])
+            return metas if len(metas) >= (1 if cid == rid('weekpicks') else ROW_MIN) else []
         if cid in (rid('digital'), rid('toprated')):
             raw = row_list(cid, typ, lang)
             if cid == rid('toprated') and who in PEOPLE and p.get('entries'):
@@ -15532,7 +15692,7 @@ def interview_answer(body):
 
 
 REMOTE_PORT = int(os.environ.get("REMOTE_PORT", "8081"))
-REMOTE_ROWS = set(ROW_OWNER) | set(READY_ROWS) | {rid('foryou'), rid('week'), rid('upcoming'), rid('because'), rid('leap'),
+REMOTE_ROWS = set(ROW_OWNER) | set(READY_ROWS) | {rid('foryou'), rid('week'), rid('weekpicks'), rid('upcoming'), rid('because'), rid('leap'),
                rid('rewatch'), rid('interview'), rid('newtoyou')} | set(BECAUSE_ROWS) | set(MOODS_ROWS) | set(LANES) | set(STUDIO_ROWS) | set(DOCS)
 REMOTE_ACTIONS = {"love", "like", "meh", "not_for_us", "not_tonight", "seen"}
 REMOTE_REASONS = ("too dark", "too slow", "too violent", "too silly", "not my genre", "seen enough of these")
@@ -16124,7 +16284,7 @@ def rows_view(req):
     for cid, types, name in feed_rows(lang, profiles=False, who=who):
         if cid not in API_ROWS or req["query"].get("row", cid) != cid:
             continue
-        if viewer and (cid == rid('week') or ROW_OWNER.get(cid, viewer) != viewer):
+        if viewer and (cid in (rid('week'), rid('weekpicks')) or ROW_OWNER.get(cid, viewer) != viewer):
             continue
         items = []
         metas = row_metas(cid, "tv", lang, who=who)
@@ -16169,7 +16329,7 @@ def metrics_view(req):
         if "who" in report:
             report["who"] = {k: v for k, v in report["who"].items() if k in (viewer, "both", "together", "unknown")}
         report["rows"] = {k: v for k, v in report.get("rows", {}).items()
-                          if k not in (*{rid(p) for p in ARCHIVED}, rid('week')) and ROW_OWNER.get(k, viewer) == viewer}
+                          if k not in (*{rid(p) for p in ARCHIVED}, rid('week'), rid('weekpicks')) and ROW_OWNER.get(k, viewer) == viewer}
     else:
         report["rows"] = {k: v for k, v in report.get("rows", {}).items() if k not in {rid(p) for p in ARCHIVED}}
     with _usage_lock:

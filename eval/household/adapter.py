@@ -1,7 +1,7 @@
 """Opt-in actual home serving replay, using synthetic state only.
 
 replay_home(server, now=UTC_seconds, lang='en-US', scope=None, who=None,
-            order=None, enabled=False) returns None unless explicitly enabled.
+            order=None, enabled=False, details=False) returns None unless explicitly enabled.
 server is an isolated, initialized production module with synthetic CONFIG,
 profiles, model, facets, embeddings, learning, taste/memory/feedback readers.
 Callers must supply offline readers; this module never loads household inputs.
@@ -17,6 +17,9 @@ Stages: curated (row_list), own_source (source_metas), pool (row_pool),
 backfilled (fill_row output), ranked (preference_order output), served (before
 human_cards). Missing stages are empty lists. All contain detached meta dicts.
 Rows are the final row_metas outputs, including empty minimum-size failures.
+details=True counts denied external calls per row as network_attempts and
+uses manifest visibility and labels, retaining blocked rows with an empty slate
+without candidate-stage probes or repinning the frozen shown stores.
 Candidates include ineligible items and items beyond the served limit; they
 must never replace final rows in quality metrics. Pool is refill availability,
 not a claim that every item was retrieved specifically for this row.
@@ -49,15 +52,15 @@ def _denied(*args, **kwargs):
 
 
 @contextmanager
-def _offline(server, now):
+def _offline(server, now, denied=_denied):
     with ExitStack() as stack:
         stack.enter_context(patch('time.time', return_value=now))
-        stack.enter_context(patch('urllib.request.urlopen', _denied))
+        stack.enter_context(patch('urllib.request.urlopen', denied))
         # In-memory preferences are the frozen input, not the current config file.
         stack.enter_context(patch.object(server, 'refresh_preferences', lambda: None))
         stack.enter_context(patch.object(server, 'get_model', return_value=server._model['m']))
         for name in ('tmdb', 'openrouter', '_connector_open', 'llm_sections'):
-            stack.enter_context(patch.object(server, name, _denied))
+            stack.enter_context(patch.object(server, name, denied))
         for name in ('CONFIG', '_feeds', '_shown', '_shown_scoped', '_profiles'):
             stack.enter_context(patch.object(server, name, deepcopy(getattr(server, name))))
         for name, value in (('_home_cache', {}), ('_person_scores', {}),
@@ -69,14 +72,40 @@ def _offline(server, now):
 
 
 def replay_home(server, *, now, lang='en-US', scope=None, who=None,
-                order=None, enabled=False):
+                order=None, enabled=False, details=False):
     if enabled is not True:
         return None
     s, inputs, rows = server, {}, []
     who = (scope if scope in s.PEOPLE else 'both') if who is None else who
     original_serve, original_fill = s.served_row, s.fill_row
     original_order = s.preference_order
+    original_metas = s.row_metas
     current = None
+    attempts = {}
+
+    def denied(*args, **kwargs):
+        attempts[current] = attempts.get(current, 0) + 1
+        raise _RowNetworkBlocked()
+
+    def detailed_serve(cid, typ, language, *args, **kwargs):
+        nonlocal current
+        previous, current = current, (cid, typ)
+        try:
+            return original_serve(cid, typ, language, *args, **kwargs)
+        except _RowNetworkBlocked:
+            return []
+        finally:
+            current = previous
+
+    def manifest_metas(cid, typ, language, *args, **kwargs):
+        nonlocal current
+        current = cid, typ
+        try:
+            metas = original_metas(cid, typ, language, *args, **kwargs)
+        except _RowNetworkBlocked:
+            metas = []
+        # Unknown sizes must not let the manifest hide a blocked row.
+        return [None] * s.ROW_MIN if attempts.get((cid, typ)) else metas
 
     def fill(metas, *args, **kwargs):
         result = original_fill(metas, *args, **kwargs)
@@ -99,27 +128,57 @@ def replay_home(server, *, now, lang='en-US', scope=None, who=None,
         inputs[current]['served'] = deepcopy(result)
         return result
 
-    with _offline(s, now), s.addon_scope(scope), ExitStack() as stack:
-        stack.enter_context(patch.object(s, 'served_row', serve))
-        stack.enter_context(patch.object(s, 'fill_row', fill))
-        stack.enter_context(patch.object(s, 'preference_order', rank))
+    with _offline(s, now, denied if details else _denied), s.addon_scope(scope), ExitStack() as stack:
+        stack.enter_context(patch.object(s, 'served_row', detailed_serve if details else serve))
+        if details:
+            stack.enter_context(patch.object(s.urllib.request, 'urlopen', denied))
+            stack.enter_context(patch.object(s, 'anilist', denied))
+        else:
+            stack.enter_context(patch.object(s, 'fill_row', fill))
+            stack.enter_context(patch.object(s, 'preference_order', rank))
         feeds = s.feed_rows(lang)
-        names = {cid: name for cid, _, name in feeds}
-        requests = order if order is not None else [
-            (cid, typ) for cid, types, _ in feeds
-            for typ in (('tv',) if 'tv' in types else types)]
+        if details and attempts:
+            # Keep blocked rows visible when Home normally hides empty slates.
+            available = {key: [True] for key in attempts if key is not None}
+            available.update({(cid, typ): [True] for cid, types, _ in feeds for typ in types})
+            feeds = s.feed_rows(lang, home=available)
+        if details:
+            with patch.object(s, 'pin_shown', lambda *a, **kw: None), \
+                    patch.object(s, 'feed_rows', return_value=feeds), \
+                    patch.object(s, 'row_metas', manifest_metas):
+                catalogs = [r for r in s.manifest(lang, scope)['catalogs'] if r['id'] != s.rid('search')]
+            names = {}
+            for row in catalogs:
+                names.setdefault(row['id'], {})[row['type']] = row['name']
+            requests = [(r['id'], r['type']) for r in catalogs]
+        else:
+            names = {cid: name for cid, _, name in feeds}
+            requests = [(cid, typ) for cid, types, _ in feeds
+                        for typ in (('tv',) if 'tv' in types else types)]
+        requests = order if order is not None else requests
         seen = set()
         for cid, typ in requests:
             if cid not in names or not s.row_enabled(cid):
                 continue
             typ = 'tv' if cid in s.MIXED else typ
+            if details and typ not in names[cid]:
+                continue
             if (cid, typ) in seen:
                 continue
             seen.add((cid, typ))
             name = names[cid]
+            if details:
+                current = cid, typ
+            try:
+                metas = deepcopy(s.row_metas(cid, typ, lang, who=who))
+            except _RowNetworkBlocked:
+                metas = []
             rows.append({'id': cid, 'type': typ,
                          'name': name[typ] if isinstance(name, dict) else name,
-                         'metas': deepcopy(s.row_metas(cid, typ, lang, who=who))})
+                         'metas': metas})
+        if details:
+            for row in rows:
+                row['network_attempts'] = attempts.get((row['id'], row['type']), 0)
     specs, rankings = [], {}
     for row in rows:
         key = row['id'] + ':' + row['type']
@@ -134,6 +193,10 @@ def replay_home(server, *, now, lang='en-US', scope=None, who=None,
 
 
 class _Captured(Exception):
+    pass
+
+
+class _RowNetworkBlocked(AssertionError):
     pass
 
 

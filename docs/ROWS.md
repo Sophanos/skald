@@ -5,9 +5,9 @@ Names use your household language and follow the current picks.
 
 ## Two kinds of rows
 
-**Picked for you** rows are built from taste: For You, New This Week, `Picks for <member>`, `Because You Love <title>`,
-`Same Feeling as <title>`, `More from <maker>`, Watch It Again, Coming Soon, mood shelves, theme shelves,
-wish shelves, Fresh Finds and Family Picks.
+**Picked for you** rows are built from taste: For You, New This Week, `This Week for <people>`, `Picks for <member>`,
+`Because You Liked <title>`, `Same Feeling as <title>`, `More from <maker>`, Watch It Again, Coming Soon, mood shelves,
+theme shelves, wish shelves, Something Different and Family Picks.
 
 **Catalogs** are plain lists filtered by your history: Continue Watching, Get Ready and Catch Up
 (your own shows and collections), Top 10, the two Anime rows, Latest Digital Releases and Best Movies / Best Series (Top Rated).
@@ -22,31 +22,36 @@ Experience shelves need saved title tags; OpenRouter creates these tags. Without
 |---|---|---|
 | Continue Watching | Next episodes from shows you watch. | No |
 | ✨ For You | AI picks from a pool based on your taste. | Yes |
-| ✨ New This Week | Weekly picks for each member and Together. | Yes |
+| ✨ New This Week | Recent releases worth watching, picked for each member and Together. Fixed for the week. | Yes |
+| ✨ This Week for <people> | Up to three personal picks per current adult and three together, from any year. Fixed for the week, with a connection to a supplied loved title when available. | Yes; at most one extra call per week |
 | `Picks for <member>` | Recommendations based on that person's positive history. | No curation call; uses saved experience tags |
 | Coming Soon | Upcoming films and shows. | No |
 | `Get Ready for <release>` | Earlier saga films or unfinished seasons to catch up before a new release. | No |
 | Family Picks (only when a child is set up) | Titles safe for every child, ordered by adult taste. | No |
 | Catch Up | Shows and film collections you can return to. | No |
 | Watch It Again | Favourites and familiar titles to revisit. | No |
-| `Because You Love <title>` | Similar picks from a rotating favourite; also "Like", "Watched" or "Watch". | No |
+| `Because You Liked <title>` | Similar picks from a rotating favourite; also `Because You Watched <title>`. | No |
 | `Same Feeling as <title>` | Similar experiences from a different world. | No curation call; uses saved experience tags |
 | `More from <maker>` | Unseen work by a director or creator you like. | No |
 | Our Picks | Fallback name for shelves built around your themes; names change with the theme. | No |
-| Cozy Case Night, Big Ideas Night and other mood shelves | Four shelves chosen for the evening. | Uses saved tags; AI mood selection is optional |
+| Cozy Mysteries, Mind-Bending and other mood shelves | Four shelves chosen for the evening. | Uses saved tags; AI mood selection is optional |
 | Top 10 Movies This Week / Top 10 Series This Week | Weekly trending titles. | No |
 | Wonder of Our World / Cosmic Questions / Lives That Changed History / Big Questions | Documentary shelves. | No; AI can add weekly picks |
 | HBO / Paramount+ | Studio and network shelves ranked by taste. | No |
 | Anime This Week | Airing anime. | No |
 | `Anime · <season> <year>` | Next season's anime. | No |
-| Fresh Finds (opt-in) | Daily picks for one member or Together that keep a loved kind of story and add one they have not tried. Turn on with `skald setup rows` or "add the New to You row". | Uses saved experience tags |
+| Something Different (opt-in) | Daily picks for one member or Together that keep a loved kind of story and add one they have not tried. Turn on with `skald setup rows` or "add the Something Different row". | Uses saved experience tags |
 | Latest Digital Releases (opt-in) | Movies released digitally in your country in the last 60 days. | No |
 | Best Movies, Best Series (Top Rated, on by default) | TMDB ratings (movies 200 votes, series 100), unseen titles in your taste order. | No |
 | Find your taste | Starter titles to rate on the private taste page. | No |
 
-"More Like Your Favorites", "Same Feeling, New World" and "Tonight's Mood" are fallback names while shelves build. "Our Picks" is also the member API's row label.
+"More Like Your Favorites", "Similar, but Different" and "Tonight's Mood" are fallback names while shelves build. "Our Picks" is also the member API's row label.
 Wish shelves are rows you ask for in search; see [wish shelves](SEARCH.md#wish-shelves).
 Choose rows with `skald setup rows`; see [setup](SETUP.md#2-add-your-household) for valid keys.
+The `weekpicks` row follows `week` by default, including in existing households.
+Households with their own row list keep it and turn this row on by searching "show the weekpicks row".
+Hide it, rename it or move it with the usual row settings. Children and guests do
+not see adults' personal picks. Saved picks cover the last eight weeks.
 
 Get Ready helps you catch up before a coming saga film or season, using saved release
 details and your own watching progress. Up to two rows cover releases from seven days

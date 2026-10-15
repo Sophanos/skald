@@ -338,7 +338,7 @@ class RemoteTests(unittest.TestCase):
             p = self.s._profiles["household"]
             self.assertEqual(p["entries"][0]["signal"], "liked")
             self.assertEqual(self.s.top_seeds(p)[0]["key"], "tmdb:123")
-            self.assertEqual(self.s.seed_phrase(p["entries"][0]), "Because You Like Castle")
+            self.assertEqual(self.s.seed_phrase(p["entries"][0]), "Because You Liked Castle")
             self.assertIn("Ben explicitly liked: Castle", self.s.profile_text(p))
             self.undo(event)
             self.s.refresh_profiles()

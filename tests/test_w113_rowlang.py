@@ -56,7 +56,7 @@ class RowLanguage(unittest.TestCase):
         s.CONFIG['region']['row_lang'] = 'en-US'
         self.assertEqual(self.manifest_names()[s.rid('foryou')], '✨ For You')
         with patch.object(s, 'feed', return_value={'names': {'mood': 'cozy'}}):
-            self.assertEqual(s.row_name(s.rid('mood1'), s.LANG), 'Cozy Case Night')
+            self.assertEqual(s.row_name(s.rid('mood1'), s.LANG), 'Cozy Mysteries')
         self.assertEqual(s.t('note.rank', rank=1), '#1 this week')
         self.assertEqual(s.lane_title('x:cozy_case', '', []), 'Cozy Case-of-the-Week')
         self.assertIn('/de-DE/manifest.json', s.addon_urls('https://tv.example')[0])

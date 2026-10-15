@@ -431,8 +431,24 @@ Repeat with `--yes` or `--plan HASH`. Personal data and connector links are
 deleted. Shared watches keep teaching remaining people, without the erased name.
 Use `--shared drop` to remove those watches too; their titles then stay seen.
 The choice is part of the plan hash. Other people's own ratings stay. Shared shelves with that person are
-deleted. Forget cannot be undone. Existing private settings copies in
-`backups/pre-people-*.json` stay unchanged.
+deleted. Forget cannot be undone.
+
+The preview also counts the person's search records (`forget.counts.searches`),
+decision records (`decisions`), daily job records (`daily`), dismissed suggestions
+(`suggestions`), legacy saved wishes (`wishes`) and old legacy settings copies
+(`settings_copies`). They are removed before the fresh backup.
+The preview includes `forget.counts.backups`, the number of older backup files
+that will be deleted. When it is above zero, text and search previews say:
+"Older backups to delete: N. Skald then takes one fresh backup."
+After a successful forget, Skald deletes every file in DATA/backups, including
+daily, weekly, pre-migration and private settings copies, then takes one fresh
+verified state backup. A failed forget keeps the old backups.
+The JSON result includes `backups_deleted` and `fresh_backup` (the archive name,
+or null if creating it failed). The deleted count includes the safety settings
+copy made at the start of the forget. Text says:
+"Older backups deleted: N; fresh backup: NAME."
+If creating the fresh backup fails, the old copies stay deleted and text says:
+"Older backups deleted: N. No backup exists until the next daily backup."
 
 Skald also removes the person's saved AIOStreams login and prefix mapping. If either
 existed, the preview and result say: "Ben's Odin login and its watch history still
@@ -545,6 +561,19 @@ Resets preserve ratings, learned taste, imports, viewing history and household r
 This Week keeps new, worthwhile picks fixed from Monday at local midnight until the next Monday. Movies need a digital or streaming release in the last 42 days; series need a premiere or season start in the last 28 days. Charts alone do not qualify. Known calibrated matches need at least 70%; without calibration, only the leading fifth of raw taste scores qualifies (at least 3, at most 12 candidates). The row shows fewer cards when needed and hides below six. Watched or disliked titles drop out during the week. People changes rebuild it; other taste changes wait until next week.
 
 The background job reuses cached releases. If it has no recent movie candidates, it can fetch one digital discovery page and check at most 12 movies, even with the Digital row disabled. It never looks up releases while serving the row. It attempts at most one weekly model call across languages and restarts, under the existing feed budget with label `week`; failures and people changes use taste order with factual reasons. Eight weeks of picks stay in `learn.json`; older versions ignore these extra keys. Ask Commander “show this week's picks”, “what was new last week?” or “show the last 3 weeks of saved picks”. These are read-only requests understood by the command model. German and Serbian work too.
+
+`This Week for <people>` (`weekpicks`) adds personal picks from any year directly
+after New This Week. It makes at most one extra call per local calendar week,
+under the feed budget with label `weekpicks`. A failed call, no AI key or no budget
+leaves this row empty for the week. Reasons use fixed translated text and an
+optional loved-title connection. The two weekly rows never share a title.
+`python -m skald rows week --weeks 2 --person ana --json` and Commander op
+`week_picks` (`values: [2, 0]`, `person: ana`) keep their existing `weeks` field
+and add `personal`, a list of weeks with personal picks in the same pick format.
+Both histories keep eight weeks. Forgetting a person clears learned weekly history
+through the existing cache cleanup. A week-only marker in `usage.json` keeps the
+one-call limit after forgetting. These optional learning and config fields are
+ignored by older servers; the data format version stays the same.
 History keeps 180 days and at most 200 entries per scope, including undone entries.
 Undated legacy entries stay and support plain undo; they cannot be targeted or redone.
 Children can read their history and manage their own shelves through command previews.
@@ -583,7 +612,8 @@ Lowering the shelf count keeps hidden wishes saved. Raise the count to show them
 
 `python -m skald rows names --json` lists every row ID, its label key, the label shown
 in the row language, its source (`fixed`, `template`, `ai`, or `custom`), and
-missing translation keys. JSON includes `lang` (titles), `row_lang` (labels) and
+missing translation keys. Because and feeling rows also include the seed ID
+and title. JSON includes `lang` (titles), `row_lang` (labels) and
 `language` (the preview language). `--lang de-DE` only previews another label language. It reads
 only local config and cached row names, including hidden rows. Use `--snapshot DIR`
 for a copied directory. It never builds rows or contacts a service.

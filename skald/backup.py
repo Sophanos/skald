@@ -31,6 +31,20 @@ def before_people(s, cfg):
     return path
 
 
+def person_backups(data):
+    """Files a successful person forget removes, without following links."""
+    root = Path(data) / 'backups'
+    try:
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return []
+    try:
+        with os.scandir(fd) as entries:
+            return [root / entry.name for entry in entries if not entry.is_dir(follow_symlinks=False)]
+    finally:
+        os.close(fd)
+
+
 def retain(days):
     days = sorted(set(days), reverse=True)
     keep, weeks = set(days[:14]), {}
