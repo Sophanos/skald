@@ -4,6 +4,17 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.6.0
+
+Forget keeps shared watches by default. When you erase a person, the watches they shared with others keep teaching the people who stay, with the erased person taken out of them. `--shared drop` removes those watches from everyone's taste as in 1.5.0; their titles stay seen. The preview counts shared watches per remaining person and now works without a TMDB connection.
+Children and named guests can be erased too, also after they were removed. Erasing still runs only from the server command line (`python -m skald members forget kim --person ana`), and the person asking must be a current adult who is not away and is not erasing themselves.
+Forget also removes the AIOStreams login Skald saved for the person and its login mapping. When Skald had either, the preview and the result say: "Ben's Odin login and its watch history still exist in Odin and AIOStreams. Remove them there if Ben should lose access." Skald does not delete accounts or history in Odin or AIOStreams.
+New: erase the whole household with `python -m skald erase --household`. It first shows counts without changing anything. To apply, repeat with `--yes --plan CODE` and type ERASE when asked, or add `--confirm ERASE` (needed with `--json` or without a terminal). It erases every personal file in Skald's data folder, its credentials and all backups inside it, and keeps only the addon and phone-remote tokens, the format marker, the setup addresses and lock files. A running Skald stops serving and saving personal data once the erase finishes; addon links show empty rows until you run `skald setup household` and restart Skald. Search and the HTTP API cannot erase a household. Backups outside Skald's data folder, for example copies your host makes, are not touched. Delete them yourself.
+Fix: a "Because you ..." row could show empty in Odin for up to a day after its weekly refresh. The refresh could switch the row between movies and series, and Odin keeps a row's kind for about a day. A row now keeps its kind and moves on to another title of the same kind; it changes kind only when nothing of its kind is left to show. `rows plan --json` and `rows why` show each Because row's kind and since when.
+Fix: a refused command line action, for example a child asking to erase someone, said "could not read or write local data". It now says why it was refused.
+
+**Data changes:** none to the data format (FORMAT stays 5); no migration. New files: `erase.lock`, and `.skald-erased` after a household erase. Rolling back to 1.5.0 needs no restore; 1.5.0 ignores both files. Erased data cannot be rolled back.
+
 ## 1.5.0
 
 Odin plays teach each person separately. Skald reads what everyone plays in Odin from the mounted AIOStreams database, as before, or, when no database is mounted, over HTTPS with each person's own AIOStreams login (`skald setup aiostreams --member NAME`). Each login belongs to exactly one person; a login that belongs to no one or to two people is skipped and listed by its first eight characters (`skald connectors mappings`). A play is counted once, also when Skald switches between the two paths or when a burst of episodes arrives at once.

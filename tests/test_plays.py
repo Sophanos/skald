@@ -711,7 +711,7 @@ class Plays(unittest.TestCase):
                 (self.data/'history.json').write_text(json.dumps(doc))
                 before = (self.data/'plays.json').read_bytes()
                 with patch.object(self.s, 'local_now', return_value=cutoff_day.replace(tzinfo=None)):
-                    plan = commands.preview(self.s, '', 'ana', answer=self.answer('member_forget', person='ben'))
+                    plan = commands.preview(self.s, '', 'ana', answer={**self.answer('member_forget', person='ben'), 'shared': 'drop'})
                     plan['source'] = 'cli'
                     self.assertEqual(plan['forget']['counts']['history'], 3)
                     self.assertEqual(plan['forget']['counts']['shared'], {'ana': 2})
@@ -721,7 +721,7 @@ class Plays(unittest.TestCase):
                 self.assertEqual({r['row'][2] for r in saved['records']}, {after[2]})
                 if mode == 'https':
                     self.assertEqual({r[2] for r in saved['https']['together']['rows']}, {after[2]})
-                    self.assertEqual(saved['https']['ben']['rows'], [])
+                    self.assertNotIn('ben', saved['https'])
                 self.assertEqual(history.cutoffs(self.data)['ben'], '2026-10-13')
                 self.assertTrue({row[2], cached_only[2]} <= history.seen_keys(self.data))
                 for next_mode in ('db', 'https'):
@@ -754,7 +754,7 @@ class Plays(unittest.TestCase):
         self.s.refresh_preferences()
         plays.check(self.s, row[3]/1000+10)
         with patch.object(self.s, 'local_now', return_value=at):
-            commands.apply(self.s, dict(commands.preview(self.s, '', 'ana', answer=self.answer('member_forget', person='ben')), source='cli'))
+            commands.apply(self.s, dict(commands.preview(self.s, '', 'ana', answer={**self.answer('member_forget', person='ben'), 'shared': 'drop'}), source='cli'))
         plays.check(self.s, row[3]/1000+1000)
         self.assertEqual(self.s.read_history()[0]['episodes_played'], 1)
 

@@ -185,7 +185,7 @@ Serbian: "Dodaj mamu Vesnu".
 
 "Add Marko as a guest for 3 days" adds a visitor without changing household taste. "a catalog for Marko and me with heist movies for 3 days" adds a shelf on your Home. Both end after the last local day; saved guest history stays.
 
-"Ben moved out" removes him and keeps his data; `undo` restores him. "Forget Ben" permanently erases his personal data and cannot be undone. "Ben is away until 1 November" pauses an adult's influence on household picks until after that day; "Ben is back" returns him sooner. Ask "what changed this week" and undo by name or id, keeping unrelated newer changes. [People and controls](docs/CLI.md#household-people-and-controls).
+"Ben moved out" removes him and keeps his data; `undo` restores him. "Forget Ben" previews permanent erasure on the server command line. "Ben is away until 1 November" pauses an adult's influence on household picks until after that day; "Ben is back" returns him sooner. Ask "what changed this week" and undo by name or id, keeping unrelated newer changes. [People and controls](docs/CLI.md#household-people-and-controls).
 
 ## Talk to it from the search box
 
@@ -203,7 +203,7 @@ No extra app needed: the search field in Odin or Stremio finds titles, teaches S
 | "Ben watched Arrival, not me" | Moves the watch, and the taste, to Ben. |
 | "hide anime for Ana" | Changes Ana's rows. |
 
-Changes show a card with a `yes NN` code: type it to apply, `undo` to take it back. "Forget Ben" only previews erasure and shows the command. Erase runs only from the server command line: `python -m skald members forget ben --person ana`. It cannot be undone. Plain titles like "Dune" search as usual.
+Changes show a card with a `yes NN` code: type it to apply, `undo` to take it back. "Forget Ben" only previews erasure and shows the command. Erase runs only from the server command line: `python -m skald members forget ben --person ana`. An adult can erase an adult, child or guest. Shared watches keep teaching whoever stays, without Ben's name; add `--shared drop` to remove those watches too. If Skald saved Ben's Odin login or mapping, it removes that copy and reminds you to remove access in Odin and AIOStreams. It cannot be undone. Plain titles like "Dune" search as usual. To erase the whole household, preview `python -m skald erase --household --json`. Confirm the matching plan, then type ERASE. Scripts and `--json` require `--confirm ERASE`; see the [CLI confirmations](docs/CLI.md#household-people-and-controls). This deletes personal data, saved logins and all backups inside Skald's DATA folder. Addon tokens, the format marker, setup addresses and server lock files stay, along with an empty erase marker. Existing addon links answer with empty rows; run setup again and restart Skald. Search "erase everything" only previews this command. Backups outside Skald's data folder are not touched; delete them yourself.
 Commands work in English, German and Serbian at the same time, with no language switch. AI requests and new shelves need OpenRouter. [Everything you can type](docs/SEARCH.md).
 
 ## Your data

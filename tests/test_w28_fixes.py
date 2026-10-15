@@ -42,7 +42,7 @@ class W28Fixes(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'not in.*backup'):
                 migrate.ensure(self.data)
         self.assertEqual({p.name: p.read_bytes() for p in self.data.iterdir()
-                          if p.is_file() and p.name != migrate.LOCK}, originals)
+                          if p.is_file() and p.name not in (migrate.LOCK, 'history.lock', 'erase.lock')}, originals)
         self.assertTrue((self.data/'taste.json').is_symlink())
         self.assertEqual(outside.read_text(), 'original bytes')
 

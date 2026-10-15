@@ -117,7 +117,7 @@ when queued, including failed attempts. HTTP 429 backoff delays scheduled retrie
 | `rows ready [--person NAME] [--json]` | Read saved release marathons: `skald rows ready --json`. Without `--person`, the operator sees every member's qualification reasons and progress. With `--person`, only that viewer's reasons and seen information appear alongside shared release facts. Explicit `household`, `together` and `guest` views contain shared facts only. When no row shows, a plain line explains why; JSON includes `cause` and `message`. Uses local `DATA_DIR` or `--snapshot` offline; it never fetches TMDB or rebuilds feeds. Inspect the two slots with `rows why ready1` and `rows why ready2`. Commander can answer “what should I watch before the new Invented Ember?” from the same data. “Hide the get ready row” and “show it again” control the `ready` family. |
 | `rows reach [--person NAME] [--top N]` | Check how many best unseen known matches appear on each profile's Home, with row ids and the first drop reason for missing titles: `skald --snapshot /path/copy rows reach --top 20 --json`. Omit `--person` for the household and every member. Reads stored data offline; it does not source or rebuild feeds. `--top` defaults to 20 and accepts 1..10000. |
 | `rows plan` | Explain every registered home row, including hidden rows: `skald rows plan --person household --lang en-US --json`. Top Rated cards include type, position, TMDB rating, relative taste match (0..100) and blend score. Feeling rows include `candidate_sources`: catalog and recommendation counts before vetting or balancing, and `missing_cards` skipped because stored artwork is missing. Themed vetting examines the first 40 cards. Counts appear after a rebuild. Themed rows include `season.months` (month numbers, `"any"`, or `null` when unknown) and `season.hidden` for the household's local date. Reads local `DATA_DIR` or `--snapshot`; `--person` also accepts `together`, a member or `guest`. |
-| `rows why ROW` | Explain one row and its kept and dropped cards: `skald rows why mood1 --person ana --json`. Get Ready summaries in `rows plan` and `rows why` use the same privacy projection as `rows ready`: omit `--person` for the full operator view. Use `skald rows why toprated --person ana --json` to list ranked movies and series with rating and taste. Commander can read the same list through its Home plan operation, or hide and show the row with `hide top rated` and `show top rated series`. Both types share the `toprated` control. Uses the same read-only build as `rows plan`. |
+| `rows why ROW` | Explain one row and its kept and dropped cards: `skald rows why mood1 --person ana --json`. Because rows in `rows plan` and `rows why` include `slot_kind` and `slot_since` (the local date that kind began). Get Ready summaries in `rows plan` and `rows why` use the same privacy projection as `rows ready`: omit `--person` for the full operator view. Use `skald rows why toprated --person ana --json` to list ranked movies and series with rating and taste. Commander can read the same list through its Home plan operation, or hide and show the row with `hide top rated` and `show top rated series`. Both types share the `toprated` control. Uses the same read-only build as `rows plan`. |
 | `rows prefer` | Preview a household mood or lane limit change: `skald rows prefer --theme mood --more` or `--theme lane --fewer`. Automatic Home defaults to three each; Home can show at most four mood rows and five lane rows. Apply with `--plan HASH` from the preview or `--yes`. Preview and apply refuse a reduction below six populated rows, or the current count if already lower, and never allow zero populated rows. Changes use the existing atomic `skald.json` write; the server reloads them on its next row request or worker pass. Hiding or showing a row preserves both family limits. An explicit household `rows` selection bypasses these limits. |
 | `rows refresh ROW` | Preview refreshing one row: `skald rows refresh mood1`. Apply with `--plan HASH` or `--yes`; the CLI atomically queues row ids in `DATA_DIR/row_refresh.json`, without writing feeds or calling upstream services. The worker clears those rows' stamps and deletes the request at the start of its next feed pass. Older servers ignore the request. A grouped mood or lane build can also rebuild its siblings. Queued CLI refreshes have no undo. |
 | `rows week [--weeks N] [--person NAME] [--json]` | Read saved weekly picks offline, including on an older snapshot. Defaults to the latest saved week; `--weeks 1..8` includes that week and earlier calendar weeks. For example: `skald --snapshot /path/copy rows week --weeks 4 --person ana --json`. |
@@ -350,7 +350,7 @@ and `shelf add ... --until YYYY-MM-DD` for a shelf with a last date.
 Undo by name uses the change's name or identifying words; ids come from `changes`.
 Ambiguous names ask for an id. Unrelated newer changes stay, including newer settings
 when undoing an earlier people change. A conflicting newer value must be undone first.
-Forgetting cannot be undone. Away, back and forget currently target adults only.
+Forgetting cannot be undone. Away and back target adults only. An adult can forget an adult, child or guest.
 
 Manage household people with `skald members list --json`. It lists display names,
 optional ages, member or guest status, own Home rows and shelf counts. The limit
@@ -396,13 +396,30 @@ unrelated changes and refuses conflicting changes before restoring anything.
 Erase runs only from the server command line. Search and the HTTP command API
 show a preview with the command; they cannot apply erasure.
 `python -m skald members forget ben --person ana --json` previews permanent erasure,
-including an already removed adult. It counts personal feedback, imports,
+including children, guests and already removed people. It counts personal feedback, imports,
 history, shelves and Row Lab ideas, and shared watches per remaining member.
 Repeat with `--yes` or `--plan HASH`. Personal data and connector links are
-deleted. Shared watches through today stop teaching taste but their titles stay
-seen. Other people's own ratings stay. Shared shelves with that person are
+deleted. Shared watches keep teaching remaining people, without the erased name.
+Use `--shared drop` to remove those watches too; their titles then stay seen.
+The choice is part of the plan hash. Other people's own ratings stay. Shared shelves with that person are
 deleted. Forget cannot be undone. Existing private settings copies in
 `backups/pre-people-*.json` stay unchanged.
+
+Skald also removes the person's saved AIOStreams login and prefix mapping. If either
+existed, the preview and result say: "Ben's Odin login and its watch history still
+exist in Odin and AIOStreams. Remove them there if Ben should lose access."
+
+`python -m skald erase --household --json` previews erasing every person and all
+household data, with counts and a plan code. Confirm with
+`python -m skald erase --household --yes --plan CODE --confirm ERASE --json`.
+Both confirmations are required. Without `--json`, a terminal can ask you to type
+ERASE instead of `--confirm ERASE`. A wrong word or changed plan deletes nothing.
+All DATA files are deleted by default, including credentials and every Skald backup.
+Only addon and server remote tokens, `.skald-format`, the addresses `base`,
+`internal_base` and `aio_url` in `setup.json`, stable server locks and an empty
+`.skald-erased` generation marker stay. Existing addon links answer with empty rows; run
+`skald setup household`, then restart Skald. Backups outside Skald's data folder are not
+touched. Delete them yourself. Search "erase everything" and the HTTP API only preview.
 
 `skald members away ben --person ana --json` previews a temporary absence.
 Apply with `--yes` or `--plan HASH`. Their profile and link keep working and

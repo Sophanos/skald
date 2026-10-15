@@ -132,7 +132,7 @@ class PeopleFlow(Household):
         for store in (s._pin_cache, s._home_cache, s._person_models):
             store['old'] = row
         s._learn['hits'] = [{'key': 'tmdb:990003', 'at': 1}]
-        change('member_forget', person='ben')
+        change('member_forget', person='ben', shared='drop')
 
         expected = c.config(s)
         expected['household'].pop('ai_monthly_usd')

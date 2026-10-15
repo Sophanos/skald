@@ -35,8 +35,9 @@ when that date expires. Guest expiry is not erasure.
 Erase runs only from the server command line:
 `python -m skald members forget ben --person ana`. Preview first, then repeat with
 `--yes` or `--plan HASH` to apply. Search confirmation codes and the HTTP command API
-cannot erase a person. It currently accepts adult members, not children or named guests.
-It removes that adult's personal history, ratings, imports, history summaries,
+cannot erase a person. A current adult can erase an adult, child or named guest,
+including someone already removed. The adult cannot be away or erase themselves.
+It removes that person's personal history, ratings, imports, history summaries,
 preferences, names, shelves (including shared shelves), personal row ideas, saved
 commands, memory and interview answers, title corrections and linked clients.
 Their sync accounts, saved sync data and credentials no longer used by another
@@ -44,8 +45,10 @@ account are removed. Their personal and Together row metrics are erased, derived
 taste and row caches are cleared, and household row-play learning starts again.
 Other people's own ratings and data stay.
 
-Together-watches through the forget date stay seen for the others but stop teaching
-their taste. A later watch or someone's own rating can teach taste again. Skald keeps
+Shared watches keep teaching the people who stay, with the erased name removed.
+Add `--shared drop` to remove those watches too; their titles stay seen for the others
+but stop teaching their taste. The preview counts shared watches per remaining person.
+A later watch or someone's own rating can teach taste again. Skald keeps
 a local cutoff for the forgotten id to prevent old syncs from bringing their evidence
 back. After forgetting, no information about that person is sent anywhere;
 their inputs are excluded from later learning and sync results. It cannot retract
@@ -59,6 +62,21 @@ The newest three pre-migration archives are
 kept separately. Private `backups/pre-people-*.json` settings copies, including the
 one made before forgetting, have no automatic expiry. Forget does not rewrite any
 of these backups; remove old copies yourself if they must not retain the person.
+
+Skald removes its saved copy of the person's AIOStreams login and its login mapping.
+When either existed, the preview and result remind you: "Ben's Odin login and its
+watch history still exist in Odin and AIOStreams. Remove them there if Ben should
+lose access." Skald does not delete accounts or history in those services.
+
+To erase everyone, run `python -m skald erase --household --json` on the server.
+Review the counts, then repeat with `--yes --plan CODE --confirm ERASE`. Without
+`--json`, a terminal can ask you to type ERASE instead. Both confirmations are required.
+This erases every personal DATA file, unknown files, credentials and all backups
+inside DATA, including daily, pre-people and migration archives. It keeps addon
+and server remote tokens, the format marker, setup addresses, stable lock files
+and an empty generation marker that blocks stale server writes. Addon links answer
+with empty rows; run `skald setup household`, then restart Skald. Environment API keys
+stay unchanged. Backups outside Skald's data folder are not touched. Delete them yourself.
 
 ## Keep it private
 

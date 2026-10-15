@@ -77,7 +77,7 @@ class AdoptTests(unittest.TestCase):
         (self.data/'.skald-household').unlink()
         self.legacy.write_text('{"v": 0}')
         self.assertNotEqual(self.adopt('--yes')[0], 0)
-        self.assertEqual({p.name for p in self.data.iterdir()}, {'legacy.json'})
+        self.assertEqual({p.name for p in self.data.iterdir()}, {'legacy.json', 'erase.lock'})
 
     def test_custom_config_path(self):
         path = self.data/'custom.json'

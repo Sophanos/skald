@@ -524,6 +524,29 @@ class RowPlan(unittest.TestCase):
         self.assertEqual(result[cid]['franchise_removed'], 6)
         self.assertEqual(result[cid]['support'], {'shown': 4, 'plays': 2})
 
+    def test_cli_because_slot_kind_and_since(self):
+        from skald.__main__ import main
+        s = self.s
+        since = int(s.time.time()) - 8 * s.DAY
+        kinds = ('movie', 'series', 'movie')
+        for i, kind in enumerate(kinds):
+            self.put(('because', 'because2', 'because3')[i], [], slot_kind=kind, slot_since=since)
+        s.save_feeds()
+        before = {p.name: p.read_bytes() for p in self.data.iterdir()}
+        with patch.dict(os.environ, {'DATA_DIR': str(self.data), 'SKALD_SNAPSHOT': ''}):
+            for args in (['plan'], ['why', 'because'], ['why', 'because2'], ['why', 'because3']):
+                with self.subTest(args=args):
+                    output = io.StringIO()
+                    self.assertEqual(main(['rows', *args, '--json'], out=output), 0)
+                    data = json.loads(output.getvalue())
+                    rows = data.get('rows', [data])
+                    for cid, kind in zip(s.BECAUSE_ROWS, kinds):
+                        row = next((r for r in rows if r['id'] == cid), None)
+                        if row is not None:
+                            self.assertEqual(row['slot_kind'], kind)
+                            self.assertEqual(row['slot_since'], s.local_now(since).date().isoformat())
+        self.assertEqual({p.name: p.read_bytes() for p in self.data.iterdir()}, before)
+
     def test_shelf_schedule_and_scope(self):
         from skald import shelves
         s = self.s

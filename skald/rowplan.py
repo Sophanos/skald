@@ -303,6 +303,11 @@ def plan(s, person=None, lang=None, *, cards=False, caps=None, viewer=None):
                     row['ai_sourcing'] = sourcing(s, cid, lang) if not unsafe else None
                     months = s.row_months(cid, lang) if not unsafe else None
                     row['season'] = {'months': months, 'hidden': not s.season_fits(months)}
+                if cid in s.BECAUSE_ROWS:
+                    names = (s.feed(cid, lang).get('names') or {}) if not unsafe else {}
+                    row['slot_kind'] = names.get('slot_kind')
+                    since = names.get('slot_since')
+                    row['slot_since'] = s.local_now(since).date().isoformat() if since is not None else None
                 counts = (s.feed(cid, lang).get('names') or {}).get('candidate_sources')
                 if counts is not None and not unsafe:
                     row['candidate_sources'] = counts
@@ -343,6 +348,8 @@ def title(s, key, kind=None, person=None):
 def text(result):
     for row in result.get('rows', [result]):
         yield f"{row['position'] or '-':>2} {row['id']} | {row['label']} | {row['rejection'] or 'shown'}: {row['reason']} (own {row['own_cards']}, borrowed {row['borrowed_cards']}, hero cap {row['superhero_removed']}, franchise cap {row['franchise_removed']})"
+        if row.get('slot_kind'):
+            yield f"   kind {row['slot_kind']} | since {row['slot_since']}"
         for x in row.get('cards', []):
             yield f"   {x['key']} | {x['title']} | {x['origin']} | reason {x['reason_present']} | {x['removed_by'] or 'kept'}"
             if 'position' in x:

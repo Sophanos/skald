@@ -14,7 +14,8 @@ from skald.__main__ import main
 
 class Leave(Household):
     def plan(self, op, person='ben', actor='ana'):
-        plan = c.preview(self.s, 'synthetic change', actor, answer=dict(op=op, person=person))
+        plan = c.preview(self.s, 'synthetic change', actor, answer=dict(op=op, person=person,
+                         **({'shared': 'drop'} if op == 'member_forget' else {})))
         if plan.get('forget'):
             plan['source'] = 'cli'
         return plan
@@ -829,8 +830,11 @@ class Leave(Household):
             self.assertEqual(c.REGISTRY[op]['scope'], 'household')
             with self.assertRaises(PermissionError):
                 self.plan(op, actor='lena')
-            with self.assertRaises(PermissionError):
-                self.plan(op, person='lena')
+            if op != 'member_forget':
+                with self.assertRaises(PermissionError):
+                    self.plan(op, person='lena')
+            else:
+                self.assertIn('forget', self.plan(op, person='lena'))
 
     def test_away_shared_shelf_stops_affecting_other_person(self):
         s = self.s
@@ -913,8 +917,11 @@ class Leave(Household):
         setup.publish(self.root, cfg, replace=True)
         self.s.refresh_preferences()
         for op in ('member_forget', 'member_away', 'member_back'):
-            with self.subTest(op=op), self.assertRaises(PermissionError):
-                self.plan(op)
+            if op != 'member_forget':
+                with self.subTest(op=op), self.assertRaises(PermissionError):
+                    self.plan(op)
+            else:
+                self.assertIn('forget', self.plan(op))
             with self.subTest(op=op), self.assertRaises(PermissionError):
                 self.plan(op, 'ana', actor='ben')
             with self.subTest(op=op), self.assertRaises(PermissionError):

@@ -13,6 +13,7 @@ import urllib.request
 
 from . import members
 from .members import DATA, AuthMissing, _auth_reference
+from .erase import erased as household_erased, writable as household_writable
 
 _path = Path(__file__).resolve().parents[1] / "server.py"
 _source = _path.read_text().split("# --- connector transport (also loaded alone by skald/trakt.py) ---", 1)[1].split("# --- end connector transport ---", 1)[0]

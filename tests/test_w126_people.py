@@ -43,7 +43,7 @@ class People(Household):
 
     def files(self):
         return {str(p.relative_to(self.root)): p.read_bytes() for p in self.root.rglob('*') if p.is_file()
-                and p.name not in ('usage.json', 'usage.lock', 'decisions.jsonl', 'decide_cache.json')}
+                and p.name not in ('usage.json', 'usage.lock', 'history.lock', 'decisions.jsonl', 'decide_cache.json')}
 
     def test_relationship_and_bare_names_keep_the_resolved_label(self):
         for text, label in [('Add my new flatmate Jonas', 'Jonas'), ('My girlfriend Lena is moving in', 'Lena'),

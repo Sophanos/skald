@@ -1,6 +1,6 @@
 """Local export intake; only public title metadata can reach the decide API."""
 from collections import Counter, defaultdict
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 import datetime as dt
 import hashlib
 import json
@@ -21,16 +21,29 @@ from .ingest.resolve import TAU, Resolver, event, remote_item, remote_provider
 
 def write_private(path, text):
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(path.parent, 0o700)
-    fd, name = tempfile.mkstemp(prefix=".intake-", dir=path.parent)
+    from .erase import KEEP, epoch, erased, locked
+    data = next((parent for parent in path.parents if any((parent/name).exists() for name in
+                 ('skald.json', 'legacy.json', '.skald-format', '.skald-erased'))), None)
+    with locked(data) if data is not None else nullcontext():
+        for parent in path.parents:
+            if erased(parent):
+                if path.parent != parent or path.name not in KEEP:
+                    raise ValueError('Household erased; run python -m skald setup household')
+                break
+        generation = epoch(data) if data is not None else None
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(path.parent, 0o700)
+        fd, name = tempfile.mkstemp(prefix=".intake-", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             os.fchmod(fh.fileno(), 0o600)
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(name, path)
+        with locked(data) if data is not None else nullcontext():
+            if data is not None and epoch(data) != generation:
+                raise ValueError('Household erased; run python -m skald setup household')
+            os.replace(name, path)
         if os.name == 'posix':
             try:
                 directory = os.open(path.parent, os.O_RDONLY)

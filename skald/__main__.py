@@ -123,6 +123,12 @@ def parser():
     command.add_argument("--plan", help="apply only this preview hash")
     command.add_argument("--undo", action="store_true", help="revert the last command")
     command.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="print JSON")
+    erase = commands.add_parser('erase', help='preview or permanently erase all household data, including Skald backups')
+    erase.add_argument('--household', required=True, action='store_true', help='erase every person and all household data in DATA_DIR')
+    erase.add_argument('--yes', action='store_true', help='first confirmation; also requires --plan')
+    erase.add_argument('--plan', help='apply only this preview hash')
+    erase.add_argument('--confirm', help='second confirmation: ERASE; required without a terminal or with --json')
+    erase.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
     people = commands.add_parser('members', help='list, add, update, remove, forget, pause or bring back household people')
     people.add_argument('--undo', action='store_true', help='undo the last command for --person')
     people.add_argument('--person', help='adult household member making the change')
@@ -140,6 +146,8 @@ def parser():
         action.add_argument('--yes', action='store_true', help='apply the preview')
         action.add_argument('--plan', help='apply only this preview hash')
         action.add_argument('--undo', action='store_true', default=argparse.SUPPRESS)
+        if op == 'forget':
+            action.add_argument('--shared', choices=('keep', 'drop'), default='keep', help='keep shared watches for remaining people, or drop them too')
         if op in ('add', 'update'):
             role = action.add_mutually_exclusive_group()
             role.add_argument('--guest', action='store_true', default=None, help='named guest, with no household taste learning')
@@ -921,7 +929,7 @@ def main(argv=None, out=None):
         cli_argv = sys.argv[1:] if argv is None else argv
         readonly_align = known.command == "taste" and "align" in cli_argv
         row_control = known.command == 'rows' and any(v in ('plan', 'why', 'prefer', 'refresh', 'names', 'reach', 'ready') for v in cli_argv)
-        if not known.snapshot and not known.live and not known.remote and known.command not in ("suggest", "ai", "search") and not readonly_align and not row_control and not calibration and not (
+        if not known.snapshot and not known.live and not known.remote and known.command not in ("suggest", "ai", "search", "erase") and not readonly_align and not row_control and not calibration and not (
                 known.command == "metrics" and "learning" in cli_argv) and not any(
                 flag in cli_argv for flag in ('--help', '-h')):
             local_data = os.environ.get("DATA_DIR", "/data")
@@ -1211,6 +1219,25 @@ def main(argv=None, out=None):
                 data = s.ai_status()
                 print(json.dumps(data, ensure_ascii=False) if args.json else ai.text(data, s.LANG, detailed=True), file=out)
             return 0
+        if args.command == 'erase':
+            from . import erase, setup
+            if args.live or args.snapshot or known.remote:
+                raise ValueError('Erase uses local server DATA_DIR only')
+            with setup.server(Path(os.environ.get('DATA_DIR', '/data'))) as s:
+                data = erase.preview(s)
+                if args.yes or args.plan or args.confirm:
+                    if not args.yes or not args.plan:
+                        raise ValueError('First confirmation required: --yes --plan CODE')
+                    if args.plan != data['plan']:
+                        raise ValueError('Plan changed; preview again')
+                    confirmation = args.confirm
+                    if confirmation is None and not args.json and sys.stdin.isatty():
+                        confirmation = input('Type ERASE to erase the whole household: ')
+                    data = erase.apply(s, {**data, 'source': 'cli', 'confirm': confirmation})
+            print(json.dumps(data, ensure_ascii=False) if args.json else data['name']+('? Plan: '+data['plan'] if 'plan' in data else ''), file=out)
+            if not args.json and data.get('description'):
+                print(data['description'], file=out)
+            return 0
         if args.command in ('command', 'members'):
             from . import commands, setup
             with setup.server(Path(os.environ.get("DATA_DIR", "/data")),
@@ -1224,7 +1251,7 @@ def main(argv=None, out=None):
                         if args.members_action not in ('add', 'update', 'remove', 'rows', 'forget', 'away', 'back') or not args.name:
                             raise ValueError('Choose members list, add, update, remove, rows, forget, away, back or --undo')
                         answer = dict(op={'add': 'member_create', 'update': 'member_update', 'remove': 'member_remove', 'rows': 'member_rows', 'forget': 'member_forget', 'away': 'member_away', 'back': 'member_back'}[args.members_action],
-                                      person=args.name, **{k: getattr(args, k, None) for k in ('guest', 'age', 'label', 'own_row', 'days', 'until', 'no_end')})
+                                      person=args.name, **{k: getattr(args, k, None) for k in ('guest', 'age', 'label', 'own_row', 'days', 'until', 'no_end', 'shared')})
                         if args.members_action == 'add':
                             answer['label'] = args.label or args.name.title()
                         if args.members_action == 'rows':
@@ -1428,10 +1455,11 @@ def main(argv=None, out=None):
         return code
     except (ValueError, OSError, sqlite3.Error, subprocess.SubprocessError) as error:
         # Export failures carry a local basename and fixed reason, never a raw row.
-        message = str(error) if isinstance(error, ValueError) else "could not read or write local data"
+        checked = isinstance(error, ValueError) or isinstance(error, PermissionError) and error.errno is None
+        message = str(error) if checked else "could not read or write local data"
         if args is not None and args.command == "setup" and message.startswith("invalid config:"):
             message += "; check the household names, region and connector mappings, then rerun setup"
-        if args is not None and args.command == "setup" and (not message or not isinstance(error, ValueError)):
+        if args is not None and args.command == "setup" and (not message or not checked):
             message = "setup could not read or write its data; check DATA ownership, credentials and the source address"
         if args.json if args is not None else known.json:
             print(json.dumps({"error": message}), file=out)

@@ -50,7 +50,17 @@ def contains(value, person):
     return value == person
 
 
-def prepare(s, cfg, person, before):
+def without_person(value, person):
+    if isinstance(value, dict):
+        return {k: without_person(v, person) for k, v in value.items() if k != person and v != person}
+    if isinstance(value, list):
+        return [without_person(v, person) for v in value if v != person]
+    return value
+
+
+def prepare(s, cfg, person, before, shared='keep'):
+    if shared not in ('keep', 'drop'):
+        raise ValueError('Shared watches need keep or drop')
     data, changes, removed = Path(s.DATA), {}, []
     links = []
     for cid, connector in cfg['connectors'].items():
@@ -86,6 +96,22 @@ def prepare(s, cfg, person, before):
                 dt.datetime.fromisoformat(row['t']).replace(tzinfo=dt.timezone.utc).timestamp()
                 if isinstance(row.get('t'), str) else row.get('t', (row.get('at') or 0) / 1000))
             action = history.forget_action(people, person, at, cutoff)
+            if action == 'shared':
+                for p in counts['shared']:
+                    if p in people and (origin != 'plays.json' or (row.get('profile', 'household'), row.get('type'), row.get('id')) not in counted_history):
+                        counts['shared'][p] += 1
+                if shared == 'keep':
+                    remaining = [p for p in people if p != person]
+                    row = copy.deepcopy(row)
+                    for field_name in ('who', 'person', 'profile'):
+                        if row.get(field_name) == person:
+                            row[field_name] = remaining[0] if len(remaining) == 1 else 'household'
+                    if row.get('_summary', {}).get('who') == person:
+                        row['_summary']['who'] = remaining[0]
+                    kept.append(without_person(row, person))
+                    if origin == 'history.json':
+                        counted_history.add((row.get('profile', 'household'), row.get('type'), row.get('id')))
+                    continue
             if action != 'keep':
                 key = (row.get('profile', 'household'), row.get('type'), row.get('id'))
                 counted = origin != 'plays.json' or key not in counted_history
@@ -95,9 +121,6 @@ def prepare(s, cfg, person, before):
                     counted_history.add(key)
                 removed.append(row)
                 if action == 'shared':
-                    for p in counts['shared']:
-                        if p in people and counted:
-                            counts['shared'][p] += 1
                     key = row.get('key') or row.get('id')
                     if isinstance(key, str):
                         seen[key] = max(cutoff, seen.get(key, 0))
@@ -107,7 +130,7 @@ def prepare(s, cfg, person, before):
                                 canonical = 'tmdb:'+str(hit[1]['id'])
                                 seen[canonical] = max(cutoff, seen.get(canonical, 0))
                 continue
-            kept.append(row)
+            kept.append(without_person(row, person))
         return kept
 
     for name, cid, owner in history.sources(cfg, data):
@@ -132,7 +155,8 @@ def prepare(s, cfg, person, before):
     rows += [(who, row) for who, account in cached.get('https', {}).items() for row in account.get('rows', [])]
     evidence([dict(profile='household' if who == 'together' else who, type=row[1], id=row[2], at=row[3])
               for who, row in rows], None, 'history', 'plays.json')
-    cleaned = plays.prune_cache(data, cfg, copy.deepcopy(cached), s.time.time(), person=person, before=before)
+    cleaned = plays.prune_cache(data, cfg, copy.deepcopy(cached), s.time.time(), person=person, before=before, shared=shared)
+    cleaned = without_person(cleaned, person)
     if cleaned != cached:
         save('plays.json', cleaned)
     path = data / history.SUMMARY
@@ -189,6 +213,16 @@ def prepare(s, cfg, person, before):
         kept = {p: [r for r in rows if not contains(r, person)] for p, rows in doc.items() if p != person}
         if kept != doc:
             save(path.name, kept)
+    from .setup import aiostreams_logins, state
+    logins = aiostreams_logins(data)
+    odin = person in logins or any(who == person for connector in cfg['connectors'].values()
+                                  for key in ('profiles', 'archived') for who in connector.get('options', {}).get(key, {}).values())
+    if person in logins:
+        logins.pop(person)
+        save('credentials/aiostreams.json', logins)
+    saved = state(data)
+    if contains(saved, person):
+        save('setup.json', without_person(saved, person))
     path = data / 'connectors.json'
     if path.exists():
         doc = json.loads(path.read_text())
@@ -261,11 +295,15 @@ def prepare(s, cfg, person, before):
                                for row, people in rows.items() if set(people) & {person, 'together'}}
                         for week, rows in doc[field].items() if any(set(people) & {person, 'together'} for people in rows.values())}}
     stamp = hashlib.sha256(json.dumps([targets, links], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-    return changes, dict(before=before, counts=counts, stamp=stamp)
+    return changes, dict(before=before, shared=shared, odin=odin, counts=counts, stamp=stamp)
 
 
-def preview(s, cfg, person):
-    return prepare(s, cfg, person, s.local_now().date().isoformat())[1]
+def preview(s, cfg, person, shared='keep'):
+    return prepare(s, cfg, person, s.local_now().date().isoformat(), shared)[1]
+
+
+def odin_reminder(label):
+    return label+"'s Odin login and its watch history still exist in Odin and AIOStreams. Remove them there if "+label+' should lose access.'
 
 
 def apply(s, plan):
@@ -278,7 +316,7 @@ def apply(s, plan):
         person = plan['member']['name']
         with metrics._lock:
             checked = c.member_preview(s, '', plan['change'], plan['actor'], None)
-            changes, state = prepare(s, cfg, person, plan['forget']['before'])
+            changes, state = prepare(s, cfg, person, plan['forget']['before'], plan['forget']['shared'])
             if checked.get('read_only') or state != plan['forget'] or c.member_state(cfg, person) != plan['member']['before']:
                 raise ValueError('Person data changed; preview again')
             before_people(s, cfg)
@@ -303,4 +341,5 @@ def apply(s, plan):
         s.refresh_preferences()
         c.pending(s).clear()
     s.aio_rows_changed()
-    return {'name': 'Done: '+plan['name']+'. This cannot be undone.'}
+    return {'name': 'Done: '+plan['name']+'. This cannot be undone.',
+            'description': odin_reminder(plan['member']['config_before']['household']['labels'][person]) if plan['forget']['odin'] else ''}

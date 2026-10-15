@@ -74,7 +74,7 @@ class BecauseRows(unittest.TestCase):
                                              'built': int(self.s.time.time())}
                               for cid in self.rows})
 
-    def test_kind_retention_expires_after_seven_days_across_rebuilds(self):
+    def test_kind_retention_survives_seven_days_across_rebuilds(self):
         for i in range(1, 4):
             self.seed(i)
         first = self.built()
@@ -91,9 +91,83 @@ class BecauseRows(unittest.TestCase):
                 self.stored(built)
             self.clock.time.return_value = start + 7 * self.s.DAY
             built = self.built()
-        self.assertEqual(set(built[self.rows[0]]), {'series'})
+        self.assertEqual(built[self.rows[0]], first[self.rows[0]])
         self.assertEqual(self.s._feeds[self.rows[0], 'en-US']['names']['slot_since'], start)
+        self.assertEqual(built['_names'][self.rows[0]]['slot_since'], start)
+
+    def test_expired_slot_keeps_kind_when_series_seed_ranks_first(self):
+        self.seed(1)
+        first = self.built()
+        self.stored(first)
+        start = self.s.time.time()
+        self.clock.time.return_value = start + 8 * self.s.DAY
+        series = self.seed(2, kind='tv')
+        movie = self.seed(3)
+        with patch.object(self.s, 'because_seeds', return_value=[series, movie]):
+            built = self.built()
+        self.assertEqual(set(built[self.rows[0]]), {'movie'})
+        self.assertEqual(built['_names'][self.rows[0]]['seed'], movie['key'])
+        self.assertEqual(built['_names'][self.rows[0]]['slot_since'], start)
+
+    def test_expired_empty_slot_can_change_kind_after_movie_seeds_fail(self):
+        movie = self.seed(1)
+        first = self.built()
+        self.stored(first)
+        self.s._shown.update(copy.deepcopy(self.s._feeds))
+        self.p['seen'].update(x['id'] for x in first[self.rows[0]]['movie'])
+        self.recs[1] = []
+        self.clock.time.return_value += 8 * self.s.DAY
+        series = self.seed(2, kind='tv')
+        with patch.object(self.s, 'because_seeds', return_value=[series, movie]):
+            built = self.built()
+        self.assertEqual(set(built[self.rows[0]]), {'series'})
         self.assertEqual(built['_names'][self.rows[0]]['slot_since'], self.s.time.time())
+        self.stored(built)
+        new_movie = self.seed(3)
+        with patch.object(self.s, 'because_seeds', return_value=[new_movie, series]):
+            rebuilt = self.built()
+        self.assertEqual(set(rebuilt[self.rows[0]]), {'series'})
+        self.assertEqual(rebuilt['_names'][self.rows[0]]['slot_since'], self.s.time.time())
+
+    def test_expired_mixed_slots_keep_kinds_during_simultaneous_rotation(self):
+        for kinds in (('movie', 'tv', 'movie'), ('tv', 'movie', 'tv')):
+            with self.subTest(kinds=kinds):
+                self.p['entries'].clear()
+                self.s._feeds.clear()
+                for i, kind in enumerate(kinds, 1):
+                    self.seed(i, kind=kind)
+                first = self.built()
+                self.stored(first)
+                start = self.s.time.time()
+                self.clock.time.return_value = start + 7 * self.s.DAY
+                seeds = [self.seed(i, kind=kind) for i, kind in
+                         enumerate((kinds[1], kinds[0], kinds[2]), 4)]
+                with patch.object(self.s, 'because_seeds', return_value=seeds):
+                    built = self.built()
+                for cid in self.rows:
+                    self.assertEqual(set(built[cid]), set(first[cid]))
+                    self.assertIn(built['_names'][cid]['seed'], {e['key'] for e in seeds})
+                    self.assertEqual(built['_names'][cid]['slot_since'], start)
+
+    def test_fully_filtered_slot_tries_same_kind_seeds_before_changing(self):
+        for days in (1, 8):
+            with self.subTest(days=days):
+                self.p['entries'].clear()
+                self.p['seen'].clear()
+                self.s._feeds.clear()
+                self.seed(1)
+                first = self.built()
+                self.stored(first)
+                start = self.s.time.time()
+                self.p['seen'].update(x['id'] for x in first[self.rows[0]]['movie'])
+                self.clock.time.return_value = start + days * self.s.DAY
+                series = self.seed(2, kind='tv')
+                movie = self.seed(3)
+                with patch.object(self.s, 'because_seeds', return_value=[series, movie]):
+                    built = self.built()
+                self.assertEqual(set(built[self.rows[0]]), {'movie'})
+                self.assertEqual(built['_names'][self.rows[0]]['seed'], movie['key'])
+                self.assertEqual(built['_names'][self.rows[0]]['slot_since'], start)
 
     def test_fully_filtered_retained_cards_release_kind_before_deadline(self):
         for field in ('seen', 'negative', 'blocked', 'veto', 'preference', 'empty'):
@@ -130,16 +204,40 @@ class BecauseRows(unittest.TestCase):
                 self.assertTrue(self.s.served_row(self.rows[0], 'tv', 'en-US', self.p,
                                                   set(), masks, who='both'))
 
-    def test_retention_never_copies_another_languages_cards_or_seed_labels(self):
-        self.seed(1)
+    def test_nonpositive_seed_releases_slot_to_series(self):
+        movie = self.seed(1)
         self.stored(self.built())
+        movie['weight'] = 0
+        series = self.seed(2, kind='tv')
+        with patch.object(self.s, 'because_seeds', return_value=[series]):
+            built = self.built()
+        self.assertEqual(set(built[self.rows[0]]), {'series'})
+        self.assertEqual(built['_names'][self.rows[0]]['seed'], series['key'])
+
+    def test_nonpositive_seed_tries_same_kind_before_series(self):
+        previous = self.seed(1)
+        self.stored(self.built())
+        start = self.s.time.time()
+        previous['weight'] = 0
+        series = self.seed(2, kind='tv')
+        movie = self.seed(3)
+        with patch.object(self.s, 'because_seeds', return_value=[series, movie]):
+            built = self.built()
+        self.assertEqual(set(built[self.rows[0]]), {'movie'})
+        self.assertEqual(built['_names'][self.rows[0]]['seed'], movie['key'])
+        self.assertEqual(built['_names'][self.rows[0]]['slot_since'], start)
+
+    def test_empty_language_slot_releases_without_copying_another_languages_cards(self):
+        self.seed(1)
+        first = self.built()
+        self.stored(first)
         self.recs[1] = []
-        self.seed(2, kind='tv')
+        series = self.seed(2, kind='tv')
         built = self.s.because_feed('de-DE')
-        self.assertEqual(built[self.rows[0]], {})
-        self.assertEqual(built['_names'][self.rows[0]]['slot_kind'], 'movie')
-        self.assertFalse({'seed', 'title', 'label_key', 'fields'} & built['_names'][self.rows[0]].keys())
-        self.assertEqual(set(built[self.rows[1]]), {'series'})
+        self.assertEqual(set(built[self.rows[0]]), {'series'})
+        self.assertEqual(built['_names'][self.rows[0]]['seed'], series['key'])
+        self.assertTrue({x['id'] for x in first[self.rows[0]]['movie']}.isdisjoint(
+            x['id'] for x in built[self.rows[0]]['series']))
 
     def test_rejected_retained_seed_clears_cards_and_labels_but_keeps_kind(self):
         for signal, weight in (('disliked', -3), ('interest', .2), ('watched', 0)):

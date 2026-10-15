@@ -89,7 +89,7 @@ REGISTRY['history']['hint'] = ('history reads saved changes, kind null values []
     '"what changed this week", "was wurde diese Woche geändert", "šta se promenilo ove nedelje" use since 7d person household. '
     'Indirect wording and typos count; titles like Invented Changes This Week are searches. undo/redo values [entry id or identifying words] target a saved change, including another scope for adults.')
 REGISTRY.update({
-    'member_forget': _op('member', hint='member_forget permanently forgets a named adult, removing them too if active, person their id, kind null values []: "Forget Lena", "remove Lena and forget her", "Vergiss Lena", "Zaboravi Lenu". One op, never a plan. A title called Forget Lena is a search.'),
+    'member_forget': _op('member', hint='member_forget previews permanently forgetting a named person, including children and guests, removing them too if active. Shared watches stay for remaining people without the erased name by default. Only the server CLI can erase. person their id, kind null values []: "Forget Lena", "remove Lena and forget her", "Vergiss Lena", "Zaboravi Lenu". One op, never a plan. A title called Forget Lena is a search.'),
     'member_away': _op('member', hint='member_away pauses a named adult, person their id, kind null values []: "Ben is away for a while", "Ben rents a flat for a few months", "pause Ben", "Ben ist eine Weile weg", "Ben je odsutan neko vreme". Optional days 1..30 from today or until YYYY-MM-DD. until is the last day away, exactly the day the user names; never add a day to it. Skald brings them back automatically the next local day. Resolve dates from the supplied local today: "Ben is away until 1 November", "Ben ist bis Ende des Monats weg", "Ben je odsutan do petka", "pause Ben for two weeks" days 14. Without a stated end, omit both date fields. Changing an already away adult\'s end uses the same op. Infer meaning in any language, including typos and indirect wording. A title called Ben Is Away or Until Ben Returns is a search.'),
     'member_back': _op('member', hint='member_back ends a named adult\'s absence, person their id, kind null values []: "Ben is back", "Ben ist zurück", "Ben se vratio". A title called Ben Is Back is a search.'),
     'plays_status': _op('plays', kids=True, scope='read', hint='plays_status reads whether Skald sees Odin watches, connection path and checks; kind null values [] person null. Questions about watching being recorded are status, never a setting change.'),
@@ -100,6 +100,7 @@ REGISTRY.update({
     'plays_check': _op('plays', kids=True, scope='read', hint='plays_check asks to read Odin watches now; kind null values [] person null. Requests for an immediate watch sync use this op; reading connection status uses plays_status. A title named Invented Watch Check is a search, never a command.'),
     'plays_explain': _op('plays', kids=True, scope='read', hint='plays_explain explains why one title was counted as watched, with login prefix, db or https path, time and backfill; changes nothing. kind null values [title] person null. "why did you count Invented Lantern as watched?", "warum zählt Erfundene Laterne als gesehen?", "zašto se Izmišljeni fenjer računa kao gledan?" use this op. Asking why a recommendation appears is explain; a title search is not a command.'),
 })
+REGISTRY['household_erase'] = _op('erase', scope='household', hint='household_erase previews erasing every person and all household data, including Skald backups and saved logins. Read only; only the server CLI can erase with two confirmations. kind null values [] person null. "erase everything", "delete all our data", "Lösche alle unsere Daten", "Obriši sve naše podatke". Infer meaning in any language, including typos and indirect wording. Forgetting one named person is member_forget, removing a shelf is shelf_stop, clearing settings is reset. A film called Erase Everything is a title search, never an erase request.')
 OPS = tuple(REGISTRY)
 BASE = ('op', 'kind', 'values', 'person')
 STEP = {'op': (*OPS, None), 'kind': ('movie', 'tv', 'series', 'genre', 'people', 'languages', 'countries', 'similar', 'mood', 'title', None),
@@ -113,7 +114,7 @@ OUT = {**STEP, 'steps': ([STEP, 6], None), 'slot': (*SLOTS, None), 'question': (
        'guest': (bool, None), 'own_row': (bool, None), 'with_person': (str, None), 'days': (int, None), 'no_end': (bool, None),
        'label': (str, None), 'months': ([int, 12], None), 'filters': (FILTERS, None), 'until': (str, None), 'reason': (str, None),
        'language': (str, None), 'since': (str, None), 'currency': (str, None),
-       'new_person': (bool, None), 'role': ('child', 'adult', None)}
+       'new_person': (bool, None), 'role': ('child', 'adult', None), 'shared': ('keep', 'drop', None)}
 STEP.update({key: OUT[key] for key in ('label', 'age', 'guest', 'own_row', 'slot', 'question', 'new_person', 'role', 'days', 'until', 'no_end')})
 NONE = dict(op=None, kind=None, values=[], person=None)
 
@@ -982,6 +983,14 @@ def _preview(s, text, viewer=None, bound=None, answer=None, scope=None, prior=No
             change.pop(key)
     change['values'] = change['values'] or []
     guest_scope(s, bound if bound in (*s.PEOPLE, s.GUEST) else viewer, {'change': change})
+    if change['op'] == 'household_erase':
+        from .erase import preview as erase_preview
+        actor = bound if bound in s.PEOPLE else viewer
+        if actor in s.PEOPLE and actor not in s.adult_people():
+            raise PermissionError('Ask a current adult household member to preview erasure')
+        if change['kind'] is not None or change['values'] or change['person'] is not None:
+            raise ValueError('Household erase needs no person or title')
+        return erase_preview(s)
     if change['op'] == 'ai_budget':
         s.refresh_preferences()
         actor = bound if bound in s.PEOPLE else viewer
@@ -1401,8 +1410,10 @@ def member_preview(s, text, change, viewer, bound, *, base=None):
         target = name
     hh = cfg['household']
     if op in ('member_forget', 'member_away', 'member_back'):
-        if target in hh.get('guests', []) or cfg['taste']['people'].get(target, {}).get('prefs', {}).get('kids_age') is not None:
+        if op != 'member_forget' and (target in hh.get('guests', []) or cfg['taste']['people'].get(target, {}).get('prefs', {}).get('kids_age') is not None):
             raise PermissionError('Choose an adult household member')
+        if op == 'member_forget' and actor is not None and actor not in s.adult_people():
+            raise PermissionError('Ask a current adult household member to erase a person')
         adults = [p for p in hh['members'] if p != target and p not in hh.get('retired', [])
                   and p not in guest_people(cfg) and cfg['taste']['people'].get(p, {}).get('prefs', {}).get('kids_age') is None]
         if op != 'member_back' and not adults:
@@ -1494,7 +1505,7 @@ def member_preview(s, text, change, viewer, bound, *, base=None):
     if op == 'member_forget':
         from . import leave
         cfg = leave.settings(cfg, name)
-        forgotten = leave.preview(s, before, name)
+        forgotten = leave.preview(s, before, name, change.get('shared') or 'keep')
     cfg = s.validate_config(cfg, data=s.DATA)
     detail = ', '.join(x for x in (label and 'display name '+label, age is not None and 'age '+str(age),
                        guest is not None and ('guest profile' if guest else 'full member'),
@@ -1505,6 +1516,8 @@ def member_preview(s, text, change, viewer, bound, *, base=None):
     if op in ('member_away', 'member_back', 'member_forget'):
         title = {'member_away': 'Pause ', 'member_back': 'Bring back ', 'member_forget': 'Forget '}[op]+s.LABELS[name]
     erase = 'To erase, run on the server: python -m skald members forget '+name+' --person '+(actor or 'ADULT')+' --yes'
+    if forgotten and forgotten['shared'] == 'drop':
+        erase += ' --shared drop'
     description = ''
     if op == 'member_remove':
         wishes = member_shelves(s, name)
@@ -1524,9 +1537,14 @@ def member_preview(s, text, change, viewer, bound, *, base=None):
             'Evidence, history, imports and shelves stay saved; forget is a separate command.',
             'To also erase their history, preview it on the server: python -m skald members forget '+name+' --person '+(actor or 'ADULT')])
     elif forgotten:
+        shared_lines = ([str(n)+' watches '+s.LABELS[name]+' shared with '+s.LABELS[p]+' stay for '+s.LABELS[p]+
+                         " without "+s.LABELS[name]+"'s name. To remove them too, add --shared drop."
+                         for p, n in forgotten['counts']['shared'].items()] if forgotten['shared'] == 'keep' else
+                        [str(n)+' shared watches stop teaching '+s.LABELS[p] for p, n in forgotten['counts']['shared'].items()])
         description = '\n'.join([str(n)+' '+key+' deleted' for key, n in forgotten['counts'].items() if key != 'shared'] +
-            [str(n)+' shared watches stop teaching '+s.LABELS[p] for p, n in forgotten['counts']['shared'].items()] +
-            ['Shared titles stay seen. This cannot be undone.', 'Existing private settings copies stay unchanged.', erase])
+            shared_lines + ['This cannot be undone.' if forgotten['shared'] == 'keep' else 'Shared titles stay seen. This cannot be undone.',
+            'Existing private settings copies stay unchanged.'] +
+            ([leave.odin_reminder(s.LABELS[name])] if forgotten['odin'] else []) + [erase])
     elif op in ('member_away', 'member_back'):
         description = 'Own profile, link, rows and shelves stay saved. '+('Only their own picks keep learning.' if op == 'member_away' else 'Household learning resumes.')
         if op == 'member_away' and name in hh.get('away_until', {}):
@@ -2152,7 +2170,7 @@ def set_count(cfg, scope, count):
 
 def publish_state(s, cfg, scope, state=None):
     from . import shelves
-    from .setup import publish
+    from .erase import publish
     changed = shelves.counts(config(s)) != shelves.counts(cfg)
     cfg = s.validate_config(cfg, data=s.DATA)
     if state is not None:
@@ -2161,7 +2179,7 @@ def publish_state(s, cfg, scope, state=None):
         doc['wishes'] = [w for w in doc['wishes'] if w['scope'] != scope] + state['wishes']
         doc['plans'].clear()
         shelves.save(s, doc)
-    publish(Path(s.DATA), cfg, replace=True)
+    publish(s, cfg)
     s.refresh_preferences()
     if changed:
         s.aio_rows_changed()
@@ -2241,16 +2259,19 @@ def history_entry(s, plan, before, after, **fields):
 def undo_stamp(entries, targets):
     return hashlib.sha256(json.dumps({p: entries.get(p, []) for p in targets}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 def save_journal(s, entries):
-    fd, temp = tempfile.mkstemp(dir=s.DATA, prefix='.commands-')
-    try:
-        with os.fdopen(fd, 'w') as f:
-            json.dump(entries, f, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(temp, Path(s.DATA)/'commands.json')
-    finally:
-        if os.path.exists(temp):
-            os.unlink(temp)
+    with s.household_writable(s.DATA, s.household_erased) as allowed:
+        if not allowed:
+            return
+        fd, temp = tempfile.mkstemp(dir=s.DATA, prefix='.commands-')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                json.dump(entries, f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp, Path(s.DATA)/'commands.json')
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)
 _LOCK = threading.RLock()
 def expire(s):
     """The running worker applies due ends through the normal reversible commands."""
@@ -2298,7 +2319,7 @@ def expire(s):
 def apply_rule(s, plan):
     """Member and shelf-rule changes read config and journal only under the shelf lock."""
     from . import shelves
-    from .setup import publish
+    from .erase import publish
     p, m, r = plan['people'][0], plan.get('member'), plan.get('rule')
     with shelves.locked(s):
         s.refresh_preferences()
@@ -2329,7 +2350,7 @@ def apply_rule(s, plan):
                 doc['wishes'] = [w for w in doc['wishes'] if w not in m['timed_shelves']]
                 doc['plans'].clear()
                 shelves.save(s, doc)
-            publish(Path(s.DATA), cfg, replace=True)
+            publish(s, cfg)
             s.refresh_preferences()
         elif rules.get(r['id']) != r['before'] or not any(w['id'] == r['id'] for w in shelves.read(s)['wishes']):
             raise ValueError('Shelves changed; preview again')
@@ -2344,9 +2365,12 @@ def apply_rule(s, plan):
     return {'name': 'Done: '+plan['name']+('. Restart Skald to apply member changes' if m else '')+". Search 'undo' to revert."}
 
 def apply(s, plan, *, cfg=None):
-    from .setup import publish
-    if plan.get('forget') and plan.get('source') != 'cli':
+    from .erase import publish
+    if (plan.get('forget') or plan.get('household_erase')) and plan.get('source') != 'cli':
         raise PermissionError('Erase runs only from the server command line')
+    if plan.get('household_erase'):
+        from .erase import apply as erase_household
+        return erase_household(s, plan)
     if plan.get('read_only'):
         return plan
     with _LOCK:
@@ -2375,8 +2399,11 @@ def apply(s, plan, *, cfg=None):
             return {'name': 'Done: '+plan['name']+". Search 'undo' once per title to revert."}
         if plan.get('wish'):
             from . import history
-            with history.locked(s.DATA), os.fdopen(os.open(Path(s.DATA)/'wishes.jsonl', os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), 'a') as f:
-                f.write(json.dumps({'t': int(s.time.time()), **plan['wish']}, ensure_ascii=False)+'\n')
+            raw = json.dumps({'t': int(s.time.time()), **plan['wish']}, ensure_ascii=False)+'\n'
+            with history.locked(s.DATA), s.household_writable(s.DATA, s.household_erased) as allowed:
+                if allowed:
+                    with os.fdopen(os.open(Path(s.DATA)/'wishes.jsonl', os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), 'a') as f:
+                        f.write(raw)
             return {'name': 'Noted: '+plan['wish']['text']+'. No settings changed.'}
         if plan.get('fix') or plan.get('reject') or plan.get('note'):
             return apply_title(s, plan)
@@ -2412,7 +2439,7 @@ def apply(s, plan, *, cfg=None):
                 prefs = current['taste']['people'].get(p, {}).get('prefs')
                 entry = history_entry(s, plan, prefs, prefs,
                                       budget={'before': plan['budget_before'], 'after': plan['change']['values'][0]})
-                publish(Path(s.DATA), s.validate_config(cfg, data=s.DATA), replace=True)
+                publish(s, s.validate_config(cfg, data=s.DATA))
                 s.refresh_preferences()
                 entries[p] = (entries.get(p, []) + [entry])[-200:]
                 save_journal(s, entries)
@@ -2427,7 +2454,7 @@ def apply(s, plan, *, cfg=None):
                 current, entries = config(s), journal(s)
                 cfg = lab.apply(s.DATA, current, plan['lab'])
                 if plan['lab']['id'] is None:
-                    publish(Path(s.DATA), s.validate_config(cfg, data=s.DATA), replace=True)
+                    publish(s, s.validate_config(cfg, data=s.DATA))
                     s.refresh_preferences()
                 p = plan['people'][0]
                 entry = history_entry(s, plan, current['taste']['people'].get(p, {}).get('prefs'),
@@ -2513,7 +2540,7 @@ def apply(s, plan, *, cfg=None):
             if 'rows_before' in plan:
                 entry['rows'] = {'before': row_settings(current), 'after': row_settings(cfg)}
             entries[p] = (entries.get(p, []) + [entry])[-200:]
-        publish(Path(s.DATA), cfg, replace=True)
+        publish(s, cfg)
         s.refresh_preferences()
         save_journal(s, entries)
         from .shelves import counts
@@ -2522,7 +2549,8 @@ def apply(s, plan, *, cfg=None):
     return {'name': 'Done: '+plan['name']+'. Search \'undo\' to revert.'}
 def undo(s, targets, actor=None, *, source=None, entry_id=None, expected_stamp=None):
     from . import shelves
-    from .setup import publish, RESTART
+    from .setup import RESTART
+    from .erase import publish
     with _LOCK, shelves.locked(s):
         from .migrate import ensure
         s.refresh_preferences()
@@ -2648,7 +2676,7 @@ def undo(s, targets, actor=None, *, source=None, entry_id=None, expected_stamp=N
             old['undone'] = True
         from .shelves import counts
         count_changed = counts(config(s)) != counts(cfg) or row_settings(config(s)) != row_settings(cfg)
-        publish(Path(s.DATA), cfg, replace=True)
+        publish(s, cfg)
         s.refresh_preferences()
         save_journal(s, entries)
         if count_changed:

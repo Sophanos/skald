@@ -77,10 +77,11 @@ def check_tmdb(data, *, transport=None):
     return True
 
 
-def publish(data, cfg, *, replace=False, on_publish=None):
+def publish(data, cfg, *, replace=False, on_publish=None, write_check=None):
     cfg = members.validate_config(cfg, data=str(data))
     path = Path(os.environ.get('SKALD_CONFIG') or data/'skald.json')
-    if not members.publish_config(str(data), str(path), cfg, replace=replace, on_publish=on_publish):
+    if not members.publish_config(str(data), str(path), cfg, replace=replace, on_publish=on_publish,
+                                  write_check=write_check):
         raise ValueError('household was created by another setup; run skald setup again')
     return cfg
 

@@ -141,11 +141,24 @@ Guest visits, dated absences and temporary shelves accept 1 to 30 days, or a dat
 from today through 30 days ahead, in the household timezone. The worker ends them
 after that whole day. Expired guests keep their saved history; "bring Kim back"
 undoes the removal and clears the old end date. Use a new date for another visit.
-Away, back and forget currently accept adult targets only. Another adult must make
+Away and back accept adult targets only. Forget also accepts children and guests. Another adult must make
 the change; you cannot pause or forget yourself or the last adult at home.
 Erase runs only from the server command line:
 `python -m skald members forget ben --person ana`. Preview there, then repeat with
 `--yes` or `--plan HASH`. Search and the HTTP command API cannot apply erasure.
+Shared watches keep teaching whoever stays, without the erased name. Add
+`--shared drop` on the CLI to remove those watches too; the preview counts them
+per remaining person. If Skald had a saved Odin login or mapping, it removes
+that copy and says: "Ben's Odin login and its watch history still exist in Odin
+and AIOStreams. Remove them there if Ben should lose access."
+
+"Erase everything" or "delete all our data" shows a read-only household preview,
+including counts of Skald backups and saved logins. On the server, run
+`python -m skald erase --household`, then repeat with `--yes --plan CODE` and
+type ERASE at the terminal. Without a terminal or with `--json`, also supply
+`--confirm ERASE`. Addon tokens, the format marker, setup addresses, server locks
+and an empty generation marker stay. Existing addon links answer with empty rows;
+run setup again and restart Skald. Backups outside Skald's data folder must be deleted separately.
 
 The budget stays set until changed again. "turn AI off this month" sets it to 0;
 it does not reset next month. Other currencies keep the number and show USD in the preview.

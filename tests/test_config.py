@@ -151,7 +151,7 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual((later, source), (cfg, "file"))
             self.assertEqual(path.read_bytes(), before)
             self.assertEqual(errors.getvalue().splitlines(), ["skald.json: household environment ignored"])
-            self.assertEqual({p.name for p in Path(data).iterdir()}, {"skald.json", ".skald-household"})
+            self.assertEqual({p.name for p in Path(data).iterdir()}, {"skald.json", ".skald-household", "erase.lock"})
             self.assertEqual(Path(data, ".skald-household").read_bytes(), b"")
 
     def test_invalid_members(self):

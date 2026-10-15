@@ -364,9 +364,10 @@ def state(s):
         return {}
 
 
-def prune_cache(data, config, saved, now, *, person=None, before=None):
+def prune_cache(data, config, saved, now, *, person=None, before=None, shared='drop'):
     from . import history
     forgotten = history.cutoffs(data)
+    seen = history.seen_watches(data)
     cutoffs = {p: dt.datetime.fromisoformat(day).replace(tzinfo=dt.timezone.utc).timestamp()
                for p, day in forgotten.items()}
     if person is not None:
@@ -378,7 +379,10 @@ def prune_cache(data, config, saved, now, *, person=None, before=None):
         at = (row[3] or 0)/1000
         owners = list(dict.fromkeys([*config['household']['members'], *cutoffs])) if who in ('household', 'together', 'both') else [who]
         return not (opts.get('keep_raw') is False or days is not None and at < now-days*86400 or
-                    any(history.forget_action(owners, p, at, cutoff) != 'keep' for p, cutoff in cutoffs.items()))
+                    any(history.forget_action(owners, p, at, cutoff) not in (
+                        ('keep', 'shared') if shared == 'keep' or person is None and p not in config['household']['members']
+                        and at >= seen.get(row[2], 0) else ('keep',))
+                        for p, cutoff in cutoffs.items()))
     records = [r for r in saved.get('records', []) if keep(r['person'], r['row'])]
     accounts = saved.get('https', {})
     for who, account in accounts.items():
@@ -548,10 +552,10 @@ def changed(cfg, op, value, person=None, *, data=None):
 
 
 def change(s, op, value, person=None):
-    from . import commands, setup, history
+    from . import commands, setup, history, erase
     with history.locked(s.DATA):
         cfg = s.validate_config(changed(commands.config(s), op, value, person, data=s.DATA), data=s.DATA)
-        setup.publish(Path(s.DATA), cfg, replace=True)
+        erase.publish(s, cfg)
         s.refresh_preferences()
     return status(s)
 
@@ -689,14 +693,14 @@ def preview(s, query, change, viewer, bound, *_):
 
 
 def apply(s, plan):
-    from . import commands, setup, history
+    from . import commands, setup, history, erase
     with history.locked(s.DATA):
         commands.preview(s, plan['text'], plan['actor'], answer=plan['change'])
         cfg, entries = commands.config(s), commands.journal(s)
         if cfg.get('plays') != plan['plays']['before']:
             raise ValueError('Plays settings changed; preview again')
         cfg['plays'] = plan['plays']['after']
-        setup.publish(Path(s.DATA), s.validate_config(cfg, data=s.DATA), replace=True)
+        erase.publish(s, s.validate_config(cfg, data=s.DATA))
         s.refresh_preferences()
         actor = plan['actor']
         prefs = cfg['taste']['people'][actor].get('prefs')

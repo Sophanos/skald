@@ -59,7 +59,7 @@ from types import SimpleNamespace
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -492,6 +492,17 @@ def validate_config(doc, *, data=None, environ=None):
 
 
 def stamp_household(data):
+    from skald.erase import erased, locked
+    try:
+        os.makedirs(data, exist_ok=True)
+        with locked(data):
+            if not erased(data):
+                _stamp_household(data)
+    except OSError:
+        raise ConfigError("skald.json") from None
+
+
+def _stamp_household(data):
     path = os.path.join(data, ".skald-household")
     try:
         if not os.path.lexists(path):
@@ -515,42 +526,49 @@ def stamp_household(data):
         raise ConfigError("skald.json") from None
 
 
-def publish_config(data, path, cfg, *, replace=False, on_publish=None):
+def publish_config(data, path, cfg, *, replace=False, on_publish=None, write_check=None):
     """The stamp precedes atomic publication; first start never overwrites a winner."""
+    from skald.erase import locked
     directory = os.path.dirname(os.path.abspath(path))
-    os.makedirs(directory, exist_ok=True)
-    stamp_household(data)
-    fd, temp = tempfile.mkstemp(prefix=".skald-", dir=directory)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            os.fchmod(fh.fileno(), 0o600)
-            json.dump(cfg, fh, ensure_ascii=False, indent=1)
-            fh.write("\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        if replace:
-            os.replace(temp, path)
-        else:
-            try:
-                os.link(temp, path)
-            except FileExistsError:
-                return False
-        if on_publish is not None:
-            on_publish()
-        directory_fd = os.open(directory, os.O_RDONLY)
+    os.makedirs(data, exist_ok=True)
+    with locked(data):
+        if write_check is not None and write_check(data):
+            raise PermissionError('Household erased; run setup and restart Skald')
+        os.makedirs(directory, exist_ok=True)
+        _stamp_household(data)
+        fd, temp = tempfile.mkstemp(prefix=".skald-", dir=directory)
         try:
-            os.fsync(directory_fd)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                os.fchmod(fh.fileno(), 0o600)
+                json.dump(cfg, fh, ensure_ascii=False, indent=1)
+                fh.write("\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            if replace:
+                os.replace(temp, path)
+            else:
+                try:
+                    os.link(temp, path)
+                except FileExistsError:
+                    return False
         finally:
-            os.close(directory_fd)
-        return True
+            if os.path.exists(temp):
+                os.unlink(temp)
+    if on_publish is not None:
+        on_publish()
+    directory_fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
     finally:
-        if os.path.exists(temp):
-            os.unlink(temp)
+        os.close(directory_fd)
+    return True
 
 
 def load_config(data=None, environ=None, *, readonly=False):
     env = os.environ if environ is None else environ
     data = data or env.get("DATA_DIR", "/data")
+    if os.path.exists(os.path.join(data, '.skald-erased')) and not os.path.isfile(os.path.join(data, 'skald.json')):
+        return copy.deepcopy(LEGACY), 'implicit'
     path = env.get("SKALD_CONFIG") or os.path.join(data, CONFIG_NAME)
     try:
         with open(path, encoding="utf-8") as fh:
@@ -636,9 +654,16 @@ def public_config(cfg):
 # --- end household config ---
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from skald.erase import (erased, epoch as erasure_epoch, writing as household_write,
+                         writable as household_writable, locked as erasure_lock)
 from skald import migrate, shelves, rowplan, row_names, metrics as row_metrics, lab
 from skald.history import seen_keys as history_seen
 from skald.i18n import t as _translate
+_household_epoch = erasure_epoch(DATA)
+
+
+def household_erased(data):
+    return erased(data) or erasure_epoch(data) != _household_epoch
 
 def row_lang():
     return CONFIG['region'].get('row_lang', LANG)
@@ -659,6 +684,25 @@ except (ValueError, OSError) as e:
 
 class NotConfiguredHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if os.path.exists(os.path.join(DATA, '.skald-erased')):
+            try:
+                with open(os.path.join(DATA, 'addon.json')) as fh:
+                    token = json.load(fh)['token']
+                parts = urllib.parse.urlsplit(self.path).path.strip('/').split('/')
+                if hmac.compare_digest(parts[0], token):
+                    doc = ({'id': 'skald', 'version': VERSION, 'name': 'Skald', 'resources': ['catalog'],
+                            'types': ['movie', 'series'], 'catalogs': []} if parts[-1] == 'manifest.json' else {'metas': []})
+                    body = json.dumps(doc).encode()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.send_header('Cache-Control', 'no-store')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+            except (OSError, ValueError, KeyError):
+                pass
         body = b'{"ok": false, "status": "not-configured"}'
         self.send_response(503)
         self.send_header("Content-Type", "application/json")
@@ -1051,7 +1095,10 @@ def save_usage(fields=None, *, counters=True):
                     saved.update({k: v for k, v in _usage.items() if not k.startswith('ai_')})
                 saved.update(fields or {})
                 _usage.update({k: v for k, v in saved.items() if k.startswith('ai_')})
-                write_private(Path(DATA) / 'usage.json', json.dumps(saved))
+                with household_writable(DATA, household_erased) as allowed:
+                    if not allowed:
+                        return False
+                    write_private(Path(DATA) / 'usage.json', json.dumps(saved))
             return True
         except OSError:
             return False
@@ -1428,6 +1475,7 @@ def _decision_cache_snapshot():
                 and (s := DECISIONS.get(k.split("|")[0])) and s["ttl"] >= DAY and not _decision_free(s["out"])}
 
 
+@household_write
 def _decision_write_json(path, value):
     fd, tmp = tempfile.mkstemp(prefix=".decide-", dir=os.path.dirname(path))
     try:
@@ -1453,31 +1501,34 @@ def _decision_writer():
                 return
             if task and not isinstance(task, threading.Event):
                 data, rec, persist = task
-                path = os.path.join(data, "decisions.jsonl")
-                if path not in lines:
-                    try:
+                with household_writable(data, household_erased) as allowed:
+                    if not allowed:
+                        continue
+                    path = os.path.join(data, "decisions.jsonl")
+                    if path not in lines:
+                        try:
+                            with open(path) as fh:
+                                lines[path] = sum(1 for _ in fh)
+                        except FileNotFoundError:
+                            lines[path] = 0
+                    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "a") as fh:
+                        os.fchmod(fh.fileno(), 0o600)
+                        fh.write(json.dumps(rec, ensure_ascii=False, allow_nan=False) + "\n")
+                    lines[path] += 1
+                    if lines[path] > 5000:
                         with open(path) as fh:
-                            lines[path] = sum(1 for _ in fh)
-                    except FileNotFoundError:
-                        lines[path] = 0
-                with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "a") as fh:
-                    os.fchmod(fh.fileno(), 0o600)
-                    fh.write(json.dumps(rec, ensure_ascii=False, allow_nan=False) + "\n")
-                lines[path] += 1
-                if lines[path] > 5000:
-                    with open(path) as fh:
-                        keep = list(deque(fh, maxlen=4000))
-                    fd, tmp = tempfile.mkstemp(prefix=".decisions-", dir=data)
-                    try:
-                        with os.fdopen(fd, "w") as fh:
-                            fh.writelines(keep)
-                            fh.flush()
-                            os.fsync(fh.fileno())
-                        os.replace(tmp, path)
-                    finally:
-                        if os.path.exists(tmp):
-                            os.unlink(tmp)
-                    lines[path] = len(keep)
+                            keep = list(deque(fh, maxlen=4000))
+                        fd, tmp = tempfile.mkstemp(prefix=".decisions-", dir=data)
+                        try:
+                            with os.fdopen(fd, "w") as fh:
+                                fh.writelines(keep)
+                                fh.flush()
+                                os.fsync(fh.fileno())
+                            os.replace(tmp, path)
+                        finally:
+                            if os.path.exists(tmp):
+                                os.unlink(tmp)
+                        lines[path] = len(keep)
                 if persist:
                     dirty = data
             if dirty and time.monotonic() - last_save >= 10:
@@ -3345,6 +3396,8 @@ def row_enabled(cid):
 
 def feed_rows(lang=LANG, profiles=True, who=None, *, home=None):
     """Home rows in display order: (catalog id, types, name or {type: name})."""
+    if household_erased(DATA):
+        return []
     lab_catalogs()
     nxt, nyear = anime_season(local_now(), 1)
 
@@ -3439,6 +3492,8 @@ def active_profiles():
 
 
 def read_taste():
+    if household_erased(DATA):
+        return {}
     path = os.path.join(DATA, "taste.json")
     try:
         with open(path) as fh:
@@ -3447,8 +3502,10 @@ def read_taste():
         if rowplan._trace.get() is not None:
             return DEFAULT_TASTE
         try:
-            with open(path, "w") as fh:
-                json.dump(DEFAULT_TASTE, fh, ensure_ascii=False, indent=1)
+            with household_writable(DATA, household_erased) as allowed:
+                if allowed:
+                    with open(path, "w") as fh:
+                        json.dump(DEFAULT_TASTE, fh, ensure_ascii=False, indent=1)
         except OSError:
             pass
     except Exception as e:
@@ -3754,8 +3811,13 @@ def _connector_clean(cid, c, now):
 
 def _connectors_save(rows, generation):
     """Serialized writes, outside the leaf lock; discard a snapshot superseded during IO."""
+    if household_erased(DATA):
+        return False
     rows = {cid: _connector_clean(cid, c, time.time()) for cid, c in rows.items()}
-    fd, tmp = tempfile.mkstemp(prefix=".connectors-", dir=DATA)
+    with household_writable(DATA, household_erased) as allowed:
+        if not allowed:
+            return False
+        fd, tmp = tempfile.mkstemp(prefix=".connectors-", dir=DATA)
     try:
         with os.fdopen(fd, "w") as fh:
             os.fchmod(fh.fileno(), 0o600)
@@ -3763,9 +3825,10 @@ def _connectors_save(rows, generation):
             fh.flush()
             os.fsync(fh.fileno())
         with history_locked(DATA):
-            if generation != _connectors_generation:
-                return False
-            os.replace(tmp, os.path.join(DATA, "connectors.json"))
+            with household_writable(DATA, household_erased) as allowed:
+                if generation != _connectors_generation or not allowed:
+                    return False
+                os.replace(tmp, os.path.join(DATA, "connectors.json"))
             _connectors_saved.clear()
             _connectors_saved.update({cid: _connector_material(c) for cid, c in rows.items()})
             return True
@@ -4025,30 +4088,35 @@ def _trakt_bundle(value):
 
 def _write_trakt_auth(reference, bundle, directory=None):
     _, name = _auth_reference(reference, DATA)
+    content = json.dumps(_trakt_bundle(bundle)) + "\n"
     close_directory = directory is None
     if close_directory:
         directory = _credentials_dir()
     temp = ".trakt-auth-" + secrets.token_hex(16)
     try:
-        try:
-            os.close(_open_auth_file(name, directory))
-        except FileNotFoundError:
-            pass
-        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600, dir_fd=directory)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            os.fchmod(fh.fileno(), 0o600)
-            json.dump(_trakt_bundle(bundle), fh)
-            fh.write("\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        _auth_reference(reference, DATA)
-        os.replace(temp, name, src_dir_fd=directory, dst_dir_fd=directory)
-        os.fsync(directory)
+        with household_writable(DATA, household_erased) as allowed:
+            if not allowed:
+                return False
+            try:
+                try:
+                    os.close(_open_auth_file(name, directory))
+                except FileNotFoundError:
+                    pass
+                fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    os.fchmod(fh.fileno(), 0o600)
+                    fh.write(content)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                _auth_reference(reference, DATA)
+                os.replace(temp, name, src_dir_fd=directory, dst_dir_fd=directory)
+                os.fsync(directory)
+            finally:
+                try:
+                    os.unlink(temp, dir_fd=directory)
+                except FileNotFoundError:
+                    pass
     finally:
-        try:
-            os.unlink(temp, dir_fd=directory)
-        except FileNotFoundError:
-            pass
         if close_directory:
             os.close(directory)
 
@@ -4207,17 +4275,20 @@ def _connector_write_locked(name, doc, *, indent=None, newline=False):
                 return False
     except FileNotFoundError:
         pass
-    fd, temp = tempfile.mkstemp(prefix="." + name + "-", dir=DATA)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            os.fchmod(fh.fileno(), 0o644)
-            fh.write(content)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(temp, path)
-    finally:
-        if os.path.exists(temp):
-            os.unlink(temp)
+    with household_writable(DATA, household_erased) as allowed:
+        if not allowed:
+            return False
+        fd, temp = tempfile.mkstemp(prefix="." + name + "-", dir=DATA)
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                os.fchmod(fh.fileno(), 0o644)
+                fh.write(content)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(temp, path)
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)
     return True
 
 
@@ -6505,9 +6576,12 @@ def save_learn():
             _learn["served"].pop(k)
         snap = json.dumps(_learn, ensure_ascii=False)
     try:
-        with open(os.path.join(DATA, "learn.json.tmp"), "w") as fh:
-            fh.write(snap)
-        os.replace(os.path.join(DATA, "learn.json.tmp"), os.path.join(DATA, "learn.json"))
+        with household_writable(DATA, household_erased) as allowed:
+            if not allowed:
+                return False
+            with open(os.path.join(DATA, "learn.json.tmp"), "w") as fh:
+                fh.write(snap)
+            os.replace(os.path.join(DATA, "learn.json.tmp"), os.path.join(DATA, "learn.json"))
     except OSError:
         _learn_dirty.set()
         return False
@@ -6627,7 +6701,9 @@ def online_state():
                 _online_meta["corrupt"] = True
                 online_error(e)
                 try:
-                    os.replace(path, path + ".bad")
+                    with household_writable(DATA, household_erased) as allowed:
+                        if allowed:
+                            os.replace(path, path + ".bad")
                 except OSError as e:
                     online_error(e)
             if _online is None:
@@ -6729,6 +6805,8 @@ def note_tv(p, items=None, now=None):
 
 def save_online():
     global _online_pruned, _online_index
+    if not _online_dirty.is_set():
+        return
     try:
         with _online_save_lock:
             with _online_lock:
@@ -6770,10 +6848,13 @@ def save_online():
                 snap = json.dumps(s, separators=(",", ":"), allow_nan=False)
                 _online_dirty.clear()
             path = os.path.join(DATA, "online.json")
-            with os.fdopen(os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
-                os.fchmod(fh.fileno(), 0o600)
-                fh.write(snap)
-            os.replace(path + ".tmp", path)
+            with household_writable(DATA, household_erased) as allowed:
+                if not allowed:
+                    return False
+                with os.fdopen(os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
+                    os.fchmod(fh.fileno(), 0o600)
+                    fh.write(snap)
+                os.replace(path + ".tmp", path)
     except Exception as e:
         _online_dirty.set()
         online_error(e)
@@ -7100,9 +7181,12 @@ def save_emb():
         kinds = {k: kind for k, kind in _emb_kinds.items() if k in snap}
         model = _emb_model
     try:
-        with open(os.path.join(DATA, "emb.json.tmp"), "w") as fh:
-            json.dump({"model": model, "dim": EMB_DIM, "v": snap, "kinds": kinds}, fh)
-        os.replace(os.path.join(DATA, "emb.json.tmp"), os.path.join(DATA, "emb.json"))
+        with household_writable(DATA, household_erased) as allowed:
+            if not allowed:
+                return False
+            with open(os.path.join(DATA, "emb.json.tmp"), "w") as fh:
+                json.dump({"model": model, "dim": EMB_DIM, "v": snap, "kinds": kinds}, fh)
+            os.replace(os.path.join(DATA, "emb.json.tmp"), os.path.join(DATA, "emb.json"))
     except OSError:
         pass
 
@@ -7583,9 +7667,12 @@ def save_facets():
     with _facets_lock:
         snap = json.dumps({"v": 1, "items": _facets}, ensure_ascii=False, separators=(",", ":"))
     try:
-        with open(os.path.join(DATA, "facets.json.tmp"), "w") as fh:
-            fh.write(snap)
-        os.replace(os.path.join(DATA, "facets.json.tmp"), os.path.join(DATA, "facets.json"))
+        with household_writable(DATA, household_erased) as allowed:
+            if not allowed:
+                return False
+            with open(os.path.join(DATA, "facets.json.tmp"), "w") as fh:
+                fh.write(snap)
+            os.replace(os.path.join(DATA, "facets.json.tmp"), os.path.join(DATA, "facets.json"))
     except OSError:
         pass
 
@@ -8355,6 +8442,7 @@ def _memory_empty():
     return {"ver": 1, "seq": 0, "stamp": None, "at": 0, "forgotten": {}, "facts": []}
 
 
+@household_write
 def _memory_atomic(path, data):
     fd, tmp = tempfile.mkstemp(prefix=".memory-", dir=os.path.dirname(path))
     try:
@@ -8380,12 +8468,15 @@ def _memory_log(ops):
     if not ops:
         return
     path = os.path.join(DATA, "memory.log.jsonl")
-    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "a") as fh:
-        os.fchmod(fh.fileno(), 0o600)
-        for op in ops:
-            fh.write(json.dumps(op, ensure_ascii=False, allow_nan=False) + "\n")
-        fh.flush()
-        os.fsync(fh.fileno())
+    with household_writable(DATA, household_erased) as allowed:
+        if not allowed:
+            return False
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "a") as fh:
+            os.fchmod(fh.fileno(), 0o600)
+            for op in ops:
+                fh.write(json.dumps(op, ensure_ascii=False, allow_nan=False) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
     with open(path, "rb") as fh:
         lines = deque(fh, maxlen=MEMORY_LOG_MAX[0])
     if len(lines) >= MEMORY_LOG_MAX[0]:
@@ -8436,8 +8527,10 @@ def _memory_read():
         except FileNotFoundError:
             _memory = _memory_empty()
         except (ValueError, TypeError, KeyError):
-            os.chmod(path, 0o600)
-            os.replace(path, os.path.join(DATA, "memory.json.bad"))
+            with household_writable(DATA, household_erased) as allowed:
+                if allowed:
+                    os.chmod(path, 0o600)
+                    os.replace(path, os.path.join(DATA, "memory.json.bad"))
             _memory = _memory_empty()
             _memory_index.clear()
             _memory_log([{"t": time.time(), "op": "corrupt", "n": 1}])
@@ -9038,11 +9131,14 @@ def taste_ring_note(m, now):
             del _taste_ring[old]
         path = os.path.join(DATA, "taste_ring.json")
         try:
-            with os.fdopen(os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
-                os.fchmod(fh.fileno(), 0o600)
-                fh.write(json.dumps({day: {p: base64.b64encode(raw).decode() for p, raw in people.items()}
-                                     for day, people in _taste_ring.items()}, separators=(",", ":")))
-            os.replace(path + ".tmp", path)
+            with household_writable(DATA, household_erased) as allowed:
+                if not allowed:
+                    return False
+                with os.fdopen(os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
+                    os.fchmod(fh.fileno(), 0o600)
+                    fh.write(json.dumps({day: {p: base64.b64encode(raw).decode() for p, raw in people.items()}
+                                         for day, people in _taste_ring.items()}, separators=(",", ":")))
+                os.replace(path + ".tmp", path)
         except OSError:
             pass
 
@@ -9078,8 +9174,11 @@ def write_search(record, timing=None):
     if getattr(_scoping, 'private_command', False):
         return
     try:
-        with open(os.path.join(DATA, "searches.jsonl"), "a") as fh:
-            fh.write(json.dumps({**record, **({"timing": timing} if timing else {})}, ensure_ascii=False) + "\n")
+        with household_writable(DATA, household_erased) as allowed:
+            if not allowed:
+                return False
+            with open(os.path.join(DATA, "searches.jsonl"), "a") as fh:
+                fh.write(json.dumps({**record, **({"timing": timing} if timing else {})}, ensure_ascii=False) + "\n")
     except OSError:
         pass
 
@@ -9152,17 +9251,18 @@ def because_feed(lang):
                 if e["weight"] > 0 and e["signal"] in ("loved", "liked", "watched")}
     out, names, anchors = {}, {}, []
     kinds, starts, previous, retained, free = {}, {}, {}, {}, list(BECAUSE_ROWS)
+    releasable = set()
     with _feeds_lock:
         for cid in BECAUSE_ROWS:
             records = [(l, rec) for store in (_shown, *_shown_scoped.values(), _feeds)
                        for (row, l), rec in sorted(store.items(), key=lambda x: (x[0][1] != LANG, x[0]))
-                       if row == cid and (rec.get("metas") or (rec.get("names") or {}).get("slot_kind"))
-                       and now - (rec.get("names") or {}).get("slot_since", rec.get("built", now)) < 7 * DAY]
+                       if row == cid and (rec.get("metas") or (rec.get("names") or {}).get("slot_kind"))]
             types = [{x["type"] for typ, xs in (rec.get("metas") or {}).items()
                       if typ in ("movie", "series", "tv") for x in xs} for _, rec in records]
-            # Share the kind across languages, with a start that rebuilds cannot extend.
-            pin = next((rec for _, rec in records
-                        if (rec.get("names") or {}).get("slot_kind") in ("movie", "series")), {})
+            # Keep the latest kind change across languages, even after seed rotation.
+            pin = max((rec for _, rec in records
+                       if (rec.get("names") or {}).get("slot_kind") in ("movie", "series")),
+                      key=lambda rec: (rec.get("names") or {}).get("slot_since", rec.get("built", now)), default={})
             kinds[cid] = (pin.get("names") or {}).get("slot_kind")
             if kinds[cid] is None and types and len(types[0]) == 1:
                 kinds[cid] = next(iter(types[0]))
@@ -9175,21 +9275,27 @@ def because_feed(lang):
     for cid in free:
         seed = positive.get(((previous[cid].get("names") or {}).get("seed"), kinds[cid]))
         if not seed:
+            if kinds[cid]:
+                releasable.add(cid)
             previous[cid] = {}
             continue
         metas = [x for typ, xs in (previous[cid].get("metas") or {}).items()
                  if typ in ("movie", "series", "tv") for x in xs]
         if not any(x["id"] not in blocked and preference_ok(x, cid, "both")
                    and row_eligible(x, cid, lang, p, seed=seed["key"]) for x in metas):
-            kinds[cid], starts[cid], previous[cid] = None, now, {}
+            releasable.add(cid)
+            previous[cid] = {}
         else:
             retained[cid] = seed
-    for seed in seeds:
+    # Empty slots try all same-kind seeds before taking another kind or filling new slots.
+    for release, seed in [(False, e) for e in seeds] + [(True, e) for e in seeds if releasable]:
         stype, kind = seed["stype"], seed["kind"]
         cid = next((cid for cid in free if kinds[cid] == stype and
                     (previous[cid].get("names") or {}).get("seed") == seed["key"]), None) or \
             next((cid for cid in free if kinds[cid] == stype), None) or \
-            next((cid for cid in free if kinds[cid] is None), None)
+            next((cid for cid in free if kinds[cid] is None and not releasable), None)
+        if release:
+            cid = next((cid for cid in free if cid in releasable or kinds[cid] is None), None)
         if cid is None:
             continue
         rec = frec(seed["key"], kind)
@@ -9213,14 +9319,15 @@ def because_feed(lang):
             metas.append(row_meta(it, stype, kind, genre_names, art.get(it["id"], {}), note=t("note.like", title=seed["title"]), lang=lang))
         rank_by_taste(m, [(x["id"], kind, x) for x in metas])
         metas = because_rank([x for x in metas if row_eligible(x, cid, lang, p, seed=seed["key"])], seed["key"])
-        if not metas:
+        if not metas or cid in releasable and not any(
+                x["id"] not in blocked and preference_ok(x, cid, "both") for x in metas):
             continue
         anchors.append((anchor, rec.get("x")))
         free.remove(cid)
         out[cid] = {stype: metas[:30]}
         names[cid] = {"title": seed_phrase(seed), "seed": seed["key"],
                       "label_key": seed_label(seed), "fields": {"title": seed["title"]},
-                      "slot_kind": stype, "slot_since": starts[cid]}
+                      "slot_kind": stype, "slot_since": now if kinds[cid] != stype else starts[cid]}
         if not free:
             break
     for cid in free:
@@ -10946,6 +11053,7 @@ def archetype_view(who):
     return {**archetype_label(archetype_brief(m, who) if m else {}), "source": "rule"}
 
 
+@household_write
 def _archetype_save(items):
     path = os.path.join(DATA, "archetypes.json")
     fd, tmp = tempfile.mkstemp(prefix=".archetypes-", dir=DATA)
@@ -12082,9 +12190,12 @@ def save_nzb():
         _nzb["titles"] = {k: v for k, v in _nzb["titles"].items() if v["at"] > cut}
         snap = json.dumps(_nzb)
     try:
-        with open(os.path.join(DATA, "nzb.json.tmp"), "w") as fh:
-            fh.write(snap)
-        os.replace(os.path.join(DATA, "nzb.json.tmp"), os.path.join(DATA, "nzb.json"))
+        with household_writable(DATA, household_erased) as allowed:
+            if not allowed:
+                return False
+            with open(os.path.join(DATA, "nzb.json.tmp"), "w") as fh:
+                fh.write(snap)
+            os.replace(os.path.join(DATA, "nzb.json.tmp"), os.path.join(DATA, "nzb.json"))
     except OSError:
         pass
 
@@ -12342,12 +12453,15 @@ def backup_state(now, *, archive_name=None):
     cfg, source = load_config(DATA, readonly=True)
     household = source in ("file", "env")
     backups = os.path.join(DATA, "backups")
-    os.makedirs(backups, mode=0o700, exist_ok=True)
-    uid = os.getuid()
-    if os.stat(backups).st_uid == uid:
-        os.chmod(backups, 0o700)
-    elif not os.access(backups, os.W_OK):
-        raise PermissionError(f"backups dir not owned by uid {uid}: fix ownership")
+    with household_writable(DATA, household_erased) as allowed:
+        if not allowed:
+            return False
+        os.makedirs(backups, mode=0o700, exist_ok=True)
+        uid = os.getuid()
+        if os.stat(backups).st_uid == uid:
+            os.chmod(backups, 0o700)
+        elif not os.access(backups, os.W_OK):
+            raise PermissionError(f"backups dir not owned by uid {uid}: fix ownership")
     _backup_clean(backups, now)
     opened, skipped, files = {}, {}, {}
     tmp = None
@@ -12375,67 +12489,73 @@ def backup_state(now, *, archive_name=None):
         disk = os.statvfs(backups)
         if disk.f_bavail * disk.f_frsize < max(64 * 1024 * 1024, 3 * raw_size):
             raise OSError("low disk")
-        fd, tmp = tempfile.mkstemp(prefix=f".state-{day}.", suffix=".tmp", dir=backups)
-        with os.fdopen(fd, "wb") as fh:
-            with tarfile.open(fileobj=fh, mode="w:gz", compresslevel=6) as archive:
-                if household:
-                    for name, raw in (("skald.json", (json.dumps(public_config(cfg), ensure_ascii=False, indent=1) + "\n").encode()),
-                                      (".skald-household", b"")):
+        with household_writable(DATA, household_erased) as allowed:
+            if not allowed:
+                return False
+            fd, tmp = tempfile.mkstemp(prefix=f".state-{day}.", suffix=".tmp", dir=backups)
+            with os.fdopen(fd, "wb") as fh:
+                with tarfile.open(fileobj=fh, mode="w:gz", compresslevel=6) as archive:
+                    if household:
+                        for name, raw in (("skald.json", (json.dumps(public_config(cfg), ensure_ascii=False, indent=1) + "\n").encode()),
+                                          (".skald-household", b"")):
+                            info = tarfile.TarInfo(name)
+                            info.size, info.mode, info.mtime = len(raw), 0o600, int(now)
+                            with tempfile.TemporaryFile(dir=backups) as receipt:
+                                receipt.write(raw)
+                                receipt.seek(0)
+                                archive.addfile(info, receipt)
+                            files[name] = {"sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw), "mtime": int(now)}
+                    for name, (source, st) in opened.items():
+                        if not stat.S_ISREG(st.st_mode):
+                            skipped[name] = "not a regular file"
+                            continue
+                        if (st.st_dev, st.st_ino) in credential_inodes:
+                            skipped[name] = "credential alias"
+                            continue
+                        size = st.st_size
+                        if size > 64 * 1024 * 1024:
+                            skipped[name] = "too large"
+                            continue
+                        if name.endswith(".jsonl"):
+                            end = size
+                            size = 0
+                            while end:
+                                start = max(0, end - 65536)
+                                os.lseek(source, start, os.SEEK_SET)
+                                block = os.read(source, end - start)
+                                if len(block) != end - start:
+                                    raise OSError("short backup read")
+                                newline = block.rfind(b"\n")
+                                if newline >= 0:
+                                    size = start + newline + 1
+                                    break
+                                end = start
+                        os.lseek(source, 0, os.SEEK_SET)
+                        reader = _BackupReader(source, size)
                         info = tarfile.TarInfo(name)
-                        info.size, info.mode, info.mtime = len(raw), 0o600, int(now)
-                        with tempfile.TemporaryFile(dir=backups) as receipt:
-                            receipt.write(raw)
-                            receipt.seek(0)
-                            archive.addfile(info, receipt)
-                        files[name] = {"sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw), "mtime": int(now)}
-                for name, (source, st) in opened.items():
-                    if not stat.S_ISREG(st.st_mode):
-                        skipped[name] = "not a regular file"
-                        continue
-                    if (st.st_dev, st.st_ino) in credential_inodes:
-                        skipped[name] = "credential alias"
-                        continue
-                    size = st.st_size
-                    if size > 64 * 1024 * 1024:
-                        skipped[name] = "too large"
-                        continue
-                    if name.endswith(".jsonl"):
-                        end = size
-                        size = 0
-                        while end:
-                            start = max(0, end - 65536)
-                            os.lseek(source, start, os.SEEK_SET)
-                            block = os.read(source, end - start)
-                            if len(block) != end - start:
-                                raise OSError("short backup read")
-                            newline = block.rfind(b"\n")
-                            if newline >= 0:
-                                size = start + newline + 1
-                                break
-                            end = start
-                    os.lseek(source, 0, os.SEEK_SET)
-                    reader = _BackupReader(source, size)
-                    info = tarfile.TarInfo(name)
-                    info.size, info.mode, info.mtime = size, 0o600, int(st.st_mtime)
-                    info.type = tarfile.REGTYPE
-                    archive.addfile(info, reader)
-                    files[name] = {"sha256": reader.sha.hexdigest(), "size": size, "mtime": info.mtime}
-                manifest = {"v": 1, "day": day, "created": int(now), "files": files, "skipped": skipped}
-                if household:
-                    manifest["household"] = True
-                raw = json.dumps(manifest, separators=(",", ":")).encode()
-                info = tarfile.TarInfo("manifest.json")
-                info.size, info.mode, info.mtime = len(raw), 0o600, int(now)
-                with tempfile.TemporaryFile(dir=backups) as receipt:
-                    receipt.write(raw)
-                    receipt.seek(0)
-                    archive.addfile(info, receipt)
-            fh.flush()
-            os.fsync(fh.fileno())
+                        info.size, info.mode, info.mtime = size, 0o600, int(st.st_mtime)
+                        info.type = tarfile.REGTYPE
+                        archive.addfile(info, reader)
+                        files[name] = {"sha256": reader.sha.hexdigest(), "size": size, "mtime": info.mtime}
+                    manifest = {"v": 1, "day": day, "created": int(now), "files": files, "skipped": skipped}
+                    if household:
+                        manifest["household"] = True
+                    raw = json.dumps(manifest, separators=(",", ":")).encode()
+                    info = tarfile.TarInfo("manifest.json")
+                    info.size, info.mode, info.mtime = len(raw), 0o600, int(now)
+                    with tempfile.TemporaryFile(dir=backups) as receipt:
+                        receipt.write(raw)
+                        receipt.seek(0)
+                        archive.addfile(info, receipt)
+                fh.flush()
+                os.fsync(fh.fileno())
         _backup_verify(tmp, manifest)
         size = os.stat(tmp).st_size
-        os.replace(tmp, os.path.join(backups, archive_name or f"state-{day}.tar.gz"))
-        tmp = None
+        with household_writable(DATA, household_erased) as allowed:
+            if not allowed:
+                return False
+            os.replace(tmp, os.path.join(backups, archive_name or f"state-{day}.tar.gz"))
+            tmp = None
         try:
             fd = os.open(backups, os.O_RDONLY | os.O_CLOEXEC)
             try:
@@ -12449,7 +12569,7 @@ def backup_state(now, *, archive_name=None):
     finally:
         for fd, _ in opened.values():
             os.close(fd)
-        if tmp is not None:
+        if tmp is not None and os.path.exists(tmp):
             os.unlink(tmp)
 
 
@@ -12466,17 +12586,21 @@ _daily_lock = threading.Lock()
 
 
 def _daily_save():
-    fd, tmp = tempfile.mkstemp(prefix=".daily-", suffix=".tmp", dir=DATA)
-    try:
-        with os.fdopen(fd, "w") as fh:
-            with _daily_lock:
-                json.dump(_daily, fh)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, os.path.join(DATA, "daily.json"))
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+    with _daily_lock:
+        snap = json.dumps(_daily)
+    with household_writable(DATA, household_erased) as allowed:
+        if not allowed:
+            return False
+        fd, tmp = tempfile.mkstemp(prefix=".daily-", suffix=".tmp", dir=DATA)
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(snap)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, os.path.join(DATA, "daily.json"))
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
 
 
 def _daily_log(message):
@@ -12731,12 +12855,15 @@ def pin_shown(lang, scope=None):
                 s: {f"{cid}|{l}": v for (cid, l), v in store.items()} for s, store in _shown_scoped.items()}
         path = os.path.join(DATA, "shown.json" if scope is None else "shown_scopes.json")
         try:
-            with open(path + ".tmp", "w") if scope is None else os.fdopen(
-                    os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
-                if scope is not None:
-                    os.fchmod(fh.fileno(), 0o600)
-                json.dump(snap, fh, ensure_ascii=False)
-            os.replace(path + ".tmp", path)
+            with household_writable(DATA, household_erased) as allowed:
+                if not allowed:
+                    return False
+                with open(path + ".tmp", "w") if scope is None else os.fdopen(
+                        os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
+                    if scope is not None:
+                        os.fchmod(fh.fileno(), 0o600)
+                    json.dump(snap, fh, ensure_ascii=False)
+                os.replace(path + ".tmp", path)
         except OSError:
             pass
 
@@ -12803,15 +12930,21 @@ def feed(cid, lang):
 
 
 def save_feeds():
+    if household_erased(DATA):
+        return
     with _pin_lock, _feeds_lock:
         generation = _erasure_generation
         snap = {f"{cid}|{lang}": v for (cid, lang), v in _feeds.items()}
     tmp = os.path.join(DATA, "feeds.json." + uuid.uuid4().hex + ".tmp")
     try:
-        with open(tmp, "w") as fh:
+        with household_writable(DATA, household_erased) as allowed:
+            if not allowed:
+                return False
+            fh = open(tmp, "w")
+        with fh:
             json.dump(snap, fh, ensure_ascii=False)
-        with _pin_lock:
-            if generation == _erasure_generation:
+        with _pin_lock, household_writable(DATA, household_erased) as allowed:
+            if generation == _erasure_generation and allowed:
                 os.replace(tmp, os.path.join(DATA, "feeds.json"))
     except OSError:
         pass
@@ -13073,6 +13206,9 @@ def finish_cold_enrichment(d, retry):
 def feed_worker():
     retry = {}
     while True:
+        if household_erased(DATA):
+            time.sleep(60)
+            continue
         try:
             search_commands.expire(command_context())
         except Exception as e:
@@ -14537,6 +14673,11 @@ _people_settings = {k: copy.deepcopy(CONFIG['household'].get(k))
 def refresh_preferences():
     global _prefs_stamp, _pin_epoch, _people_settings, PEOPLE, LABELS, MEMBER_ROWS, ROW_OWNER, ARCHIVED, TRAKT_PERSON
     global DEFAULT_TASTE, PAIR_LABEL, EXPERIENCE_TAGS, MEMBER_NAMES, MEMBER_COUNT
+    if household_erased(DATA):
+        if _prefs_stamp != 'erased':
+            forget_person_caches()
+            _prefs_stamp = 'erased'
+        return
     if CONFIG_SOURCE not in ("file", "env"):
         return
     path = os.environ.get("SKALD_CONFIG") or os.path.join(DATA, CONFIG_NAME)
@@ -14815,13 +14956,16 @@ def _save_imports(events):
     path = os.path.join(DATA, "imports.jsonl")
     tmp = path + ".tmp"
     try:
-        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
-            os.fchmod(fh.fileno(), 0o600)
-            for e in events:
-                fh.write(json.dumps(e, ensure_ascii=False) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        with household_writable(DATA, household_erased) as allowed:
+            if not allowed:
+                return False
+            with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
+                os.fchmod(fh.fileno(), 0o600)
+                for e in events:
+                    fh.write(json.dumps(e, ensure_ascii=False) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -15039,15 +15183,18 @@ def write_session(body, via, bound=None):
             events = events[-1000:]
             starts = {x["id"] for x in events if x["fix"] is None and x["who"] != "off"}
             events = [x for x in events if x["fix"] is None or x["fix"] in starts]
-        with os.fdopen(os.open(path + ".tmp" if rewrite else path,
-                              os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if rewrite else os.O_APPEND), 0o600), "w") as fh:
-            os.fchmod(fh.fileno(), 0o600)
-            for old in events if rewrite else [e]:
-                fh.write(json.dumps(old) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        if rewrite:
-            os.replace(path + ".tmp", path)
+        with household_writable(DATA, household_erased) as allowed:
+            if not allowed:
+                return False
+            with os.fdopen(os.open(path + ".tmp" if rewrite else path,
+                                  os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if rewrite else os.O_APPEND), 0o600), "w") as fh:
+                os.fchmod(fh.fileno(), 0o600)
+                for old in events if rewrite else [e]:
+                    fh.write(json.dumps(old) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            if rewrite:
+                os.replace(path + ".tmp", path)
         _sessions_cache.clear()
         return session_view(bound)
 
@@ -15405,11 +15552,12 @@ def remote_token():
             return token
         except FileNotFoundError:
             token = secrets.token_urlsafe(32)
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w") as fh:
-                json.dump({"token": token}, fh)
-                fh.flush()
-                os.fsync(fh.fileno())
+            with erasure_lock(DATA):
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w") as fh:
+                    json.dump({"token": token}, fh)
+                    fh.flush()
+                    os.fsync(fh.fileno())
             return token
 
 
@@ -15657,22 +15805,27 @@ def write_feedback(body):
         e = {"t": time.time(), "id": uuid.uuid4().hex, **e}
         path = os.path.join(DATA, "feedback.jsonl")
         raw = json.dumps(e, ensure_ascii=False) + "\n"
-        if _remote_cache["lines"] >= 5000 or _remote_cache["corrupt"]:
+        rewrite = _remote_cache["lines"] >= 5000 or _remote_cache["corrupt"]
+        if rewrite:
             events = compact_feedback(events + [e], e["t"])
             if len(events) > 5000:
                 raise ValueError("feedback capacity reached")
-            tmp = path + ".tmp"
-            with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
-                for old in events:
-                    fh.write(json.dumps(old, ensure_ascii=False) + "\n")
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, path)
-        else:
-            with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "w") as fh:
-                fh.write(raw)
-                fh.flush()
-                os.fsync(fh.fileno())
+        with household_writable(DATA, household_erased) as allowed:
+            if not allowed:
+                return False
+            if rewrite:
+                tmp = path + ".tmp"
+                with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
+                    for old in events:
+                        fh.write(json.dumps(old, ensure_ascii=False) + "\n")
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp, path)
+            else:
+                with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "w") as fh:
+                    fh.write(raw)
+                    fh.flush()
+                    os.fsync(fh.fileno())
         _remote_cache.clear()
         return e
 
@@ -15727,6 +15880,8 @@ def remote_rows(lang):
 
 
 def remote_send(handler, code, body=b"", content_type="application/json; charset=utf-8"):
+    if household_erased(DATA):
+        code, body = 503, b""
     if isinstance(body, dict):
         body = json.dumps(body, ensure_ascii=False).encode()
     elif isinstance(body, str):
@@ -16211,6 +16366,8 @@ def revoke_client(name):
 
 
 def _api_auth(handler):
+    if household_erased(DATA):
+        return None, 503
     header = handler.headers.get("Authorization")
     if header is None and CONFIG["addon"]["legacy_open"] and os.environ.get("API_LOOPBACK_OPEN") == "1" and loopback(handler):
         return {"name": "loopback", "scopes": ["read", "decide"], "person": None}, None
@@ -16644,6 +16801,8 @@ class RemoteHandler(BaseHTTPRequestHandler):
 
 
 def remote_route(handler, post=False):
+    if household_erased(DATA):
+        return remote_send(handler, 503)
     url = urllib.parse.urlsplit(handler.path)
     parts = url.path.split("/")
     token = parts[2] if len(parts) > 2 else ""
@@ -16989,21 +17148,22 @@ def addon_token(*, rotate=False):
             except FileNotFoundError:
                 pass
         token = secrets.token_urlsafe(32)
-        if rotate:
-            fd, temp = tempfile.mkstemp(prefix=".addon-", dir=DATA)
-        else:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            with os.fdopen(fd, "w") as fh:
-                os.fchmod(fh.fileno(), 0o600)
-                json.dump({"token": token}, fh)
-                fh.flush()
-                os.fsync(fh.fileno())
+        with erasure_lock(DATA):
             if rotate:
-                os.replace(temp, path)
-        finally:
-            if rotate and os.path.exists(temp):
-                os.unlink(temp)
+                fd, temp = tempfile.mkstemp(prefix=".addon-", dir=DATA)
+            else:
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                with os.fdopen(fd, "w") as fh:
+                    os.fchmod(fh.fileno(), 0o600)
+                    json.dump({"token": token}, fh)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                if rotate:
+                    os.replace(temp, path)
+            finally:
+                if rotate and os.path.exists(temp):
+                    os.unlink(temp)
         return token
 
 
@@ -17037,7 +17197,18 @@ class Handler(BaseHTTPRequestHandler):
         refresh_preferences()
         scope = getattr(_scoping, "scope", None)
         no_store = no_store or cors and (kids_age(SCOPES.get(scope)) is not None or scope is None and any(kids_age(p) is not None for p in PEOPLE))
-        raw = re.sub(re.escape(addon_token().encode("ascii")), b"[redacted]",
+        token = addon_token().encode("ascii")
+        if household_erased(DATA):
+            if 'metas' in body:
+                body = {'metas': []}
+            elif 'meta' in body:
+                body = {'meta': None}
+            elif 'catalogs' in body:
+                body = {**body, 'catalogs': []}
+            else:
+                code, body = 503, {}
+            no_store = True
+        raw = re.sub(re.escape(token), b"[redacted]",
                      json.dumps(body, ensure_ascii=False).encode(), flags=re.IGNORECASE)
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -17089,6 +17260,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def route(self, parts, admin):
         refresh_preferences()
+        if household_erased(DATA):
+            if parts and parts[-1] == 'manifest.json':
+                return self.send_json(200, {'id': 'skald', 'version': VERSION, 'name': 'Skald',
+                    'description': 'Run python -m skald setup household on the server.',
+                    'resources': ['catalog'], 'types': ['movie', 'series'], 'catalogs': []}, cors=True, no_store=True)
+            return self.send_json(200, {'metas': []}, cors=True, no_store=True)
         if parts == ["health"]:
             from skald.health import view
             return self.send_json(200, view(DATA) if admin else {"ok": True}, no_store=True)
