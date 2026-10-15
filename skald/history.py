@@ -244,6 +244,8 @@ def _cleanup(s, now, *, apply):
             if not removed:
                 write_private(data / SUMMARY, json.dumps(summary_doc) + '\n')
             write_private(data / name, json.dumps(doc) + '\n')
+    from . import plays
+    plays.purge(data, s.CONFIG, now, apply=apply)
     return {'pruned': sum(map(len, removed.values())), 'summaries': len(folded), 'residual': residual}
 
 
@@ -252,6 +254,19 @@ def cutoffs(data):
         return json.loads((Path(data) / 'history-forgotten.json').read_text())
     except FileNotFoundError:
         return {}
+
+
+def forget_cutoff(before):
+    return dt.datetime.combine(dt.date.fromisoformat(before) + dt.timedelta(days=1),
+                               dt.time(), dt.timezone.utc).timestamp()
+
+
+def forget_action(people, person, at, cutoff):
+    if person not in people:
+        return 'keep'
+    if len(people) == 1:
+        return 'erase'
+    return 'shared' if (at or 0) < cutoff else 'keep'
 
 
 def folded_imports(data):
@@ -293,7 +308,8 @@ def session_windows(data):
     return windows
 
 
-def owners(it, config, person=None, windows=()):
+def owners(it, config, person=None, windows=(), *, data=None, origin=None):
+    from . import plays
     if person:
         return [person]
     if 'history_by' in it:
@@ -301,8 +317,13 @@ def owners(it, config, person=None, windows=()):
     if '_summary' in it:
         by = it['_summary']['by']
         return list(config['household']['members']) if 'together' in by or 'both' in by else by
+    if origin == 'history.json' and plays.managed_config(config, data) and 'who' not in it and 'person' not in it:
+        profile = it.get('profile')
+        if profile in ('household', 'together'):
+            return list(config['household']['members'])
+        return [profile] if profile in config['household']['members'] else []
     if windows and 'who' not in it and 'person' not in it and not (
-            config['history']['source'] in ('aiostreams_db', 'jellyfin', 'plex') and
+            (config['history']['source'] in ('aiostreams_db', 'jellyfin', 'plex', 'none') or 'plays' in config) and
             it.get('profile') in config['household']['members']):
         at = (it.get('at') or 0) / 1000
         match = next((w for w in reversed(windows) if w['t'] <= at < w['until']), None)
@@ -346,7 +367,7 @@ def _forget(data, config, before, person, *, apply):
         for it in items:
             at = dt.datetime.fromisoformat(it['t']).replace(tzinfo=dt.timezone.utc).timestamp() if cid is None else (it.get('at') or 0) / 1000
             people = owners(it, config, owner or (config['household']['trakt_member'] if name == 'trakt.json' else None),
-                            windows if name == 'history.json' else ())
+                            windows if name == 'history.json' else (), data=data, origin=name)
             if at < cutoff and person in people:
                 count['raw'] += 1
                 changed = True
@@ -427,6 +448,8 @@ def _forget(data, config, before, person, *, apply):
         changes[log.name] = ''.join(json.dumps(op) + '\n' for op in ops if op.get('id') not in forgotten_facts)
     if apply:
         from .health import SERVING_CACHES
+        from . import plays
+        plays.purge(data, config, cutoff, person=person, before=before)
         forgotten = cutoffs(data)
         forgotten[person] = max(before, forgotten.get(person, before))
         changes['history-forgotten.json'] = json.dumps(forgotten) + '\n'
@@ -457,11 +480,12 @@ def filter_forgotten(data, config, origin, items, owner=None):
     windows = session_windows(data) if origin == 'history.json' else ()
     kept = []
     for it in items:
-        people = owners(it, config, owner or (config['household']['trakt_member'] if origin == 'trakt.json' else None), windows)
+        people = owners(it, config, owner or (config['household']['trakt_member'] if origin == 'trakt.json' else None), windows, data=data, origin=origin)
         date = it.get('t') if origin == 'imports.jsonl' else (
             dt.datetime.fromtimestamp((it.get('at') or 0) / 1000, dt.timezone.utc).date().isoformat())
         at = dt.datetime.fromisoformat(date).replace(tzinfo=dt.timezone.utc).timestamp() if origin == 'imports.jsonl' else (it.get('at') or 0) / 1000
-        if (len(people) > 1 or set(people) & {'both', 'together', 'household'} or
+        if (len(people) > 1 or 'history_by' not in it and it.get('profile') in ('both', 'together', 'household') or
+                set(people) & {'both', 'together', 'household'} or
                 origin == 'imports.jsonl' and it.get('who') == 'both') and at < seen.get(it.get('key') or it.get('id'), 0):
             continue
         remaining = [p for p in people if p not in forgotten or date >= forgotten[p]]

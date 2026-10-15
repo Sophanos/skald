@@ -23,6 +23,17 @@ Run `docker compose -f compose.stack.example.yaml up -d --build`, then
 `docker compose -f compose.stack.example.yaml exec skald skald setup`.
 Then run `skald setup aiostreams`: it makes your login with Skald and title details, and prints the Odin server, user and password.
 You can also supply `--internal-base http://skald:8080 --watch jellyfin-app`.
+
+`skald plays` explains whether Odin watches are read from the mounted database
+or HTTPS. Auto prefers the database. Without a usable mount, save each person's
+AIOStreams login with `skald setup aiostreams --member NAME` and its public
+address with `--aio-url https://YOUR-AIOSTREAMS-HOST`. Existing logins can be
+linked with `--uuid UUID`; setup asks privately for the password. Then run
+`skald plays check`. Use `skald plays every 15m` to change the interval or
+`skald plays person ben off` to stop reading one person's plays. `live` stays off.
+`skald plays compare --json` reads both paths without writes; see
+[Odin plays](CLI.md#odin-plays) for API fields and IDs that cannot prove parity.
+
 Commands below using `exec engine` describe the Stremio-direct alternative;
 for the recommended stack, use `-f compose.stack.example.yaml exec skald` instead.
 
@@ -381,7 +392,7 @@ looked at each poster or chose the title because of Skald.
 | Player or source | What can feed Skald play events |
 |---|---|
 | Jellyfin clients, including Odin connected to Jellyfin | The `jellyfin` connector reads played state and last-play times. Map users to household members. |
-| Odin connected to AIOStreams in Jellyfin mode | The `aiostreams_db` connector reads AIOStreams watch state through a read-only database mount. A Jellyfin connector can also read a server that exposes and persists this history. The Odin addon installation alone supplies no events. |
+| Odin connected to AIOStreams in Jellyfin mode | `skald plays` prefers a read-only AIOStreams database mount and can fall back to saved per-person HTTPS logins. The Odin addon installation alone supplies no events. |
 | Plex clients | The `plex` connector reads played state. Its configured profile supplies the person; it does not infer separate people from a shared Plex account. |
 | Stremio | The `stremio` connector uses that account's private Stremio connector key and watched library state. Alternatively, AIOStreams watch state or a configured Trakt scrobbling path can supply plays. A Skald addon link or stream request alone supplies none. |
 | Any player that scrobbles to Trakt | The `trakt_api` connector reads the mapped account's history. The `trakt` file connector reads a prepared local Trakt history file. Trakt must actually receive the player's plays. |

@@ -59,7 +59,7 @@ from types import SimpleNamespace
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.4.10"
+VERSION = "1.5.0"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -468,6 +468,8 @@ def validate_config(doc, *, data=None, environ=None):
              not any(ord(c) < 32 for c in addon[key]), "addon." + key)
     validate_addon_config(cfg)
     validate_history_connectors(cfg, need, data, environ)
+    from skald.plays import validate as validate_plays
+    validate_plays(cfg, need)
     ai_prefs = cfg.get('ai', {})
     need(isinstance(ai_prefs, dict) and set(ai_prefs) <= {'credit_warn_fraction', 'credit_warn_usd'}, 'ai')
     for field, default, maximum in (('credit_warn_fraction', .2, 1), ('credit_warn_usd', 1, float('inf'))):
@@ -627,7 +629,7 @@ def public_config(cfg):
     out["taste"]["people"] = {p: {k: v for k, v in traits.items() if k in ("type", "loves", "prefs")}
                                for p, traits in cfg["taste"].get("people", {}).items()}
     out.update(history=cfg["history"], connectors=copy.deepcopy(cfg["connectors"]))
-    for key in ("metrics", "ai", "lab"):
+    for key in ("metrics", "ai", "lab", "plays"):
         if key in cfg:
             out[key] = copy.deepcopy(cfg[key])
     return out
@@ -3689,6 +3691,18 @@ def connector_seeds(now):
             out[cid]["person"] = "both"
             out[cid]["accounts"] = {p: _connector(cid + ":" + p, "api", p, now, auth=auth, disabled=not enabled)
                                     for p, auth in cfg["accounts"].items()}
+    from skald import plays
+    context = SimpleNamespace(**globals())
+    if plays.managed(context):
+        cid = plays.connector_id(context)
+        out[cid] = _connector(cid, "player", "both", now, disabled=plays.settings(CONFIG)['mode'] == 'off')
+        out[cid]['interval'] = plays.settings(CONFIG)['every']
+        out['history']['next_due'] = None
+        out['history']['health']['state'] = 'disabled'
+        for other in ('aiostreams_db', 'jellyfin', 'plex'):
+            if other != cid and other in out:
+                out[other]['next_due'] = None
+                out[other]['health']['state'] = 'disabled'
     return out
 
 
@@ -3712,7 +3726,10 @@ def _connector_clean(cid, c, now):
     if c["kind"] not in ("file_drop", "manual_export", "api", "player", "availability") and c["health"]["state"] != "disabled":
         c["health"] = {"state": "disabled", "error": None, "at": now}
     if c["kind"] in ("api", "player") and c["health"]["state"] != "disabled" and not CONFIG["connectors"].get(cid.split(":")[0], {}).get("enabled"):
-        c["health"] = {"state": "disabled", "error": None, "at": now}
+        from skald import plays
+        context = SimpleNamespace(**globals())
+        if not (c['kind'] == 'player' and plays.managed(context) and cid == plays.connector_id(context) and plays.settings(CONFIG)['mode'] != 'off'):
+            c["health"] = {"state": "disabled", "error": None, "at": now}
     if c["auth"] is not None and (not isinstance(c["auth"], str) or not _CONNECTOR_AUTH.fullmatch(c["auth"])):
         c["auth"] = None
         c["health"] = {"state": "error", "error": "AuthNotReference", "at": now}
@@ -3802,6 +3819,17 @@ def connectors_load(now=None):
                     old["next_due"] = c["next_due"]
                 elif old["health"]["state"] == "disabled" or (cid in CONFIG["connectors"] and old["health"]["error"] == "AuthNotReference"):
                     old.update(health=c["health"], next_due=now)
+        from skald import plays
+        context = SimpleNamespace(**globals())
+        if plays.managed(context):
+            c = rows[plays.connector_id(context)]
+            every = plays.settings(CONFIG)['every']
+            if c['interval'] != every:
+                c['interval'] = every
+                if c['health']['state'] != 'disabled':
+                    c['next_due'] = c['last_sync']+every if c['last_sync'] else now
+            if c['health']['state'] != 'disabled':
+                c['next_due'] = max(c['next_due'] or now, plays.state(context).get('backoff_until', 0))
         with history_locked(DATA), _connectors_lock:
             if erasure != _erasure_generation:
                 return
@@ -3842,6 +3870,11 @@ def forget_connector(person):
 
 
 def connector_next(c, new, now):
+    from skald import plays
+    context = SimpleNamespace(**globals())
+    if c['id'] == plays.connector_id(context) and plays.managed(context):
+        every = plays.settings(CONFIG)['every']
+        return every, now+every
     if c["kind"] == "manual_export":
         return c["interval"], None
     idle = not new and now - (c.get("last_new") or 0) >= CONNECTOR_IDLE_AFTER
@@ -4192,47 +4225,8 @@ BACKFILL_PLAYS = 5
 
 
 def _aiostreams_db(options):
-    configured = CONFIG["connectors"]["aiostreams_db"]["options"]
-    if options != configured or os.path.islink(options["path"]):
-        raise PathMismatch()
-    profiles = {p: name for p, name in options["profiles"].items() if p not in options.get("archived", {})
-                and name not in CONFIG['household'].get('retired', [])}
-    required = {"uuid", "media_type", "base_id", "last_played_at", "played", "kind", "favorite", "duration_ms",
-                "position_ms", "rating", "likes", "dropped", "season", "episode"}
-    uri = "file:" + urllib.parse.quote(options["path"], safe="/") + "?mode=ro"
-    with closing(sqlite3.connect(uri, uri=True, timeout=10)) as con:
-        if not required <= {row[1] for row in con.execute("pragma table_info(watch_state)")}:
-            raise SchemaMismatch()
-        where = " or ".join(["uuid like ?"] * len(profiles)) or "0"
-        rows = con.execute(
-            f"with marked as (select *, sum(case when kind = 'episode' and played = 1 then 1 else 0 end) "
-            f"over (partition by lower(substr(uuid, 1, 8)), cast(last_played_at / 60000 as integer)) as minute_plays "
-            f"from watch_state where ({where})), history as (select *, "
-            f"last_played_at is not null and minute_plays >= ? as backfill from marked) "
-            f"select lower(substr(uuid, 1, 8)), media_type, base_id, "
-            f"max(case when not backfill then last_played_at end), max(played), "
-            f"sum(case when kind = 'episode' and played = 1 then 1 else 0 end), max(favorite), "
-            f"max(case when duration_ms > 0 then 1.0 * position_ms / duration_ms else 0 end), count(*), max(rating), "
-            f"max(likes), max(dropped), "
-            f"max(case when kind = 'episode' and played = 1 then season * 1000 + episode end), "
-            f"max(case when kind = 'episode' and played = 0 and position_ms > 0 then season * 1000 + episode end), "
-            f"max(backfill) from history group by 1, 2, 3 order by 4 desc limit 120",
-            (*tuple(p + "%" for p in profiles), BACKFILL_PLAYS)).fetchall()
-    items = []
-    for prefix, typ, base, at, played, eps, fav, prog, n, rating, likes, dropped, last, resume, backfill in rows:
-        item = {"profile": profiles[prefix], "type": typ, "id": base, "at": at or None, "played": bool(played),
-                "favorite": bool(fav), "progress": round(prog or 0, 2), "entries": n, "rating": rating,
-                "likes": likes, "dropped": bool(dropped)}
-        if backfill:
-            item["backfilled"] = True
-        if typ == "series":
-            item["episodes_played"] = eps or 0
-            if last:
-                item["last_episode"] = [last // 1000, last % 1000]
-            if resume and (not last or resume > last):
-                item["resume_episode"] = [resume // 1000, resume % 1000]
-        items.append(item)
-    return {"items": items}
+    from skald.plays import database
+    return database(SimpleNamespace(**globals()), options)
 
 
 class Unsupported(ValueError):
@@ -4407,11 +4401,25 @@ def _plex(options):
 HISTORY_ADAPTERS = {"aiostreams_db": _aiostreams_db, "jellyfin": _jellyfin, "plex": _plex}
 
 
+def player_history_active():
+    from skald import plays
+    return CONFIG['history']['source'] in HISTORY_ADAPTERS or plays.managed(SimpleNamespace(**globals()))
+
+
 def _connector_player(c, now):
-    source = CONFIG["history"]["source"]
-    doc = HISTORY_ADAPTERS[source](CONFIG["connectors"][c["id"]]["options"])
-    doc['items'] += [it for it in _drop_read('history') if it.get('profile') in CONFIG['household'].get('retired', [])]
-    _connector_write("history", doc)
+    from skald import plays
+    context = SimpleNamespace(**globals())
+    if plays.managed(context) and c['id'] == plays.connector_id(context):
+        result = plays.check(context, now)
+        if result['path'] == 'not connected':
+            return [], c['cursor'], dict(events=c['counts']['events'], error=result.get('error') or 'Unsupported',
+                                         backoff_until=result['backoff_until'])
+        doc = {'items': read_history()}
+    else:
+        source = CONFIG["history"]["source"]
+        doc = HISTORY_ADAPTERS[source](CONFIG["connectors"][c["id"]]["options"])
+        doc['items'] += [it for it in _drop_read('history') if it.get('profile') in CONFIG['household'].get('retired', [])]
+        _connector_write("history", doc)
     events, cursor, stats = _connector_history({**c, "cursor": (c["cursor"] or [0, 0])[0]}, now)
     return events, [cursor, len(doc["items"])], stats
 
@@ -5235,8 +5243,37 @@ def _connector_async(c, now):
     return future.result()
 
 
+def _connector_discard_disabled():
+    global _connector_pending
+    if _connector_pending is not None:
+        data, cid, future = _connector_pending
+        if (data != DATA or _connectors.get(cid, {}).get('health', {}).get('state') == 'disabled' or
+                cid not in _connectors) and (future.cancel() or future.done()):
+            _connector_pending = None
+
+
+def plays_queue_check():
+    global _connectors_generation
+    now = time.time()
+    if _connectors_path != DATA:
+        connectors_load(now)
+    from skald import plays
+    context = SimpleNamespace(**globals())
+    backoff = plays.state(context).get('backoff_until', 0)
+    with _connectors_lock:
+        _connector_discard_disabled()
+        c = _connectors[plays.connector_id(context)]
+        if c['health']['state'] == 'disabled':
+            return
+        c['next_due'] = max(now, backoff)
+        _connectors_generation += 1
+        if _connector_pending is None and c['next_due'] <= now:
+            _connector_async(c, now)
+        return c['next_due']
+
+
 CONNECTOR_POLL = {"history": _connector_history, "trakt": _connector_trakt,
-                  "aiostreams_db": _connector_player, "jellyfin": _connector_player, "plex": _connector_player,
+                  "player": _connector_player, "aiostreams_db": _connector_player, "jellyfin": _connector_player, "plex": _connector_player,
                   "trakt_api": _connector_trakt_api, "mdblist": _connector_mdblist, "stremio": _connector_stremio, "pmdb": _connector_pmdb}
 
 
@@ -5255,10 +5292,14 @@ def poll(c, now):
 
 
 def connectors_demand(now):
+    from skald import plays
+    context = SimpleNamespace(**globals())
     global _connectors_generation
     with _connectors_lock:
         changed = False
         for c in _connectors.values():
+            if plays.managed(context) and c['id'] == plays.connector_id(context):
+                continue
             if c["kind"] not in ("manual_export", "availability") and c["health"]["state"] != "disabled" and (c["last_sync"] is None or now - c["last_sync"] >= CONNECTOR_DEMAND_GAP):
                 if c["next_due"] != now:
                     c["next_due"], changed = now, True
@@ -5287,14 +5328,18 @@ def _connector_imports_stamp():
 
 
 def connectors_tick(now):
+    from skald import plays
     global _connectors_generation, _connector_import_stamp, _connectors_busy
     with history_locked(DATA):
         erasure = _erasure_generation
-    if _connectors_path != DATA:
+    context = SimpleNamespace(**globals())
+    waiting = _connectors.get(plays.connector_id(context), {}).get('health', {}).get('state') == 'disabled'
+    if _connectors_path != DATA or waiting and plays.managed(context) and plays.settings(CONFIG)['mode'] != 'off':
         connectors_load(now)
     with _connectors_lock:
         if _connectors_busy or _connectors_path != DATA:
             return
+        _connector_discard_disabled()
         _connectors_busy = True
         generation = _connectors_generation
         rows = {cid: {**c, "health": dict(c["health"]), "counts": dict(c["counts"])} for cid, c in _connectors.items()}
@@ -6027,7 +6072,7 @@ def build_profile(items, searches, trakt=(), remote=True):
     """Household TV history plus the owner's Trakt history, folded in source precedence order."""
     now = time.time()
     entries, by_key, extra_seen = fold_events(event_stages(now, items, trakt, remote), now)
-    if CONFIG["history"]["source"] in HISTORY_ADAPTERS:
+    if player_history_active():
         extra_seen |= {it["id"] for it in items if (it.get("played") or it.get("episodes_played")) and attribute(it)[0] not in (GUEST, *guest_people(CONFIG))}
     entries.sort(key=lambda e: (-(e["weight"] / (1 + min(e["age"], 365) / 60)), e["age"]))
     genre_w = {}
@@ -6156,7 +6201,7 @@ def taste_hash(name, items):
     now = time.time()
     items = [it for it in items if name != 'household' or attribute(it)[0] in (*member_people(), 'both', 'together')]
     signal = sorted((it['id'], classify(it, now)[0]) for it in items)
-    if CONFIG["history"]["source"] in HISTORY_ADAPTERS:
+    if player_history_active():
         signal.append(sorted((it.get("profile", "household"), it["type"], it["id"], it.get("at") or 0)
                              for it in items))
     from skald.history import read as history_summaries
@@ -6221,7 +6266,7 @@ def refresh_profiles():
             print(f"profile {name}: archived", flush=True)
     for name in active:
         items = [it for it in hist if it.get("profile", "household") == name or
-                 name == "household" and CONFIG["history"]["source"] in HISTORY_ADAPTERS and it.get("profile") in PEOPLE]
+                 name == "household" and player_history_active() and it.get("profile") in PEOPLE]
         h = taste_hash(name, items)
         hashes[name] = h
         guests = set(guest_people(CONFIG)) & set(PEOPLE) if name == 'household' else set()
@@ -14495,6 +14540,7 @@ def refresh_preferences():
     if CONFIG_SOURCE not in ("file", "env"):
         return
     path = os.environ.get("SKALD_CONFIG") or os.path.join(DATA, CONFIG_NAME)
+    plays_before = copy.deepcopy(CONFIG.get('plays'))
     with _home_lock:
         try:
             st = os.stat(path)
@@ -14507,6 +14553,10 @@ def refresh_preferences():
             return
         with open(path, encoding="utf-8") as fh:
             cfg = validate_config(json.load(fh, parse_constant=invalid_json), data=DATA)
+        if 'plays' in cfg:
+            CONFIG['plays'] = cfg['plays']
+        else:
+            CONFIG.pop('plays', None)
         if 'lab' in cfg:
             CONFIG['lab'] = cfg['lab']
         else:
@@ -14572,6 +14622,8 @@ def refresh_preferences():
         _people_settings = {k: copy.deepcopy(cfg['household'].get(k)) for k in _people_settings}
         if '_command_context' in globals():
             command_context()
+    if plays_before != CONFIG.get('plays'):
+        connectors_load(time.time())
 
 
 def row_metas(cid, typ, lang, who=None):
@@ -15040,8 +15092,14 @@ def attribute(it):
     if "_summary" in it:
         e = it["_summary"]
         return e["who"], e["by"], {}
-    if CONFIG["history"]["source"] in HISTORY_ADAPTERS and it.get("profile") in retained_people():
+    if player_history_active() and it.get("profile") in retained_people():
         return it["profile"], [it["profile"]], {}
+    from skald import plays
+    if plays.managed(SimpleNamespace(**globals())):
+        profile = it.get('profile')
+        if profile in ('household', 'together'):
+            return 'together', ['together'], {}
+        return GUEST, [GUEST], {}
     at = it.get("at")
     w = session_at(at / 1000) if at is not None else None
     if not w:

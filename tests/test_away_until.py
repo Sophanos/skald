@@ -23,7 +23,10 @@ class AwayUntil(Household):
         self.enterContext(patch.object(self.s, 'local_now', side_effect=lambda ts=None: self.now))
 
     def plan(self, op='member_away', person='ben', **fields):
-        return c.preview(self.s, '', 'ana', answer=dict(op=op, person=person, **fields))
+        plan = c.preview(self.s, '', 'ana', answer=dict(op=op, person=person, **fields))
+        if plan.get('forget'):
+            plan['source'] = 'cli'
+        return plan
 
     def cli(self, *args):
         out = io.StringIO()
@@ -238,7 +241,7 @@ class AwayUntil(Household):
         self.assertIn('2026-10-15', llm.bodies[0]['messages'][1]['content'])
         c.apply(self.s, plan)
         self.assertEqual(c.config(self.s)['household']['away_until']['ben'], '2026-10-16')
-        self.assertEqual(self.s.DECISIONS['parse_command']['ver'], 17)
+        self.assertEqual(self.s.DECISIONS['parse_command']['ver'], 18)
 
     def test_149_validator_preserves_away_and_ignores_return_date(self):
         c.apply(self.s, self.plan(days=3))

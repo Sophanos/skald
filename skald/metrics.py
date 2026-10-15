@@ -497,6 +497,9 @@ def collect(server, now):
                     (item.get('progress') or 0) >= .25)
 
     history = cfg['history']['source']
+    from .plays import managed
+    if history == 'none' and managed(server):
+        history = 'aiostreams_db'
     if history != 'none' and cfg['connectors'].get('history' if history == 'file' else history, {}).get('enabled', True):
         source = 'history' if history == 'file' else history
         sources.add(source)

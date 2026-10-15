@@ -8,16 +8,212 @@ from unittest.mock import patch
 
 from test_w92_commands import Household
 from decide_kit import ReplayLLM
-from skald import commands as c, leave, members, setup, shelves
+from skald import commands as c, history, leave, members, setup, shelves
 from skald.__main__ import main
 
 
 class Leave(Household):
     def plan(self, op, person='ben', actor='ana'):
-        return c.preview(self.s, 'synthetic change', actor, answer=dict(op=op, person=person))
+        plan = c.preview(self.s, 'synthetic change', actor, answer=dict(op=op, person=person))
+        if plan.get('forget'):
+            plan['source'] = 'cli'
+        return plan
 
     def save(self, name, doc):
         (self.root / name).write_text(json.dumps(doc))
+
+    def test_forget_search_is_read_only_and_yes_cannot_erase(self):
+        plan = c.preview(self.s, '', 'ana', answer=dict(op='member_forget', person='ben'))
+        saved = (self.root/'skald.json').read_bytes()
+        with patch.object(c, 'preview', return_value=plan):
+            card = c.special(self.s, 'Forget Ben', 'movie', routed=True)['metas'][0]
+        self.assertTrue(plan.get('read_only'))
+        self.assertTrue(card['description'].endswith(
+            'To erase, run on the server: python -m skald members forget ben --person ana --yes'))
+        self.assertNotIn('yes ', card['name']+card['description'])
+        self.assertIsNone(c.get_pending(self.s, 'w92'))
+        c.special(self.s, 'yes '+c.confirm_code(plan), 'movie')
+        self.assertEqual((self.root/'skald.json').read_bytes(), saved)
+
+    def test_forget_api_is_read_only_and_cannot_apply_or_set_source(self):
+        req = dict(viewer='ana', client={'name': 'synthetic'}, body={'in': {'query': 'Forget Ben'}})
+        with ReplayLLM(self.s) as llm:
+            llm.arm({'choices': [{'message': {'content': '{"op":"member_forget","person":"ben"}'}}]})
+            plan = c.api_preview(self.s, req)['preview']
+        self.assertTrue(plan.get('read_only'))
+        self.assertTrue(plan['description'].endswith(
+            'To erase, run on the server: python -m skald members forget ben --person ana --yes'))
+        self.assertNotEqual(plan.get('source'), 'cli')
+        self.assertIsNone(c.get_pending(self.s, 'api:synthetic'))
+        saved = (self.root/'skald.json').read_bytes()
+        for body in ({'plan': plan['plan']}, {'plan': plan['plan'], 'source': 'cli'}):
+            with self.subTest(body=body), self.assertRaises(ValueError):
+                c.api_apply(self.s, {**req, 'body': body})
+        with self.assertRaises(ValueError):
+            c.api_preview(self.s, {**req, 'body': {**req['body'], 'source': 'cli'}})
+        self.assertEqual((self.root/'skald.json').read_bytes(), saved)
+
+    def test_forget_without_an_actor_shows_the_adult_placeholder(self):
+        ending = 'To erase, run on the server: python -m skald members forget ben --person ADULT --yes'
+        for surface in ('search', 'api'):
+            with self.subTest(surface=surface), ReplayLLM(self.s) as llm:
+                llm.arm({'choices': [{'message': {'content': '{"op":"member_forget","person":"ben"}'}}]})
+                if surface == 'search':
+                    with patch.object(c, 'context', return_value=('w92', None, 'both')):
+                        card = c.special(self.s, 'Forget Ben', 'movie', routed=True)['metas'][0]
+                    self.assertTrue(card['description'].endswith(ending))
+                    self.assertNotIn('yes ', card['name']+card['description'])
+                else:
+                    plan = c.api_preview(self.s, dict(viewer=None, client={'name': 'synthetic'},
+                        body={'in': {'query': 'Forget Ben'}}))['preview']
+                    self.assertTrue(plan['read_only'])
+                    self.assertTrue(plan['description'].endswith(ending))
+        self.assertIsNone(c.get_pending(self.s, 'w92'))
+        self.assertIsNone(c.get_pending(self.s, 'api:synthetic'))
+        self.assertIn('ben', c.config(self.s)['household']['members'])
+
+    def test_forget_apply_requires_cli_before_touching_data(self):
+        self.save('history.json', {'items': [dict(id='tmdb:990150', type='movie', played=True, at=1000, profile='ben')]})
+        plan = c.preview(self.s, '', 'ana', answer=dict(op='member_forget', person='ben'))
+        saved = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
+        for source in (None, 'search', 'api'):
+            for read_only in (False, True):
+                attempt = {**plan, 'read_only': read_only}
+                attempt.pop('source', None)
+                if source is not None:
+                    attempt['source'] = source
+                with self.subTest(source=source, read_only=read_only):
+                    with self.assertRaises(PermissionError) as caught:
+                        c.apply(self.s, attempt)
+                    self.assertIn('only from the server command line', str(caught.exception))
+                    self.assertEqual(saved, {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
+
+    def test_forget_api_cannot_apply_an_old_writable_plan(self):
+        plan = c.preview(self.s, '', 'ana', answer=dict(op='member_forget', person='ben'))
+        c.pending(self.s)['api:synthetic'] = (self.s.time.time(), plan)
+        with self.assertRaises(PermissionError):
+            c.api_apply(self.s, dict(viewer='ana', client={'name': 'synthetic'}, body={'plan': plan['plan']}))
+        self.assertIn('ben', c.config(self.s)['household']['members'])
+
+    def test_forget_cli_yes_erases_after_preview(self):
+        def run(*flags):
+            out = io.StringIO()
+            self.assertEqual(main(['members', 'forget', 'ben', '--person', 'ana', '--json', *flags], out), 0, out.getvalue())
+            return json.loads(out.getvalue())
+        plan = run()
+        self.assertFalse(plan.get('read_only'))
+        self.assertEqual(plan['source'], 'cli')
+        self.assertIn('ben', c.config(self.s)['household']['members'])
+        self.assertIn('Done', run('--yes')['name'])
+        self.assertNotIn('ben', c.config(self.s)['household']['members'])
+
+    def test_forget_cli_yes_without_an_adult_names_the_missing_flag(self):
+        out = io.StringIO()
+        self.assertEqual(main(['members', 'forget', 'ben', '--json', '--yes'], out), 2)
+        self.assertEqual(json.loads(out.getvalue()), {'error': 'Add --person with the adult who erases'})
+        self.assertIn('ben', c.config(self.s)['household']['members'])
+
+    def test_managed_plays_without_a_member_profile_stay_unowned(self):
+        cfg = c.config(self.s)
+        cfg['plays'] = {'mode': 'off'}
+        setup.publish(self.root, cfg, replace=True)
+        self.s.refresh_preferences()
+        item = dict(id='tmdb:990150', type='movie', played=True, at=1792008000000)
+        (self.root/'sessions.jsonl').write_text(json.dumps(dict(id='synthetic', t=item['at']/1000-10, who='ana'))+'\n')
+        self.save('history-forgotten.json', {'ben': '2026-10-15'})
+        for profile in (None, 'unknown', 'both'):
+            watch = {**item, **({'profile': profile} if profile is not None else {})}
+            with self.subTest(profile=profile):
+                self.assertEqual(self.s.attribute(watch)[:2], (self.s.GUEST, [self.s.GUEST]))
+                self.assertEqual(history.filter_forgotten(self.root, cfg, 'history.json', [watch]), [watch])
+                self.assertEqual(history.owners(watch, cfg, windows=history.session_windows(self.root), data=self.root, origin='history.json'), [])
+                self.assertNotIn('history_by', watch)
+        self.assertEqual(history.owners(item, cfg, data=self.root, origin='imports.jsonl'), ['ana', 'ben'])
+        for profile, expected in (('ana', ['ana']), ('household', ['ana', 'ben']), ('together', ['ana', 'ben'])):
+            with self.subTest(profile=profile):
+                self.assertEqual(history.owners({**item, 'profile': profile}, cfg,
+                    windows=history.session_windows(self.root), data=self.root, origin='history.json'), expected)
+
+    def test_forget_managed_shared_plays_ignores_personal_session(self):
+        cfg = c.config(self.s)
+        cfg['plays'] = {'mode': 'off'}
+        setup.publish(self.root, cfg, replace=True)
+        self.s.refresh_preferences()
+        items = [dict(id='tmdb:'+str(990150+i), type='movie', played=True, at=1000, profile=profile)
+                 for i, profile in enumerate(('household', 'together'))]
+        self.save('history.json', {'items': items})
+        (self.root/'sessions.jsonl').write_text(json.dumps(dict(id='synthetic', t=0, who='ana'))+'\n')
+        for item in items:
+            self.assertEqual(self.s.attribute(item)[:2], ('together', ['together']))
+        plan = self.plan('member_forget')
+        self.assertEqual(plan['forget']['counts']['shared'], {'ana': 2})
+        c.apply(self.s, plan)
+        self.assertEqual(json.loads((self.root/'history.json').read_text())['items'], [])
+        self.assertEqual(set(json.loads((self.root/'history-seen.json').read_text())), {it['id'] for it in items})
+
+    def test_forget_auto_https_shared_play_ignores_personal_session(self):
+        cfg = c.config(self.s)
+        cfg['history']['source'] = 'none'
+        setup.publish(self.root, cfg, replace=True)
+        (self.root/'credentials').mkdir()
+        self.save('credentials/aiostreams.json', {})
+        self.s.refresh_preferences()
+        item = dict(id='tmdb:990152', type='movie', played=True, at=1000, profile='household')
+        self.save('history.json', {'items': [item]})
+        (self.root/'sessions.jsonl').write_text(json.dumps(dict(id='synthetic', t=0, who='ana'))+'\n')
+        self.assertEqual(self.s.attribute(item)[:2], ('together', ['together']))
+        c.apply(self.s, self.plan('member_forget'))
+        self.assertEqual(json.loads((self.root/'history.json').read_text())['items'], [])
+        self.assertIn(item['id'], json.loads((self.root/'history-seen.json').read_text()))
+
+    def test_forget_removes_only_that_persons_plays_switch(self):
+        cfg = c.config(self.s)
+        cfg['plays'] = {'people': {'ana': False, 'ben': False, 'together': True}}
+        setup.publish(self.root, cfg, replace=True)
+        self.s.refresh_preferences()
+        c.apply(self.s, self.plan('member_forget'))
+        loaded, source = members.load_config(str(self.root), {}, readonly=True)
+        self.assertEqual(source, 'file')
+        self.assertEqual(loaded['plays'], {'people': {'ana': False, 'together': True}})
+        self.assertNotIn('ben', self.s.PEOPLE)
+
+    def test_moved_out_away_back_and_undo_keep_plays_switch_loadable(self):
+        cfg = c.config(self.s)
+        cfg['plays'] = {'people': {'ben': False}}
+        setup.publish(self.root, cfg, replace=True)
+        self.s.refresh_preferences()
+        for ops in (('member_remove',), ('member_away', 'member_back')):
+            for op in ops:
+                c.apply(self.s, self.plan(op))
+                loaded, source = members.load_config(str(self.root), {}, readonly=True)
+                self.assertEqual(source, 'file')
+                self.assertEqual(loaded['plays'], cfg['plays'])
+            for _ in ops:
+                c.undo(self.s, ['ana'])
+                loaded, source = members.load_config(str(self.root), {}, readonly=True)
+                self.assertEqual(source, 'file')
+                self.assertEqual(loaded['plays'], cfg['plays'])
+            self.assertEqual(c.config(self.s), cfg)
+
+    def test_guest_expiry_and_undo_keep_plays_switch_loadable(self):
+        now = dt.datetime(2026, 10, 15, 12)
+        with patch.object(self.s, 'local_now', side_effect=lambda ts=None: now):
+            c.apply(self.s, c.preview(self.s, '', 'ana', answer=dict(op='member_create', person='kim', label='Kim', guest=True, days=1)))
+            cfg = c.config(self.s)
+            cfg['plays'] = {'people': {'kim': False}}
+            setup.publish(self.root, cfg, replace=True)
+            self.s.refresh_preferences()
+            now += dt.timedelta(days=2)
+            c.expire(self.s)
+            self.assertNotIn('kim', self.s.PEOPLE)
+            loaded, source = members.load_config(str(self.root), {}, readonly=True)
+            self.assertEqual(source, 'file')
+            self.assertEqual(loaded['plays'], cfg['plays'])
+            c.undo(self.s, ['ana'])
+            loaded, source = members.load_config(str(self.root), {}, readonly=True)
+            self.assertEqual(source, 'file')
+            self.assertEqual(loaded['plays'], cfg['plays'])
+            self.assertIn('kim', self.s.PEOPLE)
 
     def test_guest_removal_and_erasure_clear_end_dates_and_timed_shelves(self):
         s = self.s
@@ -429,7 +625,8 @@ class Leave(Household):
             for text in ('Ben moved out', 'We broke up, remove Ben', 'Ben passed away'):
                 llm.arm({'choices': [{'message': {'content': '{"op":"member_remove","person":"ben"}'}}]})
                 plan = c.preview(self.s, text, 'ana')
-                self.assertIn('say "forget Ben"', plan['description'])
+                self.assertTrue(plan['description'].endswith(
+                    'To also erase their history, preview it on the server: python -m skald members forget ben --person ana'))
                 self.assertEqual(plan['name'], 'Remove member Ben')
         self.assertNotIn('retired', c.config(self.s)['household'])
 
@@ -519,7 +716,7 @@ class Leave(Household):
         c.apply(self.s, plan)
         self.assertEqual(self.s.read_feedback()[0]['who'], 'ana')
 
-    def test_model_knows_removed_people_and_preview_then_yes(self):
+    def test_model_knows_removed_people_and_forget_stays_a_preview(self):
         s = self.s
         c.apply(s, self.plan('member_remove'))
         with ReplayLLM(s) as llm:
@@ -528,9 +725,11 @@ class Leave(Household):
             self.assertIn('"id": "ben"', llm.bodies[0]['messages'][1]['content'])
         self.assertIn('cannot be undone', card['metas'][0]['description'])
         self.assertIn('ben', c.config(s)['household']['members'])
-        plan = c.get_pending(s, 'w92')
-        c.special(s, 'yes '+c.confirm_code(plan), 'movie')
-        self.assertNotIn('ben', c.config(s)['household']['members'])
+        self.assertTrue(card['metas'][0]['description'].endswith(
+            'To erase, run on the server: python -m skald members forget ben --person ana --yes'))
+        self.assertIsNone(c.get_pending(s, 'w92'))
+        c.special(s, 'yes 42', 'movie')
+        self.assertIn('ben', c.config(s)['household']['members'])
 
     def test_shared_sync_cannot_reteach_but_own_rating_and_later_watch_can(self):
         items = [dict(id='tmdb:990021', type='movie', title='Invented Past', played=True, at=1000, history_by=['together'])]

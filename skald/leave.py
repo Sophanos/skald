@@ -1,10 +1,11 @@
 """Permanent person erasure, shared by Commander and the agent CLI."""
+import copy
 import datetime as dt
 import hashlib
 import json
 from pathlib import Path
 
-from . import history, metrics, shelves
+from . import history, metrics, plays, shelves
 from .intake import write_private
 
 
@@ -21,6 +22,7 @@ def settings(cfg, person):
         if 'accounts' not in connector:
             cfg['connectors'].pop('trakt_api', None)
     cfg['taste']['people'].pop(person, None)
+    cfg.get('plays', {}).get('people', {}).pop(person, None)
     for cid, connector in list(cfg['connectors'].items()):
         connector.get('accounts', {}).pop(person, None)
         if 'accounts' in connector and not connector['accounts']:
@@ -66,7 +68,8 @@ def prepare(s, cfg, person, before):
                   shared={p: 0 for p in s.PEOPLE if p != person})
     seen = history.seen_watches(data)
     windows = history.session_windows(data)
-    cutoff = dt.datetime.combine(dt.date.fromisoformat(before) + dt.timedelta(days=1), dt.time(), dt.timezone.utc).timestamp()
+    cutoff = history.forget_cutoff(before)
+    counted_history = set()
 
     def save(name, doc):
         changes[name] = json.dumps(doc, ensure_ascii=False) + '\n'
@@ -76,19 +79,24 @@ def prepare(s, cfg, person, before):
         for row in rows:
             by = row.get('by')
             people = history.owners({'history_by': by}, cfg) if by is not None else history.owners(
-                row, cfg, owner, windows if origin == 'history.json' else ())
+                row, cfg, owner, windows if origin == 'history.json' else (), data=data, origin=origin)
             if set(people) & {'together', 'both', 'household'}:
                 people = cfg['household']['members']
             at = history.month_time(row['month']) if row.get('month') else (
                 dt.datetime.fromisoformat(row['t']).replace(tzinfo=dt.timezone.utc).timestamp()
                 if isinstance(row.get('t'), str) else row.get('t', (row.get('at') or 0) / 1000))
-            shared = person in people and len(people) > 1 and (at or 0) < cutoff
-            if person in people and (len(people) == 1 or shared):
-                counts[field] += 1
+            action = history.forget_action(people, person, at, cutoff)
+            if action != 'keep':
+                key = (row.get('profile', 'household'), row.get('type'), row.get('id'))
+                counted = origin != 'plays.json' or key not in counted_history
+                if counted:
+                    counts[field] += 1
+                if origin in ('history.json', 'plays.json'):
+                    counted_history.add(key)
                 removed.append(row)
-                if shared:
+                if action == 'shared':
                     for p in counts['shared']:
-                        if p in people:
+                        if p in people and counted:
                             counts['shared'][p] += 1
                     key = row.get('key') or row.get('id')
                     if isinstance(key, str):
@@ -119,6 +127,14 @@ def prepare(s, cfg, person, before):
             else:
                 doc['items'] = kept
                 save(name, doc)
+    cached = plays.state(s)
+    rows = [(r['person'], r['row']) for r in cached.get('records', [])]
+    rows += [(who, row) for who, account in cached.get('https', {}).items() for row in account.get('rows', [])]
+    evidence([dict(profile='household' if who == 'together' else who, type=row[1], id=row[2], at=row[3])
+              for who, row in rows], None, 'history', 'plays.json')
+    cleaned = plays.prune_cache(data, cfg, copy.deepcopy(cached), s.time.time(), person=person, before=before)
+    if cleaned != cached:
+        save('plays.json', cleaned)
     path = data / history.SUMMARY
     if path.exists():
         doc = json.loads(path.read_text())
@@ -256,7 +272,7 @@ def apply(s, plan):
     from . import commands as c
     from .backup import before_people
     from .setup import publish
-    with shelves.locked(s), history.locked(s.DATA):
+    with shelves.locked(s), history.locked(s.DATA), plays._request_lock:
         s.refresh_preferences()
         cfg = c.config(s)
         person = plan['member']['name']

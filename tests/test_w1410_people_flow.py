@@ -18,6 +18,8 @@ class PeopleFlow(Household):
 
         def change(op, **fields):
             plan = c.preview(s, '', 'ana', answer=dict(op=op, **fields))
+            if plan.get('forget'):
+                plan['source'] = 'cli'
             c.apply(s, plan)
             return plan
 

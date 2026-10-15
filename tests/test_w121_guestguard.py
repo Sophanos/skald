@@ -27,13 +27,15 @@ HOUSEHOLD = {
     'member_until': dict(person='marko'),
     'reattribute': dict(person='ben', values=['Invented River']),
     'member_forget': dict(person='ben'), 'member_away': dict(person='ben'), 'member_back': dict(person='ben'),
+    'plays_mode': dict(values=['off']), 'plays_every': dict(values=['1h']),
 }
 READ = {'settings', 'history', 'shelf_list', 'ask', 'search', 'explain', 'taste_drivers',
-        'home_reach', 'home_plan', 'ai_status', 'week_picks', 'row_names', 'lab_status', 'lab_moments'}
+        'home_reach', 'home_plan', 'ai_status', 'week_picks', 'row_names', 'lab_status', 'lab_moments',
+        'plays_status', 'plays_recent', 'plays_explain', 'plays_check'}
 OWN = {'hide', 'show', 'exclude_genre', 'include_genre', 'focus', 'unfocus', 'discovery', 'years',
        'like', 'dislike', 'seen', 'less', 'more', 'runtime', 'kids_age', 'undo', 'redo', 'reset', 'shelf_add',
        'shelf_stop', 'shelf_count', 'plan', 'correct', 'wish', 'shelf_filter', 'shelf_schedule',
-       'defer', 'reject', 'ignore_learning', 'like_results', 'shelf_from_results'}
+       'defer', 'reject', 'ignore_learning', 'like_results', 'shelf_from_results', 'plays_person'}
 
 
 class GuestGuard(SettingsFixture):

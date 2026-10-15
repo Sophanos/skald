@@ -4,6 +4,16 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.5.0
+
+Odin plays teach each person separately. Skald reads what everyone plays in Odin from the mounted AIOStreams database, as before, or, when no database is mounted, over HTTPS with each person's own AIOStreams login (`skald setup aiostreams --member NAME`). Each login belongs to exactly one person; a login that belongs to no one or to two people is skipped and listed by its first eight characters (`skald connectors mappings`). A play is counted once, also when Skald switches between the two paths or when a burst of episodes arrives at once.
+`skald plays` shows which path is in use and why, the last and next check (every 15 minutes by default; `plays every 5m` up to `6h`) and new plays per person. `plays mode auto` prefers the database and falls back to HTTPS (`db`, `https` and `off` also work). `plays person ben off` stops reading one person, `plays check` reads once now, and `plays compare` reads both paths and lists the differences without writing anything. In search, ask "is Skald seeing what I watch?", "what did I watch this week?" or "why did you count Dune as watched?"; `plays recent` and `plays why` answer the same in the CLI. Adults see their own plays plus Together; children, guests and away people see only their own. "Read my Odin watches now" checks within a minute, at most once every two minutes per household.
+Over HTTPS, AIOStreams turns ratings into likes, leaves out dropped titles and returns at most 500 played items. A read that reaches that limit keeps the last good result instead of losing plays. `plays compare --json` shows where the two paths differ.
+Erasing a person now runs only from the server command line. Skald has no passwords of its own: it knows who is asking from the link, the Odin profile or the "who's watching" choice on the phone page, so a child could pick an adult there and confirm "forget Ben" in search. Search still shows what would be erased and ends with the command to run, for example `python -m skald members forget ben --person ana`. Moving out, away, back, guests and undo work from search as before.
+Forgetting a person also removes their plays switch and their plays from the plays cache.
+
+**Data changes:** none to the data format (FORMAT stays 5); no migration. New optional fields and files that 1.4.10 ignores: a `plays` object in `skald.json` (mode, interval, per-person switches) and a private `plays.json` cache. Rolling back to 1.4.10 needs no restore: plays are read from the database mount only, logins saved for HTTPS stay unused, and forget works from search again.
+
 ## 1.4.10
 
 People: add anyone by name, by role or both ("Add my mother Vesna", "Add Vesna", "Add Kim, she is 12", "Meine Mutter Vesna wohnt jetzt bei uns", "Dodaj mamu Vesnu"). Skald asks only for what is missing: a name, or a child's age. A title search typed while it waits for the answer still works as a search.

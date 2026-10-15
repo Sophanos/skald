@@ -85,7 +85,7 @@ def aiostreams_access_key(path):
 
 def test(s, name=None, *, transport=None, now=None, show=False):
     now = time.time() if now is None else now
-    name = {'trakt': 'trakt_api', 'aiostreams-db': 'aiostreams_db'}.get(name, name)
+    name = {'trakt': 'trakt_api', 'aiostreams-db': 'aiostreams_db', 'aiostreams': 'aiostreams_db'}.get(name, name)
     configured = s.CONFIG['connectors']
     if name and name not in configured:
         raise ValueError('connector is not configured; run skald setup --connect ' + name.removesuffix('_api'))

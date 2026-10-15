@@ -79,6 +79,25 @@ def parser():
 
     from . import setup
     setup.add_parser(commands)
+    plays = commands.add_parser('plays', help='read Odin plays and choose database or HTTPS')
+    plays.add_argument('--json', action='store_true', default=argparse.SUPPRESS, help='print JSON')
+    actions = plays.add_subparsers(dest='plays_action', help='Odin plays operation')
+    for op in ('mode', 'every', 'person', 'check', 'compare', 'recent', 'why'):
+        action = actions.add_parser(op, help='Odin plays '+op)
+        action.add_argument('--json', action='store_true', default=argparse.SUPPRESS, help='print JSON')
+        if op == 'mode':
+            action.add_argument('value', choices=('auto', 'db', 'https', 'off'), help='path selection mode')
+        elif op == 'every':
+            action.add_argument('value', help='5m to 6h, default 15m')
+        elif op == 'person':
+            action.add_argument('name', help='member name or together')
+            action.add_argument('value', choices=('on', 'off'), help='whether to read this person')
+        elif op in ('recent', 'why'):
+            action.add_argument('--person', required=True, choices=PEOPLE)
+            if op == 'recent':
+                action.add_argument('--limit', type=int, default=20, help='1 to 120 plays, default 20')
+            else:
+                action.add_argument('title', help='saved title or title id')
     ai = commands.add_parser('ai', help='show saved AI credit and spending').add_subparsers(dest='ai_action', required=True)
     status = ai.add_parser('status', help='show saved credit; --refresh checks OpenRouter once')
     status.add_argument('--refresh', action='store_true', help='check OpenRouter now')
@@ -220,6 +239,8 @@ def parser():
     connector = cmd(commands, "connectors")
     person(connector)
     probes = connector.add_subparsers(dest="connector_action")
+    mapping = probes.add_parser('mappings', help='show Odin login prefixes and person mappings')
+    mapping.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
     probe = probes.add_parser("test", help="read-only live connector check")
     probe.add_argument("name", nargs="?")
     probe.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
@@ -1035,6 +1056,35 @@ def main(argv=None, out=None):
                 if not data["suggestions"]:
                     print("No suggestions.", file=out)
             return 0
+        if args.command == 'plays':
+            from . import plays, setup
+            if args.live or args.snapshot:
+                raise ValueError('plays uses local DATA_DIR; omit --snapshot and --live')
+            with setup.server(Path(os.environ.get('DATA_DIR', '/data'))) as s, redirect_stdout(io.StringIO()):
+                s.require_config(s.CONFIG_SOURCE, s.CONFIG_ERROR)
+                if args.plays_action in ('mode', 'every', 'person'):
+                    data = plays.change(s, args.plays_action, args.value, getattr(args, 'name', None))
+                elif args.plays_action == 'check':
+                    data = plays.check(s)
+                elif args.plays_action == 'compare':
+                    data = plays.compare(s)
+                elif args.plays_action == 'recent':
+                    data = plays.recent(s, args.person, args.limit)
+                elif args.plays_action == 'why':
+                    data = plays.explain(s, args.person, args.title)
+                else:
+                    data = plays.status(s)
+            print(json.dumps(data, ensure_ascii=False) if args.json else plays.text(data), file=out)
+            return 0
+        if args.command == 'connectors' and args.connector_action == 'mappings':
+            from . import plays, setup
+            if args.live or args.snapshot:
+                raise ValueError('mappings uses local DATA_DIR; omit --snapshot and --live')
+            with setup.server(Path(os.environ.get('DATA_DIR', '/data'))) as s, redirect_stdout(io.StringIO()):
+                s.require_config(s.CONFIG_SOURCE, s.CONFIG_ERROR)
+                data = plays.mappings(s)
+            print(json.dumps(data) if args.json else plays.text(data), file=out)
+            return 0
         if args.command == "shelf":
             if args.live or args.snapshot:
                 raise ValueError("shelf uses local DATA_DIR; omit --snapshot and --live")
@@ -1188,6 +1238,8 @@ def main(argv=None, out=None):
                         data['source'] = 'cli'
                     if args.plan and args.plan != data.get("plan"):
                         raise ValueError("Plan changed; preview again")
+                    if (args.yes or args.plan) and data.get('forget') and data.get('read_only'):
+                        raise ValueError('Add --person with the adult who erases')
                     if args.yes or args.plan:
                         data = commands.apply(s, data)
             if args.command == 'members' and args.members_action == 'list' and not args.json:

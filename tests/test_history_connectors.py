@@ -712,7 +712,11 @@ class HistoryConnectors(unittest.TestCase):
         self.assertFalse(any(it['profile']=='retired' for it in items))
         self.assertNotIn('resume_episode', items[2])
         stamp = (self.data/'history.json').stat().st_mtime_ns
-        with patch.object(self.s.os, 'replace', side_effect=AssertionError('unchanged output rewritten')):
+        replace = os.replace
+        def keep_history(source, target):
+            self.assertNotEqual(Path(target), self.data/'history.json', 'unchanged history rewritten')
+            return replace(source, target)
+        with patch.object(self.s.os, 'replace', side_effect=keep_history):
             self.s.poll(c, NOW+1)
         self.assertEqual((self.data/'history.json').stat().st_mtime_ns, stamp)
         self.assertEqual(stat.S_IMODE((self.data/'history.json').stat().st_mode), 0o644)

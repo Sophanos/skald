@@ -71,7 +71,7 @@ class Household(unittest.TestCase):
 class Registry(unittest.TestCase):
     def test_new_ops_append_and_prompt_names_them(self):
         old = c.OPS[:c.OPS.index('search') + 1]
-        self.assertEqual(c.OPS, (*old, *NEW_OPS, 'like_results', 'shelf_from_results', 'taste_drivers', 'home_reach', 'home_plan', 'home_more', 'home_fewer', 'row_refresh', 'ai_status', 'week_picks', 'row_names', 'lab_status', 'lab_moments', 'lab_keep', 'lab_retire', 'lab_on', 'lab_off', 'row_lang', 'ai_budget', 'member_forget', 'member_away', 'member_back'))
+        self.assertEqual(c.OPS, (*old, *NEW_OPS, 'like_results', 'shelf_from_results', 'taste_drivers', 'home_reach', 'home_plan', 'home_more', 'home_fewer', 'row_refresh', 'ai_status', 'week_picks', 'row_names', 'lab_status', 'lab_moments', 'lab_keep', 'lab_retire', 'lab_on', 'lab_off', 'row_lang', 'ai_budget', 'member_forget', 'member_away', 'member_back', 'plays_status', 'plays_recent', 'plays_mode', 'plays_every', 'plays_person', 'plays_check', 'plays_explain'))
         self.assertIn('until', c.OUT)
         self.assertIn('reason', c.OUT)
         specs = {}
@@ -79,7 +79,7 @@ class Registry(unittest.TestCase):
                             PICK_MODEL='fixture', DAY=86400, route_norm=lambda x: x,
                             decision=lambda name, **spec: specs.update({name: spec}))
         c.register(s)
-        self.assertEqual(specs['parse_command']['ver'], 17)
+        self.assertEqual(specs['parse_command']['ver'], 18)
         prompt = c.command_prompt(s)
         for op in NEW_OPS:
             self.assertIn(op + ' ', prompt)

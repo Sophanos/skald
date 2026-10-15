@@ -203,7 +203,7 @@ No extra app needed: the search field in Odin or Stremio finds titles, teaches S
 | "Ben watched Arrival, not me" | Moves the watch, and the taste, to Ben. |
 | "hide anime for Ana" | Changes Ana's rows. |
 
-Every change shows a card with a `yes NN` code: type it to apply, `undo` to take it back, except permanent forgetting. Plain titles like "Dune" search as usual.
+Changes show a card with a `yes NN` code: type it to apply, `undo` to take it back. "Forget Ben" only previews erasure and shows the command. Erase runs only from the server command line: `python -m skald members forget ben --person ana`. It cannot be undone. Plain titles like "Dune" search as usual.
 Commands work in English, German and Serbian at the same time, with no language switch. AI requests and new shelves need OpenRouter. [Everything you can type](docs/SEARCH.md).
 
 ## Your data

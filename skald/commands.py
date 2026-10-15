@@ -31,10 +31,10 @@ REGISTRY = {
     'plan': _op('plan', hint='plan is one sentence with several changes, kind null values [] steps [{op,kind,values,person}] in spoken order; steps use the change ops above.'),
     'correct': _op('correct', hint='correct fixes the change just made: "no, I meant Ben" person ben values []; "not horror, thriller" values [horror,thriller]. Defer, reject, already seen and why questions are not correct.'),
     'ask': _op('ask', kids=True, hint='ask is a requested change with an unclear detail, kind null values [] person null, slot change/person/title/scope/date/schedule, question one short question: "Mach es für sie weniger gruselig" slot person; "Maybe hide some of those?" slot change.'),
-    'wish': _op('wish', kids=True, hint='wish is a hope about what the picks contain, values [X], person only if named: "I wish there were more gentle mysteries" values [gentle mysteries]. Polite or indirect requests for concrete supported actions (a shelf or catalog, a Get Ready plan, people changes) use those actions, even when phrased as hopes. Direct requests like more comedy are changes.'),
+    'wish': _op('wish', kids=True, hint='wish is a hope about what the picks contain (I wish, ich wünschte, volela bih, it would be nice), values [X], person only if named: "I wish there were more gentle mysteries" values [gentle mysteries]. Polite or indirect requests for concrete supported actions (a shelf or catalog, a Get Ready plan, people changes) use those actions, even when phrased as hopes. Direct requests like more comedy are changes.'),
     'shelf_filter': _op('rule', kids=True, hint='shelf_filter values [shelf name], filters {kind,runtime,years,languages,exclude_genres,hide} with only stated keys.'),
     'shelf_schedule': _op('rule', kids=True, hint='shelf_schedule is a shelf in some months only, values [theme], months [1..12].'),
-    'member_create': _op('member', hint='member_create adds any relationship with a name, or just a name: "Add my mother Vesna" and "Add Vesna" person vesna label Vesna guest false. "Add Kim to the household, she is 12" person kim label Kim role child age 12. "Add my best friend Marko as a guest for 3 days" person marko guest true label Marko days 3. Optional guest end: days 1..30 or until YYYY-MM-DD, inclusive through that local day. Resolve relative dates from the supplied local date. Always put the resolved new name in label, resolving grammatical endings in any language. Infer guest from meaning in any language: visiting, staying briefly or only sometimes means guest true; living with us or moving in means guest false, the default. Without a resolved name use ask slot person new_person true, one short question about what to call them; the reply becomes label, even Mama. Never invent names or store pronouns or relationship words unless explicitly given as the name. Mark every child with role child. Every child needs an age, including every child in a multi-person plan: "Add my son Leo, he is 7" person leo label Leo role child age 7 guest false; without age use ask slot age new_person true, naming that child in one question before adding anyone. Several people use plan with one member_create step each, carrying label, guest, role, any age and each guest end. Optional own_row true only when asked for their own Home row.'),
+    'member_create': _op('member', hint='member_create adds any relationship with a name, or just a name: "Add my mother Vesna" and "Add Vesna" person vesna label Vesna guest false. "Add Kim to the household, she is 12" or "Add a household member named Kim, age 12" person kim label Kim role child age 12. "Add my best friend Marko as a guest for 3 days" person marko guest true label Marko days 3. Optional guest end: days 1..30 or until YYYY-MM-DD, inclusive through that local day. Resolve relative dates from the supplied local date. Always put the resolved new name in label, resolving grammatical endings in any language. Infer guest from meaning in any language: visiting, staying briefly or only sometimes means guest true; living with us or moving in means guest false, the default. Without a resolved name use ask slot person new_person true, one short question about what to call them; the reply becomes label, even Mama. Never invent names or store pronouns or relationship words unless explicitly given as the name. Mark every child with role child. Every child needs an age, including every child in a multi-person plan: "Add my son Leo, he is 7" person leo label Leo role child age 7 guest false; without age use ask slot age new_person true, naming that child in one question before adding anyone. Several people use plan with one member_create step each, carrying label, guest, role, any age and each guest end. Optional own_row true only when asked for their own Home row.'),
     'member_update': _op('member', hint='member_update person existing member, age or label: "Update Ben to age 13" person ben age 13; "rename Ana to Anja" person ana label Anja; "Ändere Anas Anzeigenamen zu Kim" person ana label Kim. Rename the shared Together row with person together label: "rename the together row to Anja & Ben" label Anja & Ben; "nenne gemeinsam um in Wir zwei" label Wir zwei; "preimenuj zajednički red u Nas dvoje" label Nas dvoje. Titles like New Member are op null.'),
     'member_remove': _op('member', hint='member_remove removes a named person from the household, person their id, values []: "Remove Ben from the household", "Entferne Ben", "Ukloni Bena". Moving out, breaking up or passing away also uses member_remove: "Lena moved out", "We broke up, remove Lena", "Mama passed away", "Lena ist ausgezogen", "Lena se iselila". Keep the response neutral. Pronouns require a clear person in last context; otherwise ask slot person. Goodbye Ben and hide Marko the movie are title searches, never member_remove. Remove Ben\'s comedy shelf is shelf_stop person ben values [comedy].'),
     'member_rows': _op('member', hint='member_rows changes one existing person\'s own Home row, person their resolved id, own_row true or false, values []: "Give Kim her own row" own_row true; "remove Kim\'s row" own_row false; "Gib Kim eine eigene Reihe"; "Ukloni Kimin red". Unresolved pronouns are ask slot person. Creating or updating a guest never adds a row implicitly.'),
@@ -92,6 +92,13 @@ REGISTRY.update({
     'member_forget': _op('member', hint='member_forget permanently forgets a named adult, removing them too if active, person their id, kind null values []: "Forget Lena", "remove Lena and forget her", "Vergiss Lena", "Zaboravi Lenu". One op, never a plan. A title called Forget Lena is a search.'),
     'member_away': _op('member', hint='member_away pauses a named adult, person their id, kind null values []: "Ben is away for a while", "Ben rents a flat for a few months", "pause Ben", "Ben ist eine Weile weg", "Ben je odsutan neko vreme". Optional days 1..30 from today or until YYYY-MM-DD. until is the last day away, exactly the day the user names; never add a day to it. Skald brings them back automatically the next local day. Resolve dates from the supplied local today: "Ben is away until 1 November", "Ben ist bis Ende des Monats weg", "Ben je odsutan do petka", "pause Ben for two weeks" days 14. Without a stated end, omit both date fields. Changing an already away adult\'s end uses the same op. Infer meaning in any language, including typos and indirect wording. A title called Ben Is Away or Until Ben Returns is a search.'),
     'member_back': _op('member', hint='member_back ends a named adult\'s absence, person their id, kind null values []: "Ben is back", "Ben ist zurück", "Ben se vratio". A title called Ben Is Back is a search.'),
+    'plays_status': _op('plays', kids=True, scope='read', hint='plays_status reads whether Skald sees Odin watches, connection path and checks; kind null values [] person null. Questions about watching being recorded are status, never a setting change.'),
+    'plays_recent': _op('plays', kids=True, scope='read', hint='plays_recent reads the viewer\'s watched titles in the past week, including shared watches they joined; kind null values [] person null. It is about what I watched, not new weekly recommendations.'),
+    'plays_mode': _op('plays', scope='household', hint='plays_mode changes Odin watch reading; kind null values [auto/db/https/off] person null. Auto prefers the mounted database and falls back to HTTPS. Disabling watch reading is off.'),
+    'plays_every': _op('plays', scope='household', hint='plays_every changes how often Odin watches are read; kind null values [duration such as 5m,15m,1h,6h] person null. Use m for minutes and h for hours.'),
+    'plays_person': _op('plays', hint='plays_person switches reading watches for one member; kind null values [on/off], person the named member or null for the viewer. It changes collection, not who can see history.'),
+    'plays_check': _op('plays', kids=True, scope='read', hint='plays_check asks to read Odin watches now; kind null values [] person null. Requests for an immediate watch sync use this op; reading connection status uses plays_status. A title named Invented Watch Check is a search, never a command.'),
+    'plays_explain': _op('plays', kids=True, scope='read', hint='plays_explain explains why one title was counted as watched, with login prefix, db or https path, time and backfill; changes nothing. kind null values [title] person null. "why did you count Invented Lantern as watched?", "warum zählt Erfundene Laterne als gesehen?", "zašto se Izmišljeni fenjer računa kao gledan?" use this op. Asking why a recommendation appears is explain; a title search is not a command.'),
 })
 OPS = tuple(REGISTRY)
 BASE = ('op', 'kind', 'values', 'person')
@@ -776,7 +783,7 @@ def register(s):
         body = request(batch[0], fallback_model, fallback_effort)
         body['max_tokens'] = 1200
         return body
-    s.decision('parse_command', ver=17, lane='search', cap=None, ttl=30*s.DAY,
+    s.decision('parse_command', ver=18, lane='search', cap=None, ttl=30*s.DAY,
         inp={'query': str, 'last': (str, None), 'shown': (str, [str, 30], None), 'rows': ([{'id': str, 'label': str}, 100], None),
              'people': ([{'id': str, 'label': str}, 100], None), 'today': (str, None), 'last_row_action': ({'id': str, 'action': str, 'at': float}, None)}, out=OUT,
         norm=lambda inp: {**s.route_norm(inp), **{k: inp[k] for k in ('rows', 'people', 'today', 'last_row_action') if inp.get(k) is not None}}, rule=rule, params={},
@@ -1378,7 +1385,8 @@ def member_preview(s, text, change, viewer, bound, *, base=None):
     if (change['op'] == 'member_update' and age is None and label is not None and target in s.PEOPLE
             and s.kids_age(target) is None and bound not in (*s.PEOPLE, s.GUEST) and viewer not in (*s.PEOPLE, s.GUEST)):
         viewer = target
-    actor = people(s, viewer=viewer, bound=bound)[0]
+    actor = (None if op == 'member_forget' and bound in (None, 'both', 'together') and viewer in (None, 'both', 'together')
+             else people(s, viewer=viewer, bound=bound)[0])
     if actor in guest_people(cfg):
         raise PermissionError('Ask a household member to change people')
     if op == 'member_until':
@@ -1496,6 +1504,7 @@ def member_preview(s, text, change, viewer, bound, *, base=None):
     title = ('Remove ' if op == 'member_remove' else 'Add ' if op == 'member_create' else 'Update ')+('guest ' if name in hh.get('guests', []) else 'member ')+('Together' if name == 'pair' else s.LABELS.get(name, name.title()))
     if op in ('member_away', 'member_back', 'member_forget'):
         title = {'member_away': 'Pause ', 'member_back': 'Bring back ', 'member_forget': 'Forget '}[op]+s.LABELS[name]
+    erase = 'To erase, run on the server: python -m skald members forget '+name+' --person '+(actor or 'ADULT')+' --yes'
     description = ''
     if op == 'member_remove':
         wishes = member_shelves(s, name)
@@ -1513,16 +1522,17 @@ def member_preview(s, text, change, viewer, bound, *, base=None):
             'Connector links: '+('; '.join(links) or 'none'),
             'Retired row ids: '+', '.join(retired),
             'Evidence, history, imports and shelves stay saved; forget is a separate command.',
-            'To also delete their history, say "forget '+s.LABELS[name]+'".'])
+            'To also erase their history, preview it on the server: python -m skald members forget '+name+' --person '+(actor or 'ADULT')])
     elif forgotten:
         description = '\n'.join([str(n)+' '+key+' deleted' for key, n in forgotten['counts'].items() if key != 'shared'] +
             [str(n)+' shared watches stop teaching '+s.LABELS[p] for p, n in forgotten['counts']['shared'].items()] +
-            ['Shared titles stay seen. This cannot be undone.', 'Existing private settings copies stay unchanged.'])
+            ['Shared titles stay seen. This cannot be undone.', 'Existing private settings copies stay unchanged.', erase])
     elif op in ('member_away', 'member_back'):
         description = 'Own profile, link, rows and shelves stay saved. '+('Only their own picks keep learning.' if op == 'member_away' else 'Household learning resumes.')
         if op == 'member_away' and name in hh.get('away_until', {}):
             description += ' Returns on '+(shelves.date(hh['away_until'][name]) + dt.timedelta(days=1)).isoformat()+' ('+s.CONFIG['region']['tz']+').'
-    return seal(dict(people=[actor], change=change, member=dict(name=name, before=member_state(before, name), after=member_state(cfg, name),
+    return seal(dict(people=[actor] if actor else [], **({'read_only': True} if actor is None else {}),
+                     change=change, member=dict(name=name, before=member_state(before, name), after=member_state(cfg, name),
                      config_before=before, config_after=cfg, **({'shelves': wishes} if op == 'member_remove' else {}),
                      **({'timed_shelves': [w for w in wishes if w.get('until')]} if op == 'member_remove' and name in hh.get('guests', []) else {})),
                      **({'forget': forgotten} if forgotten else {}),
@@ -1765,7 +1775,8 @@ def apply_title(s, plan):
     return {'name': 'Done: '+plan['name']+". Search 'undo' to revert."}
 
 from .rowplan import preview as home_preview
-EXTRA = {'lab': lab_preview, 'home': home_preview, 'plan': plan_preview, 'correct': correct_preview, 'ask': ask_preview, 'search': search_preview,
+from .plays import preview as plays_preview
+EXTRA = {'plays': plays_preview, 'lab': lab_preview, 'home': home_preview, 'plan': plan_preview, 'correct': correct_preview, 'ask': ask_preview, 'search': search_preview,
          'wish': wish_preview, 'member': member_preview, 'rule': rule_preview, 'title': title_preview}
 
 def journal(s, keep=()):
@@ -1836,6 +1847,8 @@ def entry_paths(scope, entry):
                                  ('region' if key == 'row_lang' else 'household', key))
     if entry.get('budget'):
         paths.add(('household', 'ai_monthly_usd'))
+    if entry.get('plays'):
+        paths.add(('plays',))
     if entry.get('member'):
         m = entry['member']
         paths |= delta_paths(m.get('config_before', m['before']), m.get('config_after', m['after']))
@@ -2002,11 +2015,11 @@ def history_preview(s, text, change, viewer, bound):
             return seal(dict(people=[scope], shelf=shelf, name='Redo: '+entry['name'], text=text[:200], source='search',
                              redo_target=entry['id'], actor=actor,
                              **({'months': entry['months']} if entry.get('months') else {})))
-        plan = preview(s, text, viewer, None, answer={**original, 'person': original['person'] if entry.get('member') else scope})
+        plan = preview(s, text, viewer, None, answer={**original, 'person': original['person'] if entry.get('member') or entry.get('plays') else scope})
         return seal({**plan, 'redo_target': entry['id']})
     if entry.get('member') and original['op'] == 'member_remove':
         restore_member(s, config(s), entry)
-    if any(entry.get(k) for k in ('lab', 'event', 'rows', 'member', 'rule', 'fix', 'note', 'budget')):
+    if any(entry.get(k) for k in ('lab', 'event', 'rows', 'member', 'rule', 'fix', 'note', 'budget', 'plays')):
         return seal(dict(people=[scope], change=change, target=entry, whole_target=True, before={}, actor=actor,
                          undo_before=undo_stamp(entries, [scope]), name='Undo: '+entry['name'], text=text[:200], source='search'))
     actor = bound if bound in s.PEOPLE else viewer
@@ -2332,6 +2345,8 @@ def apply_rule(s, plan):
 
 def apply(s, plan, *, cfg=None):
     from .setup import publish
+    if plan.get('forget') and plan.get('source') != 'cli':
+        raise PermissionError('Erase runs only from the server command line')
     if plan.get('read_only'):
         return plan
     with _LOCK:
@@ -2402,6 +2417,9 @@ def apply(s, plan, *, cfg=None):
                 entries[p] = (entries.get(p, []) + [entry])[-200:]
                 save_journal(s, entries)
             return {'name': 'Done: '+plan['name']+". Search 'undo' to revert."}
+        if plan.get('plays'):
+            from . import plays
+            return plays.apply(s, plan)
         if plan.get('lab'):
             from . import lab, history
             with history.locked(s.DATA):
@@ -2573,6 +2591,9 @@ def undo(s, targets, actor=None, *, source=None, entry_id=None, expected_stamp=N
                 if old.get('shelf_before') and old['change']['op'] != 'reset':
                     shelves.consume_undo(s, p, old['shelf_before'], old['change']['op'])
                 cfg = config(s)
+            elif old.get('plays'):
+                from . import plays
+                plays.restore(cfg, old['plays']['before'], old['plays']['after'])
             elif old.get('lab'):
                 from . import lab
                 control = old['lab']
@@ -2924,6 +2945,8 @@ def _special(s, query, stype, routed=False, results=None):
         pending(s).pop(scope, None)
         getattr(s, '_command_suggestions', {}).pop(scope, None)
         plan = preview(s, query, viewer, bound, scope=scope, prior=prior, results=results)
+        if plan and plan.get('forget'):
+            plan['read_only'] = True
         if plan is not None and plan.get('search'):
             return None
         if plan is None:
@@ -3010,6 +3033,8 @@ def api_preview(s, req):
         raise PermissionError('person')
     plan = preview(s, body['in']['query'], person, viewer, answer=answer, scope=scope, prior=prior)
     if plan:
+        if plan.get('forget'):
+            plan['read_only'] = True
         if not plan.get('read_only'):
             plan['source'] = 'api'
         if not plan.get('read_only') or plan.get('ask') and plan.get('text'):

@@ -42,6 +42,65 @@ offline and writes nothing. Add `--refresh` to check the key once now, using
 `OPENROUTER_API_KEY` from the environment. `setup --status` shows a credit line.
 Ask Commander “how much AI credit is left?” to read the same saved numbers.
 
+## Odin plays
+
+Run these against the engine's local DATA directory. Every command accepts `--json`.
+
+| Command | What it does |
+|---|---|
+| `skald plays` | Show mode, current path and reason, last and next check, and new plays per person. |
+| `skald plays mode auto` | Prefer a readable mounted AIOStreams database, then saved HTTPS logins. Also accepts `db`, `https` and `off`. |
+| `skald plays every 15m` | Set the check interval. Use whole minutes or hours from `5m` to `6h`. Default: `15m`. |
+| `skald plays person ben off` | Stop reading Ben's plays. Use a configured member name or `together`; `on` resumes reading. Everyone starts on. |
+| `skald plays check` | Read once now. A failed read keeps the last good learning input. |
+| `skald plays compare` | Read both paths and print differences per person. Writes nothing. |
+| `skald plays recent --person ana --limit 20 --json` | Read recent learned plays with episode, time, path and backfill flag. Limit: 1 to 120, default 20. |
+| `skald plays why "Invented Lantern" --person ana --json` | Explain a saved title or id with login prefix, path, time and backfill flag. |
+| `skald connectors mappings --json` | Show eight-character login prefixes, people, paths and mapped, unmapped or conflict status. Writes nothing. |
+
+Settings use the optional top-level `plays` object in `skald.json`: `mode`,
+`every` in seconds, `people` as member-to-boolean switches, and `live: false`.
+Live push is reserved and stays off. The previous release ignores this object;
+FORMAT stays unchanged. The optional private `plays.json` cache stores check
+times, normalized HTTPS rows and shared per-person title and episode dedup state.
+These optional fields need no migration. Forgetting and raw retention also purge
+this cache; forgotten rows are filtered before caching. Access tokens stay in
+memory for one read.
+
+HTTPS uses saved AIOStreams logins and a public HTTPS address from setup. Played
+items are read newest first, through the last seen minute so a backfill burst
+cannot split across checks. Resume and favourite lists are refreshed each time.
+Both paths use the existing five-episodes-in-one-minute backfill rule and the
+same title aggregation. Both paths validate one login-to-person mapping.
+Conflicting and unmapped logins are skipped and reported by their eight-character
+prefix. Switching paths keeps the newest timestamp and compares whole seconds
+when counting new plays. The mounted database aggregation stays byte-identical.
+
+The AIOStreams Jellyfin API derives likes from ratings, hides stored dropped
+flags, can substitute metadata runtime, and omits inactive watch-state rows.
+Exact learning parity for those fields cannot be proved from this API. Its
+played and favourite lists stop at 500 rows. A read that reaches that cap
+without its watermark fails safely and keeps the last good input. Packed
+item IDs preserve original TMDB, IMDb and other supported provider IDs; episode
+provider IDs are never mistaken for show IDs. Opaque hashed IDs are skipped and
+counted in status, since enriched ProviderIds cannot identify the original base
+ID reliably. Catalog episode aliases can also differ from the database base ID.
+Use `compare --json` to inspect the actual field and identity differences.
+
+In Commander, ask “is Skald seeing what I watch?” or “what did I watch this week?”.
+Recent means the past seven days; titles use the existing profile cache, with
+IDs as a fallback. Ask “why did you count Invented Lantern as watched?” for the
+same provenance as `plays why`. Household adults see their own plays plus Together;
+children, guests and away people see their own plays, including explicit history
+corrections. Children never see another person's plays. Only household adults can
+change mode or interval. Adult guests and away adults can switch their own
+collection on or off. Changes use the usual preview, `yes NN` and `undo`.
+Moved-out people are no longer collected; their saved history stays attributed
+to them. Guests keep their own access until their stay ends.
+“Read my Odin watches now” queues a background check and answers “Checking now,
+results in a minute”. The household limit is one request per two minutes, recorded
+when queued, including failed attempts. HTTP 429 backoff delays scheduled retries.
+
 ## See your taste
 
 | Command | What it does and an example |
@@ -265,7 +324,7 @@ Read-only lists need no confirmation. In search, use the exact `yes NN` instead.
 | Show an own Home row (`member_rows`) | "Give Kim her own row" | `skald members rows kim on --person ana --json` |
 | Add a guest shelf (`shelf_add`) | "a catalog for Kim and me with heist movies for 3 days" | `skald shelf add "heist movies" --person ana --with-person kim --days 3 --json` |
 | Leave (`member_remove`) | "Ben moved out" | `skald members remove ben --person ana --json` |
-| Forget permanently (`member_forget`) | "Forget Ben" | `skald members forget ben --person ana --json` |
+| Preview permanent erasure (`member_forget`) | "Forget Ben" (preview only) | `python -m skald members forget ben --person ana --json` |
 | Away without an end (`member_away`) | "Ben is away for a while" | `skald members away ben --person ana --json` |
 | Away for days (`member_away`) | "pause Ben for two weeks" | `skald members away ben --days 14 --person ana --json` |
 | Away until a date (`member_away`) | "Ben is away until 1 November" | `skald members away ben --until 2026-11-01 --person ana --json` |
@@ -334,7 +393,9 @@ cannot change people. Use `skald members --undo --person ana` or
 `skald command --undo --person ana` to restore the last change. Undo keeps
 unrelated changes and refuses conflicting changes before restoring anything.
 
-`skald members forget ben --person ana --json` previews permanent erasure,
+Erase runs only from the server command line. Search and the HTTP command API
+show a preview with the command; they cannot apply erasure.
+`python -m skald members forget ben --person ana --json` previews permanent erasure,
 including an already removed adult. It counts personal feedback, imports,
 history, shelves and Row Lab ideas, and shared watches per remaining member.
 Repeat with `--yes` or `--plan HASH`. Personal data and connector links are
@@ -368,9 +429,10 @@ Commander also accepts `Lena moved out`, `We broke up, remove Lena`,
 `Ben ist eine Weile weg`, `Ben je odsutan neko vreme`, `Ben is back`,
 `Ben ist zurück` and `Ben se vratio`. Dated examples include `Ben is away until
 1 November`, `Ben ist bis Ende des Monats weg`, `Ben je odsutan do petka` and
-`pause Ben for two weeks`. Each shows one preview before `yes NN`.
-Removal keeps a neutral description and suggests saying `forget NAME` to erase
-history too. Reasons for leaving are not stored.
+`pause Ben for two weeks`. Each shows one preview before `yes NN`, except forget,
+which shows a read-only preview and the server command to run.
+Removal keeps a neutral description and shows `python -m skald members forget NAME --person ADULT`
+to erase history too. Reasons for leaving are not stored.
 
 `household.away`, `household.away_until` and `history-seen.json` are optional,
 so FORMAT stays unchanged. Older validators retain the absence fields and

@@ -129,7 +129,7 @@ and clears that question. You can start the addition again later.
 | "Give Kim her own row" | Gives the guest a Home row; guests have none by default. |
 | "a catalog for Kim and me with heist movies for 3 days" | Adds a shelf on your Home for the visit, using both people's filters. |
 | "Ben moved out"; "We broke up, remove Ben"; "Ben passed away" | Removes Ben from the active household, keeping his data. Undo restores him. The reason is not saved. |
-| "Forget Ben"; "Vergiss Ben"; "Zaboravi Bena" | Permanently erases an adult's personal data, even after removal. The preview explains what goes. This cannot be undone. |
+| "Forget Ben"; "Vergiss Ben"; "Zaboravi Bena" | Shows a read-only erasure preview, even after removal, with the command to run on the server. No confirmation code. |
 | "Ben is away for a while" | Keeps his profile working but pauses his influence on others' picks until he returns. |
 | "Ben is away until 1 November"; "pause Ben for two weeks" | Does the same through the last local day, then returns him automatically. |
 | "Ben is back" | Ends an adult's absence early. |
@@ -143,6 +143,9 @@ after that whole day. Expired guests keep their saved history; "bring Kim back"
 undoes the removal and clears the old end date. Use a new date for another visit.
 Away, back and forget currently accept adult targets only. Another adult must make
 the change; you cannot pause or forget yourself or the last adult at home.
+Erase runs only from the server command line:
+`python -m skald members forget ben --person ana`. Preview there, then repeat with
+`--yes` or `--plan HASH`. Search and the HTTP command API cannot apply erasure.
 
 The budget stays set until changed again. "turn AI off this month" sets it to 0;
 it does not reset next month. Other currencies keep the number and show USD in the preview.

@@ -31,8 +31,11 @@ When a visit expires, the guest leaves the active household and their shelf stop
 showing; their history and ratings stay saved. A shelf with its own end date is removed
 when that date expires. Guest expiry is not erasure.
 
-"Forget Ben" previews permanent erasure and needs the exact confirmation code.
-It currently accepts adult members, not children or named guests.
+"Forget Ben" in search only previews permanent erasure and shows the server command.
+Erase runs only from the server command line:
+`python -m skald members forget ben --person ana`. Preview first, then repeat with
+`--yes` or `--plan HASH` to apply. Search confirmation codes and the HTTP command API
+cannot erase a person. It currently accepts adult members, not children or named guests.
 It removes that adult's personal history, ratings, imports, history summaries,
 preferences, names, shelves (including shared shelves), personal row ideas, saved
 commands, memory and interview answers, title corrections and linked clients.

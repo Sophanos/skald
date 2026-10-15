@@ -544,7 +544,7 @@ class Ready(unittest.TestCase):
         self.build()
         self.assertIn('ben', self.view()['releases'][0]['people'])
         with patch.object(self.s, 'aio_rows_changed'):
-            commands.apply(self.s, commands.preview(self.s, '', 'ana', answer=dict(op='member_forget', person='ben')))
+            commands.apply(self.s, dict(commands.preview(self.s, '', 'ana', answer=dict(op='member_forget', person='ben')), source='cli'))
         self.assertEqual(self.s.feed(self.s.rid('ready1'), self.s.LANG), {})
         self.assertNotIn('ben', json.dumps(self.view()['releases']))
 
