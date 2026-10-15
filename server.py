@@ -6223,7 +6223,8 @@ def build_profile(items, searches, trakt=(), remote=True):
 
 
 # Skald's reading of a title someone started and stopped (from history, never a pressed "abandon"): tied to
-# something they watched or loved (same director, saga or lead actor) means they went back to it; about what
+# something they watched or loved (same director or saga, or a lead actor of two watched titles or one loved
+# title) means they went back to it; about what
 # they like means unsure, asked in the interview row; anything else is a mild "not this". Ties and taste come
 # only from their watched and loved titles, so stopped titles never vouch for each other.
 ABANDON_READ = {"related": ("interest", .5), "unsure": ("abandoned", 0.0)}
@@ -6235,6 +6236,20 @@ ABANDON_ABOUT = ("k:", "g:", "t:", "s:", "x:")  # what a title is about; people 
 def _abandon_ties(rec, lead):
     return ({f"d:{i}" for i, _ in rec.get("d") or []} | {f"a:{i}" for i, _ in (rec.get("a") or [])[:lead]}
             | ({f"o:{rec['collection']}"} if rec.get("collection") else set()))
+
+
+def _abandon_tied(stop, watched):
+    """True when a stopped title shares a director or saga with their watched and loved titles, or a lead
+    actor who carries two watched titles or one loved title."""
+    ties = _abandon_ties(stop, 2)
+    actors = {}
+    for r, signal in watched:
+        found = _abandon_ties(r, 3) & ties
+        if any(t[0] != "a" for t in found):
+            return True
+        for t in found:
+            actors[t] = actors.get(t, 0) + (2 if signal == "loved" else 1)
+    return any(n >= 2 for n in actors.values())
 
 
 def read_abandoned(entries):
@@ -6254,7 +6269,7 @@ def read_abandoned(entries):
         for person in owners:
             value = opinions.get(person) or e.get("shared") or e
             if value["signal"] in ("loved", "liked", "watched") and value["weight"] > 0:
-                loved.setdefault(person, {})[(e["key"], e["kind"])] = frec(e["key"], e["kind"])
+                loved.setdefault(person, {})[(e["key"], e["kind"])] = (frec(e["key"], e["kind"]), value["signal"])
         for value, people in ((e, owners), (e.get("shared"), owners), *((v, {p}) for p, v in opinions.items())):
             if not value or value.get("signal") != "abandoned" or value is not e and value.get("wsrc") in ("remote", "interview"):
                 continue
@@ -6263,21 +6278,20 @@ def read_abandoned(entries):
             stops.setdefault(id(value), (value, e, set()))[2].update(people)
     taste = {}
     for person, recs in loved.items():
-        about = [{fid for fid, _ in facet_pairs(r) if fid.startswith(ABANDON_ABOUT)} for r in recs.values()]
+        about = [{fid for fid, _ in facet_pairs(r) if fid.startswith(ABANDON_ABOUT)} for r, _ in recs.values()]
         count = {}
         for fids in about:
             for fid in fids:
                 count[fid] = count.get(fid, 0) + 1
         n = len(about)
         overlap = sorted(sum((count[f] - 1) / (n - 1) * idf.get(f, 0) for f in fids) for fids in about) if n > 1 else []
-        ties = set().union(*(_abandon_ties(r, 3) for r in recs.values()))
-        taste[person] = (ties, count, n, overlap[len(overlap) // 2] if overlap else 0)
+        taste[person] = (list(recs.values()), count, n, overlap[len(overlap) // 2] if overlap else 0)
     for value, e, people in stops.values():
         r = frec(e["key"], e["kind"])
         reading = "far"
         for person in people:
-            ties, count, n, bar = taste.get(person, (set(), {}, 0, 0))
-            if r and _abandon_ties(r, 2) & ties:
+            watched, count, n, bar = taste.get(person, ([], {}, 0, 0))
+            if r and _abandon_tied(r, watched):
                 reading = "related"
                 break
             score = sum(count.get(fid, 0) / n * idf.get(fid, 0) for fid, _ in facet_pairs(r)
@@ -8015,7 +8029,7 @@ def build_model(p, enrich=True):
     global _seed_stats
     house = adult_profile(p)
     house = {**house, "entries": taste_entries(house["entries"])} if house else house
-    pos_entries = [e for e in house["entries"] if e["weight"] > 0]
+    pos_entries = [e for e in house["entries"] if e["weight"] > 0 and not e.get("abandon")]  # a stop never explains a pick
     pairs = enrichment_pairs(p, member_people())
     try:
         ensure_facets([(k, kind) for k, kind in pairs if not frec(k, kind)][:400])
