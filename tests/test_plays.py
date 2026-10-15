@@ -69,7 +69,10 @@ class Plays(unittest.TestCase):
         self.cfg['plays'] = dict(mode='https', every=300, people={'ben': False}, live=False)
         self.assertEqual(members.validate_config(self.cfg)['plays'], self.cfg['plays'])
         self.assertEqual(members.public_config(members.validate_config(self.cfg))['plays'], self.cfg['plays'])
-        old = subprocess.check_output(['git', 'show', '54a5c0f:server.py'], text=True)
+        try:
+            old = subprocess.check_output(['git', 'show', '54a5c0f:server.py'], text=True, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest('the 1.4.10 source (54a5c0f) is not in this checkout')
         section = old.split('# --- household config (also loaded alone by skald/members.py) ---')[1].split('# --- end household config ---')[0]
         scope = dict(vars(members))
         exec(compile(section, 'old-config', 'exec'), scope)
