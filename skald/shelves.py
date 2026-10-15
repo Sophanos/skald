@@ -13,6 +13,26 @@ import uuid
 from .intake import write_private
 LOCK = threading.RLock()
 DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+def date(value):
+    if not isinstance(value, str) or dt.date.fromisoformat(value).isoformat() != value:
+        raise ValueError('until: use YYYY-MM-DD')
+    return dt.date.fromisoformat(value)
+
+def end_date(s, *, days=None, until=None, no_end=None, clear=False):
+    if sum(v is not None and v is not False for v in (days, until, no_end)) > 1:
+        raise ValueError('Choose days, until or no end')
+    if days is not None and (type(days) is not int or not (0 if clear else 1) <= days <= 30):
+        raise ValueError('days must be 1..30'+(' or 0 to clear the end' if clear else ''))
+    if no_end or days == 0:
+        if not clear:
+            raise ValueError('Only a guest update can clear the end')
+        return None
+    today = s.local_now().date()
+    end = today + dt.timedelta(days=days) if days is not None else date(until)
+    if not today <= end <= today + dt.timedelta(days=30):
+        raise ValueError('until must be today or within 30 days')
+    return end.isoformat()
+
 def read(s):
     path = Path(s.DATA) / 'shelves.json'
     return json.loads(path.read_text()) if path.exists() else {'wishes': [], 'plans': {}}
@@ -78,7 +98,8 @@ def counts(cfg):
 def slots(s, scope=None, *, doc=None):
     scopes = [scope, 'together'] if scope in s.PEOPLE else ['together']
     occupied = {(w['scope'], w['slot']) for w in (read(s) if doc is None else doc)['wishes']
-                if w.get('with_person') is None or w['with_person'] in s.PEOPLE}
+                if (w.get('with_person') is None or w['with_person'] in s.PEOPLE) and
+                not any(p in s.CONFIG['household'].get('away', []) and scope != p for p in (w['scope'], w.get('with_person')))}
     return [(s.rid(f'shelf_{p}_{n}'), p, n) for p in scopes for n in range(1, slot_count(s, p) + 1)
             if (p, n) in occupied]
 
@@ -154,7 +175,7 @@ def consume_undo(s, scope, before, op):
         events.pop(index)
         write_private(journal, ''.join(json.dumps(e) + '\n' for e in events))
 
-def _change(s, scope, op, *, text='', name='', when='always', slot=None, count=None, apply=False, plan=None, expected=None, with_person=None):
+def _change(s, scope, op, *, text='', name='', when='always', slot=None, count=None, apply=False, plan=None, expected=None, with_person=None, days=None, until=None):
     with LOCK:
         if scope not in (*s.PEOPLE, 'together'):
             raise ValueError('unknown shelf scope')
@@ -203,20 +224,24 @@ def _change(s, scope, op, *, text='', name='', when='always', slot=None, count=N
         elif op in ('add', 'replace', 'stop'):
             if slot is None:
                 slot = next((n for n in range(1, before['count'] + 1) if all(w['slot'] != n for w in own)), None)
-            if type(slot) is not int or not 1 <= slot <= before['count']:
-                raise ValueError('no shelf slot available')
             exists = any(w['slot'] == slot for w in own)
+            if type(slot) is not int or slot < 1 or slot > before['count'] and not (op == 'stop' and exists):
+                raise ValueError('no shelf slot available')
             if op == 'add' and exists or op in ('replace', 'stop') and not exists:
                 raise ValueError('shelf slot is occupied or missing')
             if op != 'stop':
                 if not isinstance(text, str) or not text.strip() or len(text) > 1000 or not isinstance(name, str) or len(name) > 100 or any(ord(c) < 32 for c in name):
                     raise ValueError('invalid shelf wish')
                 when = schedule(when)
+                if days is not None or until is not None:
+                    until = end_date(s, days=days, until=until)
         else:
             raise ValueError('unknown shelf operation')
         action = dict(op=op, text=text, name=name, when=when, slot=slot, count=count)
         if with_person is not None:
             action['with_person'] = with_person
+        if until is not None:
+            action['until'] = until
         digest = hashlib.sha256(json.dumps([scope, before, action], sort_keys=True).encode()).hexdigest()[:20]
         if not apply:
             doc['plans'][digest] = {'scope': scope, 'before': before, 'change': action}
@@ -236,7 +261,8 @@ def _change(s, scope, op, *, text='', name='', when='always', slot=None, count=N
             doc['wishes'] = [w for w in doc['wishes'] if (w['scope'], w['slot']) != (scope, slot)]
             if op != 'stop':
                 doc['wishes'].append(dict(id=uuid.uuid4().hex, scope=scope, slot=slot, text=text.strip(), name=name, when=when,
-                                         **({'with_person': with_person} if with_person is not None else {})))
+                                         **({'with_person': with_person} if with_person is not None else {}),
+                                         **({'until': until} if until is not None else {})))
         doc['plans'].clear()
         save(s, doc)
         journal = Path(s.DATA) / 'undo.jsonl'
@@ -332,6 +358,12 @@ def fill(s, lang, now=None, build=True):
                         finally:
                             s._safety_context.reset(shared_token)
                     scores = s.member_scores(metas, who) if who in s.PEOPLE else s.week_scores(metas)
+                    rated = [e for e in other.get('entries', []) if e.get('signal') in ('loved', 'liked', 'disliked')
+                             or (e.get('item') or {}).get('rating') is not None] if partner in s.CONFIG['household'].get('guests', []) else []
+                    if rated:
+                        seeds = list(dict.fromkeys(e['key'] for e in rated if e.get('explicit') and e['weight'] > 0))
+                        guest_scores = s.pool_pct({x['id']: s.seed_knn(seeds, x['id'], 1) for x in metas})
+                        scores = {x['id']: (scores.get(x['id'], 0) + guest_scores.get(x['id'], 0))/2 for x in metas}
                     metas.sort(key=lambda x: scores.get(x['id'], 0), reverse=True)
                     metas = s.preference_order(metas, cid, who)[:s.ROW_MAX]
                     if pinned:

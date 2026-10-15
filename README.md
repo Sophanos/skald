@@ -164,8 +164,7 @@ python3 -m skald push imports --remote
 python3 -m skald push imports --remote --apply
 ```
 
-The import resolves titles on your server, asks about unclear matches and saves only on the laptop.
-`push imports` previews the send; `--apply` sends resolved signals. With a `--person` token, other members' titles are skipped.
+The import resolves titles on your server, asks about unclear matches and saves only on the laptop. `push imports` previews the send; `--apply` sends resolved signals. With a `--person` token, other members' titles are skipped.
 See [all sources, commands and limits](docs/CONNECTORS.md#sources).
 
 ## Rows
@@ -176,7 +175,17 @@ See [all sources, commands and limits](docs/CONNECTORS.md#sources).
 - **Catalogs**, plain lists filtered by your history: Continue Watching, Catch Up, Top 10, Anime This Week, `Anime · <season> <year>`, Latest Digital Releases, Best Movies, Best Series.
 
 ✨ rows need OpenRouter. Each member and Together get their own rows; each member can choose discovery style, release years and unwanted genres.
-Screenshots show a test household. See [all rows and settings](docs/ROWS.md).
+Get Ready brings earlier saga films or unfinished seasons together before a new release. Each viewer sees only their own reasons for catching up. Screenshots show a test household. See [all rows and settings](docs/ROWS.md).
+
+## People in your household
+
+Add people from search: "Add my mother Vesna", "Add Vesna" or "Add Kim, she is 12". A child without an age gets a question; reply, then confirm with `yes NN`.
+German: "Meine Mutter Vesna wohnt jetzt bei uns".
+Serbian: "Dodaj mamu Vesnu".
+
+"Add Marko as a guest for 3 days" adds a visitor without changing household taste. "a catalog for Marko and me with heist movies for 3 days" adds a shelf on your Home. Both end after the last local day; saved guest history stays.
+
+"Ben moved out" removes him and keeps his data; `undo` restores him. "Forget Ben" permanently erases his personal data and cannot be undone. "Ben is away until 1 November" pauses an adult's influence on household picks until after that day; "Ben is back" returns him sooner. Ask "what changed this week" and undo by name or id, keeping unrelated newer changes. [People and controls](docs/CLI.md#household-people-and-controls).
 
 ## Talk to it from the search box
 
@@ -194,7 +203,7 @@ No extra app needed: the search field in Odin or Stremio finds titles, teaches S
 | "Ben watched Arrival, not me" | Moves the watch, and the taste, to Ben. |
 | "hide anime for Ana" | Changes Ana's rows. |
 
-Every change shows a card with a `yes NN` code: type it to apply, `undo` to take it back. Plain titles like "Dune" search as usual.
+Every change shows a card with a `yes NN` code: type it to apply, `undo` to take it back, except permanent forgetting. Plain titles like "Dune" search as usual.
 Commands work in English, German and Serbian at the same time, with no language switch. AI requests and new shelves need OpenRouter. [Everything you can type](docs/SEARCH.md).
 
 ## Your data

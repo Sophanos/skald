@@ -28,6 +28,8 @@ class ThemedSources(unittest.TestCase):
 
     def setUp(self):
         s = self.s
+        # Pin the clock before reset so the usage day matches it.
+        self.enterContext(patch.object(s, 'local_now', return_value=datetime.datetime(2026, 10, 14, 18)))
         reset(s)
         Path(s.DATA, 'usage.json').unlink(missing_ok=True)
         self.p = {'entries': [], 'seen': set(), 'negative': set()}
@@ -51,7 +53,6 @@ class ThemedSources(unittest.TestCase):
                             'frec': {'x': {'cozy_case': 2}}, 'femb': None, 'fit': .6,
                             'ensure_emb': None, 'ensure_facets': None, 'tag_experiences': None}.items():
             self.enterContext(patch.object(s, name, return_value=value))
-        self.enterContext(patch.object(s, 'local_now', return_value=datetime.datetime(2026, 10, 14, 18)))
         self.enterContext(patch.object(s, 'OR_KEY', 'fake'))
         self.transport = s.openrouter
         self.enterContext(patch.object(s, 'openrouter', side_effect=self.llm))
@@ -458,6 +459,21 @@ class ThemedSources(unittest.TestCase):
         s._feeds[s.LANES[0], 'de-DE'] = {'metas': {'tv': [card(i) for i in range(1, 21)]}, 'names': {'lane': 'k:1'}}
         with patch.object(s, 'openrouter', side_effect=TimeoutError()):
             self.assertEqual(self.build_lane()['_names'], {})
+
+    def test_household_zero_budget_keeps_last_vetted_lane(self):
+        from skald.members import fresh_config
+        s = self.s
+        cfg = fresh_config(['ana', 'ben'])
+        cfg['household']['ai_monthly_usd'] = 0
+        path = Path(s.DATA, 'skald.json')
+        path.write_text(json.dumps(cfg))
+        self.addCleanup(path.unlink)
+        xs = [card(i, _row={**card(i)['_row'], 'theme': 'k:1'}) for i in range(1, 21)]
+        s._feeds[s.LANES[0], 'de-DE'] = {'metas': {'tv': xs}, 'names': {'lane': 'k:1'}}
+        with self.metered():
+            out = self.build_lane()
+        self.assertEqual(out[s.LANES[0]]['tv'], xs)
+        self.assertEqual(self.calls, [])
 
     def mood(self):
         with patch.object(self.s, 'MOODS', {'cozy': ('Gentle evenings', ['cozy_case'], '0123456')}), \

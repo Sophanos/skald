@@ -61,7 +61,7 @@ def score(expect, answer):
         full_ok = full_ok and isinstance(question, str) and bool(question.strip())
         # A question with a guessed mutation is not a clarification.
         full_ok = full_ok and not answer.get('steps') and not answer.get('values') and all(
-            field in expect or answer.get(field) is None for field in ('person', 'kind', 'until', 'months'))
+            field in expect or answer.get(field) is None for field in ('person', 'kind', 'until', 'months', 'label', 'age', 'guest', 'own_row'))
     if 'values' in expect:
         expected, actual = expect['values'], answer.get('values')
         values_ok = isinstance(actual, list) and len(expected) == len(actual)
@@ -154,7 +154,7 @@ def evaluate(cases, models=None, *, transport=None, key='', base='https://openro
                 start = clock() if models is not None else 0
                 answer, error, cost = None, None, 0.0
                 try:
-                    inp = {'query': case['text'], **{k: case[k] for k in ('last', 'shown', 'rows') if k in case}}
+                    inp = {'query': case['text'], **{k: case[k] for k in ('last', 'shown', 'rows', 'people', 'today', 'last_row_action') if k in case}}
                     if models is None:
                         result = spec['rule'](inp, {})
                         if result is None and case.get('recorded'):

@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_FILES = (".skald-format", "skald.json", "legacy.json", "profile.json", "emb.json", "facets.json", "learn.json", "taste.json", "trakt.json",
-              "feeds.json", "shown.json", "shown_scopes.json", "history.json", "history-summary.json", "history-forgotten.json", "feedback.jsonl", "imports.jsonl", "online.json", "metrics.json", "memory.json", "interview.json", "taste_ring.json", "connectors.json", "shelves.json", "undo.jsonl", "archetypes.json", "title_fixes.json", "lab.json")
+              "feeds.json", "shown.json", "shown_scopes.json", "history.json", "history-summary.json", "history-forgotten.json", "history-seen.json", "feedback.jsonl", "imports.jsonl", "online.json", "metrics.json", "memory.json", "interview.json", "taste_ring.json", "connectors.json", "shelves.json", "undo.jsonl", "archetypes.json", "title_fixes.json", "lab.json")
 
 
 def data_files(config):

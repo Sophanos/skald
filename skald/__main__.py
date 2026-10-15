@@ -68,6 +68,10 @@ def parser():
             c.add_argument("--yes", action="store_true")
             c.add_argument("--plan")
             c.add_argument("--slot", type=int, required=op == "replace", help="select a fixed slot number")
+            c.add_argument('--with-person', help='second person whose seen titles and hides also apply')
+            end = c.add_mutually_exclusive_group()
+            end.add_argument('--days', type=int, help='end 1..30 days from today, at the end of that local day')
+            end.add_argument('--until', help='last local day, YYYY-MM-DD, within 30 days')
         elif op == "stop":
             c.add_argument("slot", help="shelf name or slot number")
         elif op == "count":
@@ -79,6 +83,20 @@ def parser():
     status = ai.add_parser('status', help='show saved credit; --refresh checks OpenRouter once')
     status.add_argument('--refresh', action='store_true', help='check OpenRouter now')
     status.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
+    budget = ai.add_parser('budget', help='read or preview the household monthly AI budget in USD')
+    budget.add_argument('amount', nargs='?', type=float, help='monthly budget in USD; omit to read it')
+    budget.add_argument('--person', help='adult household member making the change')
+    budget.add_argument('--yes', action='store_true', help='apply the preview')
+    budget.add_argument('--plan', help='apply only this preview hash')
+    budget.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
+    changes = commands.add_parser('changes', help='list visible changes or preview undoing an entry')
+    changes.add_argument('changes_action', nargs='?', choices=('undo',), help='omit to list changes; undo previews one entry')
+    changes.add_argument('entry', nargs='?', help='stable change id to undo')
+    changes.add_argument('--since', help='duration such as 7d, 24h or 1w')
+    changes.add_argument('--person', help='viewer or person making the change; omit for operator view')
+    changes.add_argument('--yes', action='store_true', help='apply the undo preview')
+    changes.add_argument('--plan', help='apply only this preview hash')
+    changes.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
     command = commands.add_parser("command", help="preview, apply or undo a personal change")
     command.add_argument("text", nargs="?", default="", help="one personal change; repeat text with --plan")
     command.add_argument("--person", required=True)
@@ -86,12 +104,12 @@ def parser():
     command.add_argument("--plan", help="apply only this preview hash")
     command.add_argument("--undo", action="store_true", help="revert the last command")
     command.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="print JSON")
-    people = commands.add_parser('members', help='list, preview, add, update or remove household people')
+    people = commands.add_parser('members', help='list, add, update, remove, forget, pause or bring back household people')
     people.add_argument('--undo', action='store_true', help='undo the last command for --person')
     people.add_argument('--person', help='adult household member making the change')
     people.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
     actions = people.add_subparsers(dest='members_action')
-    for op in ('list', 'add', 'update', 'remove', 'rows'):
+    for op in ('list', 'add', 'update', 'remove', 'rows', 'forget', 'away', 'back'):
         action = actions.add_parser(op, help=op+' household people')
         action.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
         if op == 'list':
@@ -103,7 +121,7 @@ def parser():
         action.add_argument('--yes', action='store_true', help='apply the preview')
         action.add_argument('--plan', help='apply only this preview hash')
         action.add_argument('--undo', action='store_true', default=argparse.SUPPRESS)
-        if op not in ('remove', 'rows'):
+        if op in ('add', 'update'):
             role = action.add_mutually_exclusive_group()
             role.add_argument('--guest', action='store_true', default=None, help='named guest, with no household taste learning')
             role.add_argument('--member', dest='guest', action='store_false', help='full household member')
@@ -112,6 +130,12 @@ def parser():
             row = action.add_mutually_exclusive_group()
             row.add_argument('--own-row', action='store_true', default=None, help='show their own Home row')
             row.add_argument('--no-own-row', dest='own_row', action='store_false', help='hide their own Home row')
+        if op in ('add', 'update', 'away'):
+            end = action.add_mutually_exclusive_group()
+            end.add_argument('--days', type=int, help='end 1..30 days from today; guest update with 0 to clear')
+            end.add_argument('--until', help='last local day, YYYY-MM-DD, within 30 days')
+            if op == 'update':
+                end.add_argument('--no-end', action='store_true', default=None, help='clear the guest end date')
     connect = commands.add_parser("connect", help="link this laptop to the API")
     connect.add_argument("url")
     connect.add_argument("--token-stdin", action="store_true")
@@ -141,6 +165,10 @@ def parser():
     rows.add_argument("--n", type=int, default=10)
     rows.add_argument("--lang")
     row_actions = rows.add_subparsers(dest="rows_action")
+    ready = row_actions.add_parser('ready', help='read saved release marathons and qualification reasons')
+    ready.add_argument('--person', choices=('household', 'together', *PEOPLE, 'guest'), help='show only this viewer\'s reasons; omit for the full operator view')
+    ready.add_argument('--lang', default=argparse.SUPPRESS)
+    ready.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
     names = row_actions.add_parser("names", help="list cached row names and translation keys")
     names.add_argument("--lang", default=argparse.SUPPRESS, help="inspect this UI language")
     names.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
@@ -154,7 +182,7 @@ def parser():
                                        'prefer': 'change a household row family cap', 'refresh': 'queue a row refresh for the worker'}[op])
         c.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
         if op in ('plan', 'why'):
-            c.add_argument('--person', choices=('household', 'together', *PEOPLE, 'guest'), default='household')
+            c.add_argument('--person', choices=('household', 'together', *PEOPLE, 'guest'))
             c.add_argument('--lang', default=argparse.SUPPRESS)
         else:
             c.add_argument('--yes', action='store_true', help='apply the preview')
@@ -455,6 +483,9 @@ def execute(args, engine, state, snapshot, out=None):
             return engine.lab()
         if args.rows_action == 'moments':
             return engine.moments()
+        if args.rows_action == 'ready':
+            from . import ready
+            return ready.view(engine._server, args.person, args.lang)
         if args.rows_action == "week":
             return engine.week(args.weeks, args.person)
         if args.rows_action == 'reach':
@@ -647,6 +678,10 @@ def text_output(args, data, out):
             for e in data["events"]:
                 line(f"  {e['src']} {e['day'] or 'undated'} {e['weight']:+.3f} · {e['title']}")
     elif args.command == "rows":
+        if args.rows_action == 'ready':
+            from . import ready
+            line(ready.text(data))
+            return
         if args.rows_action == "week":
             for week in data['weeks']:
                 line(week['week'])
@@ -864,7 +899,7 @@ def main(argv=None, out=None):
         from . import migrate
         cli_argv = sys.argv[1:] if argv is None else argv
         readonly_align = known.command == "taste" and "align" in cli_argv
-        row_control = known.command == 'rows' and any(v in ('plan', 'why', 'prefer', 'refresh', 'names', 'reach') for v in cli_argv)
+        row_control = known.command == 'rows' and any(v in ('plan', 'why', 'prefer', 'refresh', 'names', 'reach', 'ready') for v in cli_argv)
         if not known.snapshot and not known.live and not known.remote and known.command not in ("suggest", "ai", "search") and not readonly_align and not row_control and not calibration and not (
                 known.command == "metrics" and "learning" in cli_argv) and not any(
                 flag in cli_argv for flag in ('--help', '-h')):
@@ -1011,8 +1046,21 @@ def main(argv=None, out=None):
                 if args.shelf_op == "list":
                     data = s.shelf_list(scope)
                 else:
-                    kwargs = {k: getattr(args, k) for k in ("text", "name", "when", "slot", "count", "plan") if hasattr(args, k)}
-                    data = s.shelf_change(scope, args.shelf_op, apply=getattr(args, "yes", False) or args.shelf_op in ("stop", "count"), **kwargs)
+                    from . import commands
+                    kwargs = {k: getattr(args, k) for k in ("text", "name", "when", "slot", "count", "with_person", "days", "until") if hasattr(args, k)}
+                    actor = scope if scope in s.PEOPLE else next(iter(s.adult_people()), None)
+                    commands.guest_scope(s, actor, {'change': dict(op='shelf_'+args.shelf_op, **kwargs), 'people': [scope]})
+                    if s.CONFIG_SOURCE != 'file' and any(kwargs.get(k) is not None for k in ('days', 'until', 'with_person')):
+                        raise ValueError('Complete household setup before adding temporary or shared shelves')
+                    if s.CONFIG_SOURCE != 'file' or args.shelf_op in ('stop', 'count'):
+                        data = s.shelf_change(scope, args.shelf_op, apply=getattr(args, 'yes', False) or args.shelf_op in ('stop', 'count'), plan=getattr(args, 'plan', None), **kwargs)
+                    else:
+                        data = s.shelf_change(scope, args.shelf_op, **kwargs)
+                        if args.plan and args.plan != data['plan']:
+                            raise ValueError('Shelf plan changed; preview again')
+                        if args.yes or args.plan:
+                            commands.apply(s, dict(people=[scope], actor=actor, shelf=data, source='cli', name='Shelf: '+(args.name or args.text)))
+                            data = s.shelf_list(scope)
             print(json.dumps(data, ensure_ascii=False, indent=None if args.json else 2), file=out)
             return 0
         if args.command == 'rows' and args.rows_action in ('lab', 'moments'):
@@ -1039,14 +1087,18 @@ def main(argv=None, out=None):
                     output = '\n'.join(lab.text(data, s.LANG) if args.rows_action == 'lab' else metrics.moments_text(data, s.LANG))
             print(json.dumps(data, ensure_ascii=False) if args.json else output, file=out)
             return 0
-        if args.command == 'rows' and args.rows_action in ('plan', 'why', 'reach'):
+        if args.command == 'rows' and args.rows_action in ('plan', 'why', 'reach', 'ready'):
             from . import rowplan
             if args.live:
-                raise ValueError('rows plan, why and reach use local DATA or --snapshot')
+                raise ValueError('rows plan, why, reach and ready use local DATA or --snapshot')
             with Engine(args.snapshot or os.environ.get('DATA_DIR', '/data'), offline=True) as engine:
-                data = engine.reach(args.person, args.top) if args.rows_action == 'reach' else rowplan.plan(engine._server, args.person, args.lang) if args.rows_action == 'plan' else rowplan.why(engine._server, args.row_name, args.person, args.lang)
+                if args.rows_action == 'ready':
+                    from . import ready
+                    data = ready.view(engine._server, args.person, args.lang)
+                else:
+                    data = engine.reach(args.person, args.top) if args.rows_action == 'reach' else rowplan.plan(engine._server, args.person, args.lang) if args.rows_action == 'plan' else rowplan.why(engine._server, args.row_name, args.person, args.lang)
             from .reach import text as reach_text
-            print(json.dumps(data, ensure_ascii=False) if args.json else reach_text(data) if args.rows_action == 'reach' else '\n'.join(rowplan.text(data)), file=out)
+            print(json.dumps(data, ensure_ascii=False) if args.json else ready.text(data) if args.rows_action == 'ready' else reach_text(data) if args.rows_action == 'reach' else '\n'.join(rowplan.text(data)), file=out)
             return 0
         if args.command == 'rows' and args.rows_action in ('prefer', 'refresh'):
             from . import commands
@@ -1070,6 +1122,33 @@ def main(argv=None, out=None):
                         data = commands.apply(s, data)
             print(json.dumps(data, ensure_ascii=False) if args.json else data['name'] + ('? Plan: '+data['plan'] if 'plan' in data else ''), file=out)
             return 0
+        if args.command == 'changes' or args.command == 'ai' and args.ai_action == 'budget':
+            from . import commands, setup
+            writing = args.command == 'changes' and args.changes_action == 'undo' or args.command == 'ai' and args.amount is not None
+            if args.live or args.snapshot and writing:
+                raise ValueError('Household changes use local DATA_DIR')
+            if writing and not args.person:
+                raise ValueError('Add --person for the household member making the change')
+            with setup.server(Path(args.snapshot or os.environ.get('DATA_DIR', '/data'))) as s:
+                if not writing:
+                    data = commands.changes(s, args.person, args.since) if args.command == 'changes' else {**s.ai_budget(), 'monthly_cap': s.ai_monthly_usd()}
+                    output = commands.changes_text(data) if args.command == 'changes' else 'AI budget: '+str(data['monthly_cap'])+' USD/month; ceiling '+str(data['ceiling'])+' USD ('+data['ceiling_source']+')'
+                else:
+                    if args.command == 'changes' and not args.entry:
+                        raise ValueError('Name one change id to undo')
+                    answer = dict(op='undo' if args.command == 'changes' else 'ai_budget', kind=None,
+                                  values=[args.entry] if args.command == 'changes' else [args.amount], person=None)
+                    data = commands.preview(s, '', args.person, answer=answer)
+                    data['source'] = 'cli'
+                    if args.plan and args.plan != data['plan']:
+                        raise ValueError('Plan changed; preview again')
+                    if args.yes or args.plan:
+                        data = commands.apply(s, data)
+                    output = data['name']+('? Plan: '+data['plan'] if 'plan' in data else '')
+                print(json.dumps(data, ensure_ascii=False) if args.json else output, file=out)
+                if not args.json and data.get('description'):
+                    print(data['description'], file=out)
+            return 0
         if args.command == 'ai':
             from . import ai, setup
             if args.live or args.snapshot and args.refresh:
@@ -1092,10 +1171,10 @@ def main(argv=None, out=None):
                     data = commands.undo(s, commands.undo_people(s, args.person), actor=args.person, source='cli')
                 else:
                     if args.command == 'members':
-                        if args.members_action not in ('add', 'update', 'remove', 'rows') or not args.name:
-                            raise ValueError('Choose members list, add, update, remove, rows or --undo')
-                        answer = dict(op={'add': 'member_create', 'update': 'member_update', 'remove': 'member_remove', 'rows': 'member_rows'}[args.members_action],
-                                      person=args.name, **{k: getattr(args, k, None) for k in ('guest', 'age', 'label', 'own_row')})
+                        if args.members_action not in ('add', 'update', 'remove', 'rows', 'forget', 'away', 'back') or not args.name:
+                            raise ValueError('Choose members list, add, update, remove, rows, forget, away, back or --undo')
+                        answer = dict(op={'add': 'member_create', 'update': 'member_update', 'remove': 'member_remove', 'rows': 'member_rows', 'forget': 'member_forget', 'away': 'member_away', 'back': 'member_back'}[args.members_action],
+                                      person=args.name, **{k: getattr(args, k, None) for k in ('guest', 'age', 'label', 'own_row', 'days', 'until', 'no_end')})
                         if args.members_action == 'add':
                             answer['label'] = args.label or args.name.title()
                         if args.members_action == 'rows':
@@ -1115,6 +1194,8 @@ def main(argv=None, out=None):
                 for person in data['people']:
                     print(person['id']+': '+person['name']+'; '+('guest' if person['guest'] else 'member')+
                           '; age '+str(person['age'] or 'unknown')+'; own row '+('yes' if person['own_row'] else 'no')+
+                          ('; through '+person['guest_until'] if person.get('guest_until') else '')+
+                          ('; away through '+person['away_until'] if person.get('away_until') else '')+
                           '; '+str(person['shelves'])+' shelves', file=out)
             else:
                 print(json.dumps(data, ensure_ascii=False) if args.json else data["name"] + ("? Plan: " + data["plan"] if "plan" in data else ""), file=out)

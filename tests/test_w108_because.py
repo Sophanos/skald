@@ -1,6 +1,10 @@
 """Distinct daily because shelves, synthetic titles and offline transports."""
+import ast
 import copy
 import datetime
+import json
+from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -27,8 +31,11 @@ class BecauseRows(unittest.TestCase):
         self.enterContext(patch.object(s, '_facets', self.facets))
         self.enterContext(patch.object(s, '_feeds', {}))
         self.enterContext(patch.object(s, '_shown', {}))
+        self.enterContext(patch.object(s, '_shown_scoped', {}))
         self.enterContext(patch.object(s, 'local_now', return_value=datetime.datetime(2026, 10, 14, 18)))
         self.enterContext(patch.object(s, 'day_index', return_value=0))
+        self.clock = self.enterContext(patch.object(s, 'time', wraps=s.time))
+        self.clock.time.return_value = 1792000000
         self.enterContext(patch.object(s, 'get_model', return_value=None))
         self.enterContext(patch.object(s, 'genres', return_value={18: 'Drama', 16: 'Animation', 99: 'Documentary'}))
         self.enterContext(patch.object(s, 'seed_similarity', return_value=.8))
@@ -42,13 +49,13 @@ class BecauseRows(unittest.TestCase):
         self.assertIn(endpoint, ('recommendations', 'similar'))
         return {'results': (self.recs if endpoint == 'recommendations' else self.similar).get(int(tid), [])}
 
-    def seed(self, i, signal='watched', age=1, weight=1, **facets):
-        e = {'key': f'tmdb:{i}', 'id': i, 'title': f'Synthetic Area {i} Seed', 'kind': 'movie',
-             'stype': 'movie', 'signal': signal, 'age': age, 'weight': weight,
+    def seed(self, i, signal='watched', age=1, weight=1, kind='movie', **facets):
+        e = {'key': f'tmdb:{i}', 'id': i, 'title': f'Synthetic Area {i} Seed', 'kind': kind,
+             'stype': 'movie' if kind == 'movie' else 'series', 'signal': signal, 'age': age, 'weight': weight,
              'by': ['ana'], 'item': {}, 'flags': [], 'genres': ['Drama']}
         self.p['entries'].append(e)
         self.p['seen'].add(e['key'])
-        self.facets[e['key']] = {'title': e['title'], 'kind': 'movie', 'g': ['Drama'],
+        self.facets[self.s.fkey(e['key'], kind)] = {'title': e['title'], 'kind': kind, 'g': ['Drama'],
                                  'y': '2020', 'x': {f'area_{i}': 3}, **facets}
         self.recs[i] = [self.item(i * 100 + n) for n in range(1, 21)]
         return e
@@ -63,8 +70,129 @@ class BecauseRows(unittest.TestCase):
 
     def stored(self, built):
         self.s._feeds.update({(cid, 'en-US'): {'metas': built.get(cid, {}),
-                                             'names': built.get('_names', {}).get(cid, {})}
+                                             'names': built.get('_names', {}).get(cid, {}),
+                                             'built': int(self.s.time.time())}
                               for cid in self.rows})
+
+    def test_kind_retention_expires_after_seven_days_across_rebuilds(self):
+        for i in range(1, 4):
+            self.seed(i)
+        first = self.built()
+        self.stored(first)
+        self.s._shown.update(copy.deepcopy(self.s._feeds))
+        self.s._shown_scoped['synthetic'] = copy.deepcopy(self.s._feeds)
+        series = self.seed(4, kind='tv')
+        start = self.s.time.time()
+        with patch.object(self.s, 'because_seeds', return_value=[series]):
+            for day in range(1, 7):
+                self.clock.time.return_value = start + day * self.s.DAY
+                built = self.built()
+                self.assertEqual(built[self.rows[0]], first[self.rows[0]])
+                self.stored(built)
+            self.clock.time.return_value = start + 7 * self.s.DAY
+            built = self.built()
+        self.assertEqual(set(built[self.rows[0]]), {'series'})
+        self.assertEqual(self.s._feeds[self.rows[0], 'en-US']['names']['slot_since'], start)
+        self.assertEqual(built['_names'][self.rows[0]]['slot_since'], self.s.time.time())
+
+    def test_fully_filtered_retained_cards_release_kind_before_deadline(self):
+        for field in ('seen', 'negative', 'blocked', 'veto', 'preference', 'empty'):
+            with self.subTest(field=field), patch.object(self.s, 'CONFIG', copy.deepcopy(self.s.CONFIG)):
+                self.s._feeds.clear()
+                self.p['entries'].clear()
+                self.p['seen'].clear()
+                self.p['negative'].clear()
+                for i in range(1, 4):
+                    self.seed(i)
+                first = self.built()
+                self.stored(first)
+                ids = {x['id'] for cid in self.rows for x in first[cid]['movie']}
+                masks = (set(), set(), set())
+                if field in ('seen', 'negative'):
+                    self.p[field].update(ids)
+                elif field in ('blocked', 'veto'):
+                    masks[0 if field == 'blocked' else 2].update(ids)
+                elif field == 'preference':
+                    prefs = self.s.CONFIG['taste']['people'].setdefault('ana', {}).setdefault('prefs', {})
+                    prefs['excluded_genres'] = {'movie': ['Drama']}
+                else:
+                    for cid in self.rows:
+                        self.s._feeds[cid, 'en-US']['metas'] = {}
+                with patch.object(self.s, 'fill_row', side_effect=lambda xs, *a: xs):
+                    self.assertFalse(self.s.served_row(self.rows[0], 'tv', 'en-US', self.p,
+                                                       set(), masks, who='both'))
+                series = self.seed(4, kind='tv')
+                with patch.object(self.s, 'because_seeds', return_value=[series]), \
+                        patch.object(self.s, 'row_masks', return_value=masks):
+                    built = self.built()
+                self.assertEqual(set(built[self.rows[0]]), {'series'})
+                self.stored(built)
+                self.assertTrue(self.s.served_row(self.rows[0], 'tv', 'en-US', self.p,
+                                                  set(), masks, who='both'))
+
+    def test_retention_never_copies_another_languages_cards_or_seed_labels(self):
+        self.seed(1)
+        self.stored(self.built())
+        self.recs[1] = []
+        self.seed(2, kind='tv')
+        built = self.s.because_feed('de-DE')
+        self.assertEqual(built[self.rows[0]], {})
+        self.assertEqual(built['_names'][self.rows[0]]['slot_kind'], 'movie')
+        self.assertFalse({'seed', 'title', 'label_key', 'fields'} & built['_names'][self.rows[0]].keys())
+        self.assertEqual(set(built[self.rows[1]]), {'series'})
+
+    def test_rejected_retained_seed_clears_cards_and_labels_but_keeps_kind(self):
+        for signal, weight in (('disliked', -3), ('interest', .2), ('watched', 0)):
+            with self.subTest(signal=signal, weight=weight):
+                self.s._feeds.clear()
+                self.p['entries'].clear()
+                seed = self.seed(1)
+                self.stored(self.built())
+                seed.update(signal=signal, weight=weight)
+                self.recs[1] = []
+                built = self.built()
+                self.assertEqual(built[self.rows[0]], {})
+                self.assertEqual(built['_names'][self.rows[0]]['slot_kind'], 'movie')
+                self.assertFalse({'seed', 'title', 'label_key', 'fields'} & built['_names'][self.rows[0]].keys())
+                self.stored(built)
+                self.assertIsNone(self.s.row_seed(self.rows[0], 'en-US'))
+
+    def test_rebuilt_seed_prefers_its_previous_same_kind_slot(self):
+        seeds = [self.seed(i) for i in range(1, 4)]
+        self.stored(self.built())
+        with patch.object(self.s, 'because_seeds', return_value=[seeds[2]]):
+            built = self.built()
+        self.assertEqual([built['_names'][cid]['seed'] for cid in self.rows],
+                         [e['key'] for e in seeds])
+        self.stored(built)
+        self.s.CONFIG['household']['rows'] = ['because']
+        home = self.s.build_home('en-US', self.p, (set(), set()), 'both')
+        self.assertTrue(all(home[cid, 'tv'] for cid in self.rows))
+
+    def test_retained_anchors_must_be_diverse_from_rebuilt_and_retained_rows(self):
+        for facets in ({'collection': 90}, {'c': [[90, 'Marvel Studios']]}, {'x': {'quiet': 3}}):
+            for rebuild in (True, False):
+                with self.subTest(facets=facets, rebuild=rebuild):
+                    self.s._feeds.clear()
+                    self.p['entries'].clear()
+                    self.seed(1)
+                    self.seed(2)
+                    self.seed(3)
+                    self.stored(self.built())
+                    for i in (1, 2):
+                        self.facets[f'tmdb:{i}'].update(facets)
+                    with patch.object(self.s, 'because_seeds', return_value=self.p['entries'][:1] if rebuild else []):
+                        built = self.built()
+                    self.assertTrue(built[self.rows[0]])
+                    self.assertEqual(built[self.rows[1]], {})
+                    self.assertFalse({'seed', 'title', 'label_key', 'fields'} & built['_names'][self.rows[1]].keys())
+                    self.assertTrue(built[self.rows[2]])
+
+    def test_old_function_skips_when_149_source_is_unavailable(self):
+        for error in (OSError('git missing'), subprocess.CalledProcessError(128, ['git', 'show'])):
+            with self.subTest(error=type(error).__name__), patch.object(subprocess, 'run', side_effect=error):
+                with self.assertRaisesRegex(unittest.SkipTest, r'the 1\.4\.9 source \(cc016e7\) is not in this checkout'):
+                    self.old_function('because_feed')
 
     def test_three_areas_build_three_named_rows_from_both_endpoints(self):
         seeds = [self.seed(i, signal=signal) for i, signal in enumerate(('loved', 'liked', 'watched'), 1)]
@@ -230,7 +358,7 @@ class BecauseRows(unittest.TestCase):
         self.assertEqual(s.row_groups()['because'], self.rows)
         self.assertTrue(set(self.rows) <= {r[0] for r in s.feed_rows('en-US')})
 
-    def test_old_daily_stamp_rebuilds_all_slots_and_clears_unused_ones(self):
+    def test_old_daily_stamp_rebuilds_all_slots_and_keeps_unused_ones(self):
         s = self.s
         for i in range(1, 4):
             self.seed(i)
@@ -240,11 +368,148 @@ class BecauseRows(unittest.TestCase):
         with patch.object(s, '_langs', {'en-US'}), patch.object(s, 'connectors_tick'), patch.object(s, 'save_feeds'):
             s.build_feeds(s.local_now(), {'household': 'synthetic'}, {}, only={'because'})
             self.assertTrue(all(s._feeds.get((cid, 'en-US'), {}).get('names', {}).get('seed') for cid in self.rows))
-            self.p['entries'] = self.p['entries'][:1]
-            s.build_feeds(s.local_now(), {'household': 'synthetic'}, {}, only={'because'}, force=True)
+            previous = copy.deepcopy(s._feeds)
+            with patch.object(s, 'because_seeds', return_value=self.p['entries'][:1]):
+                s.build_feeds(s.local_now(), {'household': 'synthetic'}, {}, only={'because'}, force=True)
         for cid in self.rows[1:]:
-            self.assertFalse(s._feeds[cid, 'en-US']['metas'])
-            self.assertNotIn('names', s._feeds[cid, 'en-US'])
+            self.assertEqual(s._feeds[cid, 'en-US']['metas'], previous[cid, 'en-US']['metas'])
+            self.assertEqual(s._feeds[cid, 'en-US']['names'], previous[cid, 'en-US']['names'])
+
+    def old_function(self, name, namespace=None):
+        try:
+            source = subprocess.run(['git', 'show', 'cc016e7:server.py'], check=True,
+                                    capture_output=True, text=True).stdout
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest('the 1.4.9 source (cc016e7) is not in this checkout')
+        tree = ast.parse(source)
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
+        namespace = self.s.__dict__.copy() if namespace is None else namespace
+        exec(compile(ast.Module(body=[node], type_ignores=[]), 'cc016e7:server.py', 'exec'), namespace)
+        return namespace[name]
+
+    def test_single_kind_slots_swap_seeds_instead_of_flipping(self):
+        for kinds in (('movie', 'tv', 'movie'), ('tv', 'movie', 'tv')):
+            with self.subTest(kinds=kinds):
+                self.p['entries'].clear()
+                self.s._feeds.clear()
+                seeds = [self.seed(i, kind=kind) for i, kind in enumerate(kinds, 1)]
+                previous = self.built()
+                self.stored(previous)
+                self.p['entries'] = [seeds[1], seeds[0], seeds[2]]
+                built = self.built()
+                self.assertEqual([set(built[cid]) for cid in self.rows],
+                                 [set(previous[cid]) for cid in self.rows])
+                self.assertEqual(built['_names'][self.rows[1]]['seed'], seeds[1]['key'])
+
+    def test_no_same_kind_seed_keeps_previous_row_and_serving_filters(self):
+        for i in range(1, 4):
+            self.seed(i)
+        previous = self.built()
+        self.stored(previous)
+        series = self.seed(4, kind='tv')
+        with patch.object(self.s, 'because_seeds', return_value=[series]):
+            built = self.built()
+        for cid in self.rows:
+            self.assertEqual(built[cid], previous[cid])
+            self.assertEqual(built['_names'][cid]['seed'], previous['_names'][cid]['seed'])
+            self.assertEqual(built['_names'][cid]['slot_kind'], 'movie')
+        self.stored(built)
+        removed = {built[self.rows[0]]['movie'][i]['id'] for i in (0, 1)}
+        self.p['seen'].add(next(iter(removed)))
+        self.p['negative'].update(removed)
+        served = self.s.served_row(self.rows[0], 'tv', 'en-US', self.p, set(), (set(), set()), who='none')
+        self.assertTrue(served)
+        self.assertFalse(removed & {x['id'] for x in served})
+
+    def test_unusable_same_kind_seed_keeps_previous_row(self):
+        self.seed(1)
+        previous = self.built()
+        self.stored(previous)
+        self.recs[1] = []
+        built = self.built()
+        self.assertEqual(built[self.rows[0]], previous[self.rows[0]])
+        self.assertEqual(built['_names'][self.rows[0]]['seed'], 'tmdb:1')
+
+    def test_first_build_matches_149_except_optional_kind(self):
+        for i, kind in enumerate(('tv', 'movie', 'tv'), 1):
+            self.seed(i, kind=kind)
+        previous = self.old_function('because_feed')('en-US')
+        built = self.built()
+        for cid in self.rows:
+            self.assertEqual(built['_names'][cid].pop('slot_kind'), next(iter(built[cid])))
+            built['_names'][cid].pop('slot_since')
+        self.assertEqual(built, previous)
+
+    def test_mixed_slot_is_free_but_matching_slot_gets_seed_first(self):
+        self.seed(1, kind='tv')
+        self.seed(2)
+        previous = self.built()
+        # The first slot used to be mixed, the second used to be series-only.
+        mixed = {'tv': previous[self.rows[0]]['series'] + previous[self.rows[1]]['movie']}
+        previous[self.rows[1]] = previous[self.rows[0]]
+        previous[self.rows[0]] = mixed
+        previous['_names'] = {cid: {} for cid in self.rows}
+        self.stored(previous)
+        built = self.built()
+        self.assertEqual(set(built[self.rows[0]]), {'movie'})
+        self.assertEqual(set(built[self.rows[1]]), {'series'})
+
+    def test_slot_kind_agrees_across_languages_and_survives_empty_cache(self):
+        seeds = [self.seed(1), self.seed(2, kind='tv'), self.seed(3)]
+        self.stored(self.built())
+        self.p['entries'] = [seeds[1], seeds[0], seeds[2]]
+        for lang in ('de-DE', 'en-US'):
+            built = self.s.because_feed(lang)
+            self.assertEqual([set(built[cid]) for cid in self.rows], [{'movie'}, {'series'}, {'movie'}])
+        for cid, stype in zip(self.rows, ('movie', 'series', 'movie')):
+            self.s._feeds[cid, 'en-US'] = {'metas': {}, 'names': {'slot_kind': stype}}
+        self.assertEqual([set(self.built()[cid]) for cid in self.rows], [{'movie'}, {'series'}, {'movie'}])
+
+    def test_served_pin_teaches_kind_before_an_unserved_build(self):
+        self.seed(1)
+        previous = self.built()
+        self.stored(previous)
+        self.s._shown.update(copy.deepcopy(self.s._feeds))
+        series = self.seed(2, kind='tv')
+        self.s._feeds[self.rows[0], 'en-US'] = {'metas': {'series': [{'type': 'series'}]}}
+        with patch.object(self.s, 'because_seeds', return_value=[series]):
+            built = self.built()
+        self.assertEqual(built[self.rows[0]], previous[self.rows[0]])
+
+    def test_149_loader_accepts_optional_slot_kind_and_restart_keeps_it(self):
+        s = self.s
+        self.seed(1)
+        self.stored(self.built())
+        s.save_feeds()
+        stored = json.loads(Path(s.DATA, 'feeds.json').read_text())
+        self.assertEqual(stored[self.rows[0] + '|en-US']['names']['slot_kind'], 'movie')
+        self.assertEqual(stored[self.rows[0] + '|en-US']['names']['slot_since'], s.time.time())
+        namespace = s.__dict__.copy()
+        namespace.update(_feeds={}, _shown={}, _shown_scoped={}, _langs=set(), _learn=copy.deepcopy(s._learn))
+        for name in ('connectors_load', 'load_usage', 'load_decisions', 'load_week_history', 'load_emb', 'load_facets'):
+            namespace[name] = lambda: None
+        self.old_function('load_state', namespace)()
+        self.assertEqual(namespace['_feeds'], s._feeds)
+        with patch.object(s, '_feeds', namespace['_feeds']):
+            series = self.seed(2, kind='tv')
+            with patch.object(s, 'because_seeds', return_value=[series]):
+                self.assertEqual(self.built()[self.rows[0]], stored[self.rows[0] + '|en-US']['metas'])
+
+    def test_non_because_fixture_feeds_are_byte_identical_to_149(self):
+        s = self.s
+        fixture = {s.rid('top10'): {'movie': [{'id': 'tmdb:9001', 'type': 'movie', 'name': 'Synthetic Chart'}]},
+                   s.rid('rewatch'): {'series': [{'id': 'tmdb:9002', 'type': 'series', 'name': 'Synthetic Return'}]}}
+        results = []
+        with patch.object(s, '_langs', {'en-US'}), patch.object(s, 'connectors_tick'), \
+                patch.object(s, 'top10_feed', return_value=fixture[s.rid('top10')]), \
+                patch.object(s, 'rewatch_feed', return_value=fixture[s.rid('rewatch')]), \
+                patch.object(s, 'time', wraps=s.time) as clock:
+            clock.time.return_value = 1792000000
+            for builder in (self.old_function('build_feeds'), s.build_feeds):
+                s._feeds.clear()
+                builder(s.local_now(), {}, {}, only={'top10', 'rewatch'}, force=True)
+                results.append(Path(s.DATA, 'feeds.json').read_bytes())
+        self.assertEqual(results[0], results[1])
 
     def test_explicit_rows_hide_new_slots_without_because_group(self):
         s = self.s

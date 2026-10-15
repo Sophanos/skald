@@ -150,6 +150,8 @@ def label(s, cid, lang):
         fallback = s.t(s.DOC_ROWS.get(cid, s.DOC_TREND)[0])
     elif cid in s.STUDIO_ROWS:
         fallback = s.t(s.STUDIOS[cid][0])
+    elif cid in s.READY_ROWS:
+        fallback = s.t('row.ready')
     else:
         fallback = s.t('row.'+key)
     return s.row_name(cid, lang, fallback=fallback) or key
@@ -158,6 +160,8 @@ def label(s, cid, lang):
 def source_kind(s, cid):
     if cid.startswith(s.rid('lab_')):
         return 'lab'
+    if cid in s.READY_ROWS:
+        return 'history'
     if cid in s.SHELF_ROWS:
         return 'shelf'
     if cid in s.ROW_OWNER or cid in {s.rid(p) for p in s.ARCHIVED}:
@@ -201,9 +205,10 @@ def candidate_sources(metas, missing=0):
                for source in ('catalog', 'recommendations')}, 'missing_cards': missing}
 
 
-def plan(s, person='household', lang=None, *, cards=False, caps=None):
+def plan(s, person=None, lang=None, *, cards=False, caps=None, viewer=None):
     from . import shelves, lab
-    person = 'together' if person == 'both' else person
+    viewer = viewer or person
+    person = 'household' if person is None else 'together' if person == 'both' else person
     lang = lang or s.LANG
     if not s.LANG_RE.fullmatch(lang):
         raise ValueError('invalid language')
@@ -218,8 +223,8 @@ def plan(s, person='household', lang=None, *, cards=False, caps=None):
                 stack.enter_context(patch.dict(s._shown_scoped, {scope: s._shown.copy()}))
             stack.enter_context(s.addon_scope(scope))
             who = s.GUEST if person == 'guest' else s.who_watching()[0] if scope is None else s.SCOPES[scope]
-            viewer = s._viewer.set(who)
-            stack.callback(s._viewer.reset, viewer)
+            token_viewer = s._viewer.set(who)
+            stack.callback(s._viewer.reset, token_viewer)
             p = s._profiles.get('household') or {}
             masks = s.row_masks(who)
             home = s.build_home(lang, p, masks, who, caps=caps)
@@ -253,7 +258,7 @@ def plan(s, person='household', lang=None, *, cards=False, caps=None):
                 else:
                     xs = [x for typ in (('tv',) if 'tv' in types else types)
                           for x in (home.get((cid, typ), []) if who == s.GUEST else trace['served'].get((cid, typ), home.get((cid, typ), [])))]
-                minimum = 1 if who == s.GUEST or cid in s.SHELF_ROWS or cid == s.rid('episodes') or cid == s.rid('top10') and s.kids_age(s.safety_subject(who)) is None else s.ROW_MIN
+                minimum = 1 if who == s.GUEST or cid in s.SHELF_ROWS or cid in s.READY_ROWS or cid == s.rid('episodes') or cid == s.rid('top10') and s.kids_age(s.safety_subject(who)) is None else s.ROW_MIN
                 if len(xs) >= minimum:
                     visible.append(cid)
                     composed[cid] = xs
@@ -301,6 +306,12 @@ def plan(s, person='household', lang=None, *, cards=False, caps=None):
                 counts = (s.feed(cid, lang).get('names') or {}).get('candidate_sources')
                 if counts is not None and not unsafe:
                     row['candidate_sources'] = counts
+                if cid in s.READY_ROWS and not unsafe:
+                    from . import ready
+                    release = ready.slot(s, cid, lang, who, masks)
+                    row['release'] = {k: release[k] for k in ('key', 'title', 'date', 'for', 'people')} if release else None
+                    if release and viewer:
+                        row['release'] = ready.project(row['release'], viewer)
                 if support is not None:
                     rows = [r for r in support['rows'] if r['row'] == cid and (person == 'household' or r['person'] == person)]
                     row['support'] = {'shown': sum(r['shown'] for r in rows), 'plays': sum(r['played'] for r in rows)}
@@ -314,7 +325,7 @@ def plan(s, person='household', lang=None, *, cards=False, caps=None):
         _trace.reset(token)
 
 
-def why(s, name, person='household', lang=None):
+def why(s, name, person=None, lang=None):
     cid = row_id(s, name, lang)
     return next(r for r in plan(s, person, lang, cards=True)['rows'] if r['id'] == cid)
 
@@ -443,10 +454,18 @@ def preview(s, query, change, viewer, bound, *_):
     if change['kind'] is not None:
         raise ValueError('row control kind')
     if op == 'home_plan':
+        if values and values[0] == 'ready':
+            from . import ready
+            if len(values) > 2:
+                raise ValueError('one release or all get-ready rows')
+            person = bound if bound in (*s.PEOPLE, s.GUEST) else change['person'] or viewer or 'household'
+            data = ready.view(s, person, title=values[1] if len(values) == 2 else None,
+                              viewer=bound if bound in (*s.PEOPLE, s.GUEST) else viewer or s.GUEST)
+            return dict(read_only=True, people=[], name=s.t('row.ready'), description=ready.text(data), ready=data)
         if len(values) > 1:
             raise ValueError('one row or the whole home')
         person = bound if bound in (*s.PEOPLE, s.GUEST) else change['person'] or viewer or 'household'
-        result = plan(s, person)
+        result = plan(s, person, viewer=bound if bound in (*s.PEOPLE, s.GUEST) else viewer or s.GUEST)
         rows = result['rows']
         if values:
             ids = s.row_groups().get(values[0]) or [row_id(s, values[0])]
@@ -508,10 +527,11 @@ def source_names(s, cid, lang):
             **({'candidate_sources': rec['candidate_sources']} if 'candidate_sources' in rec else {})}
 
 
-def command_input(s, text, results=None, viewer=None, prior=None):
+def command_input(s, text, results=None, viewer=None, prior=None, *, scope=None):
     from . import lab
-    inp = {'query': text, 'rows': [{'id': cid, 'label': label(s, cid, s.LANG)} for cid in registered(s)
-                                 if cid not in s.LAB_ROWS and s.row_enabled(cid) and s.row_scope_ok(cid) and cid not in s.SHELF_ROWS]}
+    from .commands import context
+    inp = {'query': text, 'today': s.local_now().date().isoformat(), 'rows': [{'id': cid, 'label': label(s, cid, s.LANG) + (' (hidden)' if not s.row_enabled(cid) else '')} for cid in registered(s)
+                                 if cid not in s.LAB_ROWS and s.row_scope_ok(cid) and cid not in s.SHELF_ROWS]}
     inp['rows'].extend({'id': cid, 'label': name} for cid, _, name in s.shelf_rows())
     doc = lab.read(s.DATA)
     names = {s.rid('lab_'+i['id']): i['name'] for i in doc['ideas']}
@@ -520,7 +540,12 @@ def command_input(s, text, results=None, viewer=None, prior=None):
     # Older ideas remain in rows lab; keep the command model's context within its existing limit.
     inp['rows'].extend({'id': cid, 'label': names[cid]} for cid in recent if s.row_scope_ok(cid))
     inp['rows'] = inp['rows'][:100]
-    if results:
+    action = getattr(s, '_commands_last_row_action', {}).get(scope if scope is not None else context(s)[0])
+    if action:
+        inp['last_row_action'] = action
+    if (prior or {}).get('ask') and prior.get('text'):
+        inp['last'] = prior['text']+'\nQuestion: '+prior['name']
+    elif results:
         inp.update(last=results['query'], shown=[x['title'] for x in s.shown_titles(results)])
     elif prior and prior.get('member') and prior.get('text'):
         inp['last'] = prior['text']
@@ -529,5 +554,6 @@ def command_input(s, text, results=None, viewer=None, prior=None):
         active = [e for e in journal(s).get(viewer, []) if not e.get('undone')]
         if active and active[-1].get('member') and active[-1].get('text'):
             inp['last'] = active[-1]['text']
-    inp['people'] = [{'id': p, 'label': s.LABELS[p]} for p in s.PEOPLE]
+    inp['people'] = [{'id': p, 'label': s.LABELS[p]} for p in
+                     [*s.PEOPLE, *reversed(s.CONFIG['household'].get('retired', []))][:100]]
     return inp

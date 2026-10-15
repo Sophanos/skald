@@ -59,7 +59,7 @@ from types import SimpleNamespace
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.4.9"
+VERSION = "1.4.10"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -181,7 +181,7 @@ def invalid_json(_):
     raise ConfigError("skald.json")
 
 
-ROW_KEYS = ('episodes', 'foryou', 'week', 'upcoming', 'catchup', 'rewatch', 'because', 'leap',
+ROW_KEYS = ('episodes', 'foryou', 'week', 'upcoming', 'catchup', 'rewatch', 'ready', 'because', 'leap',
             'top10', 'people', 'moods', 'lanes', 'docs', 'studios', 'anime', 'shelves', 'digital', 'toprated', 'family',
             'newtoyou', 'lab')
 
@@ -312,13 +312,31 @@ def validate_config(doc, *, data=None, environ=None):
     cfg.update({k: v for k, v in doc.items() if k not in ("household", "region", "addon")})
     need(isinstance(cfg["row_prefix"], str) and re.fullmatch(r"[a-z][a-z0-9]{1,15}", cfg["row_prefix"]), "row_prefix")
     hh = cfg["household"]
+    value = hh.get('ai_monthly_usd', 3)
+    need(type(value) in (int, float) and 0 <= value < float('inf'), 'household.ai_monthly_usd')
     need(type(hh.get('rows_from_default', False)) is bool, 'household.rows_from_default')
     guests = hh.get('guests', [])
     need(isinstance(guests, list) and all(isinstance(p, str) and p in members for p in guests) and
          len(set(guests)) == len(guests), 'household.guests')
+    from datetime import date
+    ends = hh.get('guest_until', {})
+    try:
+        need(isinstance(ends, dict) and all(p in guests and isinstance(value, str) and date.fromisoformat(value).isoformat() == value
+             for p, value in ends.items()), 'household.guest_until')
+    except (ValueError, TypeError):
+        raise ConfigError('household.guest_until (guest: YYYY-MM-DD)') from None
     retired_people = hh.get('retired', [])
     need(isinstance(retired_people, list) and all(p in members for p in retired_people)
          and len(set(retired_people)) == len(retired_people) and len(retired_people) < len(members), 'household.retired')
+    away = hh.get('away', [])
+    need(isinstance(away, list) and all(p in members and p not in guests and p not in retired_people for p in away)
+         and len(set(away)) == len(away), 'household.away')
+    ends = hh.get('away_until', {})
+    try:
+        need(isinstance(ends, dict) and all(p in away and isinstance(value, str) and date.fromisoformat(value).isoformat() == value
+             for p, value in ends.items()), 'household.away_until')
+    except (ValueError, TypeError):
+        raise ConfigError('household.away_until (person: YYYY-MM-DD)') from None
     need(len(members) - len(retired_people) in MEMBER_COUNTS,
          'household.members: active profile limit is '+str(max(MEMBER_COUNTS)))
     ages = hh.get('ages', {})
@@ -590,6 +608,10 @@ def rid(name, config=None):
     return (CONFIG if config is None else config).get("row_prefix", DEFAULT_ROW_PREFIX) + "." + name
 
 
+def guest_people(cfg):
+    return (*cfg['household'].get('guests', []), *cfg['household'].get('away', []))
+
+
 def public_config(cfg):
     # Unknown extensions can contain credentials; print only the supported household fields.
     schema = fresh_config(cfg["household"]["members"])
@@ -597,7 +619,7 @@ def public_config(cfg):
     out["household"] = {**out["household"], "labels": {p: cfg["household"]["labels"][p] for p in (*cfg["household"]["members"], "pair")}}
     if 'row_lang' in cfg['region']:
         out['region']['row_lang'] = cfg['region']['row_lang']
-    for key in ('rows', 'rows_from_default', 'row_labels', 'row_order', 'shelves', 'home', 'retired', 'guests', 'ages', 'retired_rows'):
+    for key in ('rows', 'rows_from_default', 'row_labels', 'row_order', 'shelves', 'home', 'retired', 'guests', 'guest_until', 'ages', 'retired_rows', 'away', 'away_until'):
         if key in cfg['household']:
             out['household'][key] = cfg['household'][key]
     out["taste"] = {p: {k: v for k, v in traits.items() if k in ("likes", "archived", "rewatch_collections")}
@@ -613,6 +635,7 @@ def public_config(cfg):
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from skald import migrate, shelves, rowplan, row_names, metrics as row_metrics, lab
+from skald.history import seen_keys as history_seen
 from skald.i18n import t as _translate
 
 def row_lang():
@@ -803,7 +826,7 @@ ROUTE_Q = {
             "title": "The whole text is a name: one movie, series, person or franchise they want to find, possibly misspelled, partial or translated. If any part of the text is not part of that name (a content type, a mood, a comparison, a year, a wish, a verb, a reference to the user), it is not a title. A lone word is a name, even if it could also describe a mood.",
             "request": "The text asks to be shown titles now by describing them rather than naming one: a mood, theme, subject, feeling, genre with a feeling, similarity to something, a ranking, or the user's own viewing history (titles they have or have not watched, or want to watch again). A descriptive word together with a content type, in any language, is a request unless the whole text is itself a known title. It changes nothing saved.",
             "discover": "The text is only a genre and/or a year or decade, with no mood, theme or other wish.",
-            "command": "The text asks the app to change or remember something for later: the user's taste, filters, settings, members, or their rows, shelves and catalogs; or it tells the app how they felt about a specific title or that they already saw it; or it asks what the app has learned about a person or how much AI credit or spending remains. Asking to be shown titles from their own history is a request, not a command.",
+            "command": "The text asks the app to change or remember something for later: the user's taste, filters, settings, members, or their rows, shelves and catalogs; or it tells the app how they felt about a specific title or that they already saw it; or it asks what the app has learned about a person, when a named household guest's stay ends, or how much AI credit or spending remains. Questions about preparing for a coming saga film or season by watching earlier parts or catching up read the saved get-ready rows and are commands. A title called Get Ready is a title search. Asking to be shown titles from their own history is a request, not a command.",
         }},
     "watched": {"type": "choice",
         "instructions": "Does the user limit results by their own viewing history? Only count wording about the user's (or their household's) own watching. Words that belong to a title name or describe a plot do not count.",
@@ -918,12 +941,14 @@ class BudgetExceeded(Exception):
     pass
 
 
-def tmdb(path, *, _timeout=8, **params):
+def tmdb(path, *, _timeout=8, _cache_only=False, **params):
     params["api_key"] = API_KEY
     url = f"https://api.themoviedb.org/3/{path}?{urllib.parse.urlencode(params)}"
     hit = _cache.get(url)
     if hit and hit[0] > time.time():
         return hit[1]
+    if _cache_only:
+        return {}
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=upstream_timeout(_timeout)) as r:
@@ -960,6 +985,8 @@ AI_CAPS = {"feed": ai_limit("AI_DAILY_FEED_CALLS", 40, int),
            "lab": 2}
 API_LANE_SHARE = ai_limit("API_LANE_SHARE", .34, float, 1)
 AI_MONTHLY_USD = ai_limit("AI_MONTHLY_USD", 3, float)  # hard stop below the OpenRouter key limit
+AI_BUDGET_CEILING = AI_MONTHLY_USD if 'AI_MONTHLY_USD' in os.environ else 25
+AI_BUDGET_SOURCE = 'env' if 'AI_MONTHLY_USD' in os.environ else 'default'
 _usage = {"day": "", "calls": {}, "cost": 0.0, "tokens": 0, "month": "", "month_cost": 0.0, "month_calls": 0}
 _usage_lock = threading.Lock()
 _ai_credit_lock = threading.Lock()
@@ -971,12 +998,28 @@ def load_usage():
         _usage.update(read_usage(DATA))
 
 
+def ai_budget():
+    cfg = CONFIG
+    path = os.environ.get('SKALD_CONFIG') or os.path.join(DATA, CONFIG_NAME)
+    if os.path.exists(path):
+        with open(path, encoding='utf-8') as f:
+            cfg = json.load(f, parse_constant=invalid_json)
+    return {'household': cfg['household'].get('ai_monthly_usd'),
+            'ceiling': AI_BUDGET_CEILING, 'ceiling_source': AI_BUDGET_SOURCE}
+
+
+def ai_monthly_usd():
+    budget = ai_budget()
+    return min(budget['household'] if budget['household'] is not None else AI_MONTHLY_USD, budget['ceiling'])
+
+
 def ai_status():
     from skald.ai import read_usage, status
     with _usage_lock:
         _usage_roll()
         saved = {k: v for k, v in read_usage(DATA).items() if k.startswith('ai_')}
-        return status(json.loads(json.dumps({**_usage, **saved})), AI_CAPS, AI_MONTHLY_USD, CONFIG)
+        return {**status(json.loads(json.dumps({**_usage, **saved})), AI_CAPS, ai_monthly_usd(), CONFIG),
+                'budget': ai_budget()}
 
 
 def check_ai_credit(now=None, *, refresh=False):
@@ -1041,8 +1084,9 @@ def _openrouter(path, body, timeout, lane, label, on_text=None, stop=None):
         used = sum(n for k, n in _usage["calls"].items() if k.startswith(lane + ":"))
         if used >= AI_CAPS[lane]:
             raise BudgetExceeded(f"{lane} budget {AI_CAPS[lane]}/day used")
-        if _usage["month_cost"] >= AI_MONTHLY_USD:
-            raise BudgetExceeded(f"monthly budget ${AI_MONTHLY_USD} used")
+        monthly = ai_monthly_usd()
+        if _usage["month_cost"] >= monthly:
+            raise BudgetExceeded(f"monthly budget ${monthly} used")
         key = f"{lane}:{label}"
         _usage["calls"][key] = _usage["calls"].get(key, 0) + 1
         _usage["month_calls"] += 1
@@ -1346,7 +1390,8 @@ def _decision_gate(name, spec, allow_llm, limit, client=None, reservation=None):
             used = sum(_usage["calls"].get(f"feed:{n}", 0) for n in ("theme_source", "theme_season"))
         if spec["cap"] is not None and used >= spec["cap"]:
             return "cap"
-        if _usage["month_cost"] + limit > AI_MONTHLY_USD:
+        monthly = ai_monthly_usd()
+        if monthly == 0 or _usage["month_cost"] + limit > monthly:
             return "month"
         if spec["llm"] is None:
             return "llm"
@@ -1733,7 +1778,7 @@ def route_parse(resp, batch):
               **({"previous": answers.get("previous", {}).get("choice") or "new"} if "last" in batch[0] else {})}, a.get("confidence") or 0)]
 
 
-decision("route_query", ver=7, lane="search", cap=None, ttl=30 * DAY,
+decision("route_query", ver=8, lane="search", cap=None, ttl=30 * DAY,
     inp={"query": str, "last": (str, None), "shown": (str, [str, 30], None), "context_key": (str, None)}, out={"choice": ("title", "discover", "request", "command", None), "confidence": (float, None),
                            "watched": ("unseen", "seen", "any", None), "list": ("best", "taste", None), "previous": ("new", "refine", "act", None)},
     norm=route_norm, rule=None, params={},
@@ -1820,11 +1865,11 @@ def search_profile():
     """The scoped member's history, or the union of current members for Together."""
     p = _profiles.get("household") or {}
     scope = getattr(_scoping, "scope", None)
-    if scope is None and not CONFIG['household'].get('guests') and not CONFIG['household'].get('retired_rows'):
+    if scope is None and not guest_people(CONFIG) and not CONFIG['household'].get('retired_rows'):
         return p
     people = member_people() if scope is None or SCOPES[scope] == "both" else (SCOPES[scope],)
     entries = [e for person in people for e in person_entries(p, person)] if p else []
-    return {"entries": entries, "seen": {e["key"] for e in entries},
+    return {"entries": entries, "seen": {e["key"] for e in entries} | history_seen(DATA),
             "negative": {e["key"] for e in entries if e["weight"] < 0}}
 
 
@@ -2276,10 +2321,10 @@ def manifest(lang, scope=None):
                     _, prefs = row_preferences(cid, scope)
                     if ('movies' if typ == 'movie' else 'series') in prefs[0].get('hide', []):
                         continue
-                if cid not in SHELF_ROWS and (cid in THEMED_ROWS or feed(cid, lang) or (cid, lang) in _feeds_empty or cid == rid('family')) and (cid != rid('top10') or kids_age(safety_subject()) is not None):
+                if cid not in SHELF_ROWS and (cid in THEMED_ROWS or cid in READY_ROWS or feed(cid, lang) or (cid, lang) in _feeds_empty or cid == rid('family')) and (cid != rid('top10') or kids_age(safety_subject()) is not None):
                     # Count the cached composition of stored rows, with the catalog's viewer and pins.
                     metas = row_metas(cid, typ, lang, who=SCOPES[scope]) if scope is not None else row_metas(cid, typ, lang)
-                    if len(metas) < (1 if cid == rid('episodes') else ROW_MIN):
+                    if len(metas) < (1 if cid == rid('episodes') or cid in READY_ROWS else ROW_MIN):
                         continue
                 if isinstance(name, dict):
                     rows.append({"type": typ, "id": cid, "name": name[typ]})
@@ -2495,6 +2540,7 @@ def _search(stype, query, lang, title_only=False):
         return _outer.submit(fn, *args, **kwargs).result(timeout=max(0, _deadline - time.monotonic()))
     timing = {}
     _scoping.search_timing = None
+    _scoping.private_command = False
     request = start_search(query)
     refresh_preferences()
     kind = "movie" if stype == "movie" else "tv"
@@ -2698,7 +2744,7 @@ def _search(stype, query, lang, title_only=False):
                     other = []
                     channel = "tmdb"
                 try:
-                    credits = person_job.result(timeout=picker_remaining())
+                    credits = person_job.result(timeout=max(0, picker_remaining() - min(.5, SEARCH_TIMEOUT / 10)))
                 except Exception:
                     credits = None
                 if credits is not None:
@@ -3036,8 +3082,9 @@ def health_snapshot():
             for cid, c in _connectors.items() if c['health']['state'] != 'disabled'}
     with _usage_lock:
         _decision_roll()
-        budget = _usage['month_cost'] / AI_MONTHLY_USD if AI_MONTHLY_USD > 0 else 0
-        over = bool(_decide_over) or AI_MONTHLY_USD > 0 and _usage['month_cost'] >= AI_MONTHLY_USD
+        monthly = ai_monthly_usd()
+        budget = _usage['month_cost'] / monthly if monthly > 0 else 1
+        over = bool(_decide_over) or _usage['month_cost'] >= monthly
         for lane, cap in AI_CAPS.items():
             if cap > 0:
                 budget = max(budget, sum(n for k, n in _usage['calls'].items() if k.startswith(lane + ':')) / cap)
@@ -3169,9 +3216,10 @@ HOME_FRANCHISE_ROWS = 2
 DOCS = [rid('doctrend'), rid('wonder'), rid('cosmos'), rid('history'), rid('meaning')]
 STUDIO_ROWS = [rid('hbo'), rid('paramount')]
 BECAUSE_ROWS = [rid('because'), rid('because2'), rid('because3')]
+READY_ROWS = [rid('ready1'), rid('ready2')]
 THEMED_ROWS = set(MOODS_ROWS + LANE_ROWS + DOCS + STUDIO_ROWS + BECAUSE_ROWS + [rid('leap')])
 # Keep the player catalog order in sync (Top 10 has two catalogs).
-DEDUPE_ORDER = ([rid('episodes'), rid('foryou'), rid('week'), rid('because'), rid('catchup'), rid('upcoming'),
+DEDUPE_ORDER = ([rid('episodes'), rid('foryou'), rid('week'), rid('because'), *READY_ROWS, rid('catchup'), rid('upcoming'),
                  rid('leap')] + list(ROW_OWNER) + [rid('rewatch'), rid('top10'), rid('digital'), rid('toprated')] + STUDIO_ROWS + MOODS_ROWS + BECAUSE_ROWS[1:] + DOCS + LANES
                 + [rid('airing'), rid('nextseason'), rid('newtoyou')])
 LAB_ROWS = []
@@ -3207,11 +3255,11 @@ GUEST_ROW_POLICY = {
     rid('nextseason'): False,  # Household history masks.
     rid('newtoyou'): False,  # Member taste rotation.
 }
-GUEST_ROW_POLICY.update(dict.fromkeys([*ROW_OWNER, *BECAUSE_ROWS], False))
+GUEST_ROW_POLICY.update(dict.fromkeys([*ROW_OWNER, *BECAUSE_ROWS, *READY_ROWS], False))
 GUEST_ROW_POLICY.update({rid('digital'): True, rid('toprated'): True})
 GUEST_ROWS = {cid for cid, allowed in GUEST_ROW_POLICY.items() if allowed}
 MIXED = ({rid('foryou'), rid('upcoming'), rid('catchup'), rid('rewatch'), rid('because'), rid('week'),
-          rid('leap'), rid('family'), rid('newtoyou')} | set(BECAUSE_ROWS) | set(ROW_OWNER) | {rid(p) for p in ARCHIVED} | set(LANES) | set(MOODS_ROWS) | set(SHELF_ROWS) | set(DOCS) | set(STUDIO_ROWS))
+          rid('leap'), rid('family'), rid('newtoyou')} | set(BECAUSE_ROWS) | set(READY_ROWS) | set(ROW_OWNER) | {rid(p) for p in ARCHIVED} | set(LANES) | set(MOODS_ROWS) | set(SHELF_ROWS) | set(DOCS) | set(STUDIO_ROWS))
 MIX = ("tv", "movie", "series")  # tv = both kinds in one row; movie / series = one kind only
 STAMP_V = "17.3"  # bump to rebuild every row once after a format change
 ROW_MAX = 40
@@ -3222,6 +3270,7 @@ _feeds_lock = threading.Lock()
 _langs = {LANG}
 _searches = []
 _profiles = {}
+_erasure_generation = 0
 _idmap = {}  # imdb id -> tmdb id
 _trakt = {}
 TRAKT_GENRES = {"science-fiction": "Science Fiction", "anime": "Anime", "superhero": "Superhero"}
@@ -3252,7 +3301,7 @@ def row_groups():
     return {'people': [*ROW_OWNER, *[rid(p) for p in ARCHIVED]],
               'moods': MOODS_ROWS, 'lanes': LANE_ROWS, 'docs': [*DOCS, rid('docsai')],
               'studios': STUDIO_ROWS, 'anime': [rid('airing'), rid('nextseason')],
-              'shelves': SHELF_ROWS, 'lab': LAB_ROWS, 'rewatch': [rid('rewatch'), rid('rewatchai')], 'because': BECAUSE_ROWS}
+              'shelves': SHELF_ROWS, 'lab': LAB_ROWS, 'rewatch': [rid('rewatch'), rid('rewatchai')], 'because': BECAUSE_ROWS, 'ready': READY_ROWS}
 
 
 def default_rows(cfg=None):
@@ -3263,11 +3312,18 @@ def default_rows(cfg=None):
 
 def row_scope_ok(cid):
     scope = getattr(_scoping, 'scope', None)
+    if ROW_OWNER.get(cid) in CONFIG['household'].get('away', []):
+        return scope == ROW_OWNER[cid]
+    if cid in SHELF_ROWS and CONFIG['household'].get('away'):
+        wish = next((w for w in shelves.read(command_context())['wishes'] if rid(f"shelf_{w['scope']}_{w['slot']}") == cid), None)
+        if wish and any(p in CONFIG['household'].get('away', []) and scope != p for p in (wish['scope'], wish.get('with_person'))):
+            return False
     if cid.startswith(rid('lab_')):
         if kids_age(safety_subject()) is not None:
             return False
         idea = next((i for i in lab.read(DATA)['ideas'] if rid('lab_'+i['id']) == cid), None)
-        return bool(idea and (scope is None or scope in idea['members'] or 'together' in idea['members']))
+        return bool(idea and (scope in idea['members'] or not set(idea['members']) <= set(CONFIG['household'].get('away', [])))
+                    and (scope is None or scope in idea['members'] or 'together' in idea['members']))
     return cid not in ROW_OWNER or scope not in PEOPLE or scope == ROW_OWNER[cid]
 
 
@@ -3316,6 +3372,12 @@ def feed_rows(lang=LANG, profiles=True, who=None, *, home=None):
       + [(rid(p), MIX, t("row.archived", person=label)) for p, label in ARCHIVED.items()
          if p in (active_profiles() if profiles else ())]
     rows += [(cid, MIX, lab.read(DATA)['ideas'][i]['name']) for i, cid in enumerate(LAB_ROWS)]
+    from skald import ready
+    scope = getattr(_scoping, 'scope', None)
+    viewer = SCOPES[scope] if scope is not None else who_watching()[0] if who is None else who
+    for cid in READY_ROWS:
+        if row_enabled(cid) and ready.slot(SimpleNamespace(**globals()), cid, lang, viewer):
+            rows.append((cid, ('tv',), row_name(cid, lang)))
     rows += shelf_rows() if any(row_enabled(cid) for cid in SHELF_ROWS) else []
     rows += [(rid('digital'), ('movie',), t("row.digital"))] * row_enabled(rid('digital'))
     rows += [(rid('toprated'), ('movie', 'series'),
@@ -3683,12 +3745,13 @@ def _connectors_save(rows, generation):
             json.dump({"version": 1, "connectors": rows}, fh, ensure_ascii=False, allow_nan=False)
             fh.flush()
             os.fsync(fh.fileno())
-        if generation != _connectors_generation:
-            return False
-        os.replace(tmp, os.path.join(DATA, "connectors.json"))
-        _connectors_saved.clear()
-        _connectors_saved.update({cid: _connector_material(c) for cid, c in rows.items()})
-        return True
+        with history_locked(DATA):
+            if generation != _connectors_generation:
+                return False
+            os.replace(tmp, os.path.join(DATA, "connectors.json"))
+            _connectors_saved.clear()
+            _connectors_saved.update({cid: _connector_material(c) for cid, c in rows.items()})
+            return True
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -3697,6 +3760,8 @@ def _connectors_save(rows, generation):
 def connectors_load(now=None):
     global _connectors_path, _connectors_generation, _connectors_derived, _connector_import_stamp, _connectors_busy
     now = time.time() if now is None else now
+    with history_locked(DATA):
+        erasure = _erasure_generation
     with _connectors_lock:
         if _connectors_busy:
             return
@@ -3737,7 +3802,9 @@ def connectors_load(now=None):
                     old["next_due"] = c["next_due"]
                 elif old["health"]["state"] == "disabled" or (cid in CONFIG["connectors"] and old["health"]["error"] == "AuthNotReference"):
                     old.update(health=c["health"], next_due=now)
-        with _connectors_lock:
+        with history_locked(DATA), _connectors_lock:
+            if erasure != _erasure_generation:
+                return
             _connectors.clear()
             _connectors.update(rows)
             _connectors_path = DATA
@@ -3758,6 +3825,20 @@ def connectors_load(now=None):
     finally:
         with _connectors_lock:
             _connectors_busy = False
+
+
+def forget_connector(person):
+    global _connectors_generation, _connectors_path
+    with _connectors_lock:
+        for cid, connector in list(_connectors.items()):
+            if connector.get('person') == person:
+                _connectors.pop(cid)
+            elif person in connector.get('accounts', {}):
+                connector['accounts'].pop(person)
+                if not connector['accounts']:
+                    _connectors.pop(cid)
+        _connectors_generation += 1
+        _connectors_path = None
 
 
 def connector_next(c, new, now):
@@ -4073,7 +4154,11 @@ def _connector_write(name, doc, *, indent=None, newline=False):
 
 def _connector_write_locked(name, doc, *, indent=None, newline=False):
     from skald.history import sources, filter_forgotten, clear_connector_caches
+    if getattr(_upstream, 'erasure_generation', _erasure_generation) != _erasure_generation:
+        return False
     origin = name + ".json"
+    if origin not in {filename for filename, _, _ in sources(CONFIG)}:
+        return False
     for filename, _, person in sources(CONFIG):
         if filename == origin and "items" in doc:
             items = filter_forgotten(DATA, CONFIG, origin, doc["items"], person)
@@ -5156,7 +5241,17 @@ CONNECTOR_POLL = {"history": _connector_history, "trakt": _connector_trakt,
 
 
 def poll(c, now):
-    return CONNECTOR_POLL[c["id"]](c, now)
+    with history_locked(DATA):
+        generation = _erasure_generation
+    _upstream.erasure_generation = generation
+    try:
+        result = CONNECTOR_POLL[c["id"]](c, now)
+        with history_locked(DATA):
+            if generation != _erasure_generation:
+                return [], c.get('cursor'), {'events': 0, 'error': None}
+            return result
+    finally:
+        del _upstream.erasure_generation
 
 
 def connectors_demand(now):
@@ -5193,6 +5288,8 @@ def _connector_imports_stamp():
 
 def connectors_tick(now):
     global _connectors_generation, _connector_import_stamp, _connectors_busy
+    with history_locked(DATA):
+        erasure = _erasure_generation
     if _connectors_path != DATA:
         connectors_load(now)
     with _connectors_lock:
@@ -5294,7 +5391,9 @@ def connectors_tick(now):
             if state != c["health"]["state"]:
                 c["health"].update(state=state, at=now)
             changed |= before != _connector_material(c)
-        with _connectors_lock:
+        with history_locked(DATA), _connectors_lock:
+            if erasure != _erasure_generation:
+                return
             if generation != _connectors_generation:
                 # Demand only changes next_due; retain an unconsumed demand while publishing poll results.
                 for cid, c in rows.items():
@@ -5831,6 +5930,13 @@ def _merge_feedback_events(entries, by_key, now, evts):
 
 
 def fold_events(stages, now):
+    from skald.history import seen_watches
+    forgotten = seen_watches(DATA)
+    if forgotten:
+        stages = [(stage, [e for e in evts if not (
+            (len(e['by']) > 1 or set(e['by']) & {'both', 'together'}) and
+            (e.get('t') or 0) < forgotten.get(e['key'], forgotten.get(e['ctx'].get('item', {}).get('id'), 0)))])
+            for stage, evts in stages]
     guests = [p for p in PEOPLE if p not in member_people()]
     if not guests and not CONFIG['household'].get('retired'):
         return _fold_events(stages, now)
@@ -5922,7 +6028,7 @@ def build_profile(items, searches, trakt=(), remote=True):
     now = time.time()
     entries, by_key, extra_seen = fold_events(event_stages(now, items, trakt, remote), now)
     if CONFIG["history"]["source"] in HISTORY_ADAPTERS:
-        extra_seen |= {it["id"] for it in items if (it.get("played") or it.get("episodes_played")) and attribute(it)[0] not in (GUEST, *CONFIG["household"].get("guests", []))}
+        extra_seen |= {it["id"] for it in items if (it.get("played") or it.get("episodes_played")) and attribute(it)[0] not in (GUEST, *guest_people(CONFIG))}
     entries.sort(key=lambda e: (-(e["weight"] / (1 + min(e["age"], 365) / 60)), e["age"]))
     genre_w = {}
     for e in entries:
@@ -5930,7 +6036,7 @@ def build_profile(items, searches, trakt=(), remote=True):
             genre_w[g] = genre_w.get(g, 0) + e["weight"]
     shared = [e for e in entries if set(e.get('by', ())) & set(member_people()) or 'together' in e.get('by', ())]
     return {"entries": entries, "genres": genre_w, "searches": searches, "likes": "",
-            "seen": {e["key"] for e in shared} | extra_seen, "negative": {e["key"] for e in shared if e["weight"] < 0}}
+            "seen": {e["key"] for e in shared} | extra_seen | history_seen(DATA), "negative": {e["key"] for e in shared if e["weight"] < 0}}
 
 
 SEED_WEIGHT = 2.0  # a title someone told us they love: timeless, so no recency
@@ -5984,7 +6090,7 @@ def add_person_loves(entries, by_key, evts=None):
                  "genres": gs}
             by_key[key] = e
             entries.append(e)
-        if person not in CONFIG["household"].get("guests", []):
+        if person not in guest_people(CONFIG):
             extra |= ev["ctx"]["saga"]
     return extra
 
@@ -6099,6 +6205,8 @@ def episodes_hash(items):
 
 def refresh_profiles():
     """Rebuild the taste profiles whose inputs changed; returns the current hashes."""
+    with _home_lock:
+        generation = _erasure_generation
     hist = read_history()
     hashes = {"episodes": episodes_hash([it for it in hist if it.get("profile", "household") == "household"])}
     active = active_profiles()
@@ -6116,7 +6224,7 @@ def refresh_profiles():
                  name == "household" and CONFIG["history"]["source"] in HISTORY_ADAPTERS and it.get("profile") in PEOPLE]
         h = taste_hash(name, items)
         hashes[name] = h
-        guests = set(CONFIG['household'].get('guests', [])) & set(PEOPLE) if name == 'household' else set()
+        guests = set(guest_people(CONFIG)) & set(PEOPLE) if name == 'household' else set()
         guest_stamp = None
         if guests:
             signal = [it for it in items if attribute(it)[0] in guests]
@@ -6134,7 +6242,10 @@ def refresh_profiles():
         prof.update(hash=h, likes=(read_taste().get(name) or {}).get("likes", ""))
         if guests:
             prof['guest_stamp'] = guest_stamp
-        _profiles[name] = prof
+        with _home_lock:
+            if generation != _erasure_generation:
+                return {}
+            _profiles[name] = prof
         print(f"profile {name}: {len(prof['entries'])} titles, hash {h}", flush=True)
     if "household" in _profiles:
         p = adult_profile(_profiles["household"])
@@ -6180,6 +6291,11 @@ def row_name(cid, lang, fallback=None, metas=None, key="title"):
                       if cid in groups.get(row, [rid(row)])), None)
     if cid in SHELF_ROWS and key == "title":
         return label or next((r[2] for r in shelf_rows() if r[0] == cid), fallback)
+    if cid in READY_ROWS and key == 'title':
+        from skald import ready
+        scope = getattr(_scoping, 'scope', None)
+        who = SCOPES[scope] if scope is not None else _viewer.get() or who_watching()[0]
+        return label or ready.label(SimpleNamespace(**globals()), ready.slot(SimpleNamespace(**globals()), cid, lang, who))
     if key == "title" and kids_age(safety_subject()) is not None:
         return t("row.picked")
     if label:
@@ -7513,7 +7629,7 @@ def person_entries(p, person):
         mover = origin if origin != person else None
         seed = e["key"] not in overridden and any(title == e["title"].casefold() and kind == e["kind"]
                                                 and (not year or year == e.get("year")) for title, year, kind in seeds)
-        if origin is None and ("together" not in by or person in CONFIG['household'].get('guests', [])) and not seed:
+        if origin is None and ("together" not in by or person in guest_people(CONFIG)) and not seed:
             continue
         opinions = e.get("opinions") or {}
         own = opinions.get(person) or (opinions.get(mover) if mover else None)
@@ -7670,7 +7786,7 @@ def build_model(p, enrich=True):
          "paff": {}, "pvec": {}, "px": {}, "pbscale": {}, "pbg": {}, "nexp": {}, "x": experience_profile(house["entries"])}
     active = active_feedback()
     for person in PEOPLE:
-        mine = person_entries(p, person) if person not in CONFIG['household'].get('guests', []) else []
+        mine = person_entries(p, person) if person not in guest_people(CONFIG) else []
         if _taste_accounts():
             m.setdefault("panchors", {})[person] = {fkey(e["key"], e["kind"]) for e in mine if e["weight"] > 0}
         m["nexp"][person] = sum(bool(e.get("explicit")) and e["weight"] > 0 for e in mine)
@@ -7792,7 +7908,7 @@ _maturity_house = (None, None, 0)
 def maturity(m, person=None):
     global _maturity_house
     counts = (m or {}).get("nexp", {})
-    if person == GUEST or person in CONFIG['household'].get('guests', []):
+    if person == GUEST or person in guest_people(CONFIG):
         return {"state": "guest", "explicit": 0, "need": PCT_MIN_EXPLICIT}
     if person in PEOPLE:
         n = counts.get(person, 0)
@@ -8081,11 +8197,12 @@ def taste_line(m):
 
 def get_model(build=True):
     """The current taste model; rebuilt (in the worker only) when the profile or our knowledge changed."""
-    p = _profiles.get("household")
+    if not build:
+        return _model['m'] if _profiles.get('household') else None
+    with _home_lock:
+        generation, p = _erasure_generation, _profiles.get("household")
     if not p:
         return None
-    if not build:
-        return _model["m"]
     with _model_lock:
         with _memory_lock:
             seq = _memory_read()["seq"]
@@ -8095,11 +8212,13 @@ def get_model(build=True):
         if len(adult_people()) != len(PEOPLE):
             sig += (adult_people(),)
         if _model["sig"] != sig or _model["m"] is None:
-            _model["m"] = build_model(p, enrich=False) if _defer_enrichment else build_model(p)
-            _model["sig"] = sig
-            m = _model["m"]
-            print(f"taste model: {len(m['aff'])} facets, cal {m['cal']}, {m['taste_line'][:160]}", flush=True)
-            taste_ring_note(m, time.time())
+            m = build_model(p, enrich=False) if _defer_enrichment else build_model(p)
+            with _home_lock:
+                if generation != _erasure_generation:
+                    return None
+                _model.update(m=m, sig=sig)
+                print(f"taste model: {len(m['aff'])} facets, cal {m['cal']}, {m['taste_line'][:160]}", flush=True)
+                taste_ring_note(m, time.time())
         return _model["m"]
 
 
@@ -8911,11 +9030,19 @@ def log_search(query, deferred=False):
 
 
 def write_search(record, timing=None):
+    if getattr(_scoping, 'private_command', False):
+        return
     try:
         with open(os.path.join(DATA, "searches.jsonl"), "a") as fh:
             fh.write(json.dumps({**record, **({"timing": timing} if timing else {})}, ensure_ascii=False) + "\n")
     except OSError:
         pass
+
+
+def private_search(query):
+    _scoping.private_command = True
+    with _ai_lock:
+        _searches[:] = [(at, text) for at, text in _searches if text != query]
 
 
 def recent_searches(n=15):
@@ -8975,16 +9102,57 @@ def because_feed(lang):
     p = adult_profile(_profiles.get("household"))
     seeds = because_seeds(p)
     m = get_model() if seeds else None
+    now = int(time.time())
+    positive = {(e["key"], e["stype"]): e for e in (p or {}).get("entries", [])
+                if e["weight"] > 0 and e["signal"] in ("loved", "liked", "watched")}
     out, names, anchors = {}, {}, []
+    kinds, starts, previous, retained, free = {}, {}, {}, {}, list(BECAUSE_ROWS)
+    with _feeds_lock:
+        for cid in BECAUSE_ROWS:
+            records = [(l, rec) for store in (_shown, *_shown_scoped.values(), _feeds)
+                       for (row, l), rec in sorted(store.items(), key=lambda x: (x[0][1] != LANG, x[0]))
+                       if row == cid and (rec.get("metas") or (rec.get("names") or {}).get("slot_kind"))
+                       and now - (rec.get("names") or {}).get("slot_since", rec.get("built", now)) < 7 * DAY]
+            types = [{x["type"] for typ, xs in (rec.get("metas") or {}).items()
+                      if typ in ("movie", "series", "tv") for x in xs} for _, rec in records]
+            # Share the kind across languages, with a start that rebuilds cannot extend.
+            pin = next((rec for _, rec in records
+                        if (rec.get("names") or {}).get("slot_kind") in ("movie", "series")), {})
+            kinds[cid] = (pin.get("names") or {}).get("slot_kind")
+            if kinds[cid] is None and types and len(types[0]) == 1:
+                kinds[cid] = next(iter(types[0]))
+                pin = records[0][1]
+            starts[cid] = (pin.get("names") or {}).get("slot_since", pin.get("built", now))
+            previous[cid] = next((rec for (l, rec), ts in sorted(zip(records, types), key=lambda x: x[0][0] != lang)
+                                  if l == lang and kinds[cid] and ts <= {kinds[cid]}), {})
+    masks = row_masks("both")
+    blocked = masks[0] | (masks[2] if len(masks) > 2 else set())
+    for cid in free:
+        seed = positive.get(((previous[cid].get("names") or {}).get("seed"), kinds[cid]))
+        if not seed:
+            previous[cid] = {}
+            continue
+        metas = [x for typ, xs in (previous[cid].get("metas") or {}).items()
+                 if typ in ("movie", "series", "tv") for x in xs]
+        if not any(x["id"] not in blocked and preference_ok(x, cid, "both")
+                   and row_eligible(x, cid, lang, p, seed=seed["key"]) for x in metas):
+            kinds[cid], starts[cid], previous[cid] = None, now, {}
+        else:
+            retained[cid] = seed
     for seed in seeds:
         stype, kind = seed["stype"], seed["kind"]
+        cid = next((cid for cid in free if kinds[cid] == stype and
+                    (previous[cid].get("names") or {}).get("seed") == seed["key"]), None) or \
+            next((cid for cid in free if kinds[cid] == stype), None) or \
+            next((cid for cid in free if kinds[cid] is None), None)
+        if cid is None:
+            continue
         rec = frec(seed["key"], kind)
         anchor = {"id": seed["key"], "type": stype, "name": seed["title"], "_row": {"collection": rec.get("collection")}}
         universe = universe_key(anchor)
         if any(franchise_key(anchor) == franchise_key(a) or universe and universe == universe_key(a) or
                xsim(rec.get("x"), tags) >= BECAUSE_SEED_SIM for a, tags in anchors):
             continue
-        cid = BECAUSE_ROWS[len(anchors)]
         genre_names = genres(kind, lang)
         data, art = [], {}
         for path in (f"{kind}/{seed['id']}/recommendations", f"{kind}/{seed['id']}/similar"):
@@ -9003,11 +9171,27 @@ def because_feed(lang):
         if not metas:
             continue
         anchors.append((anchor, rec.get("x")))
+        free.remove(cid)
         out[cid] = {stype: metas[:30]}
         names[cid] = {"title": seed_phrase(seed), "seed": seed["key"],
-                      "label_key": seed_label(seed), "fields": {"title": seed["title"]}}
-        if len(anchors) == len(BECAUSE_ROWS):
+                      "label_key": seed_label(seed), "fields": {"title": seed["title"]},
+                      "slot_kind": stype, "slot_since": starts[cid]}
+        if not free:
             break
+    for cid in free:
+        if kinds[cid]:
+            seed = retained.get(cid)
+            if seed:
+                rec = frec(seed["key"], seed["kind"])
+                anchor = {"id": seed["key"], "type": seed["stype"], "name": seed["title"], "_row": {"collection": rec.get("collection")}}
+                universe = universe_key(anchor)
+                if any(franchise_key(anchor) == franchise_key(a) or universe and universe == universe_key(a) or
+                       xsim(rec.get("x"), tags) >= BECAUSE_SEED_SIM for a, tags in anchors):
+                    previous[cid] = {}
+                else:
+                    anchors.append((anchor, rec.get("x")))
+            out[cid] = previous[cid].get("metas") or {}
+            names[cid] = {**(previous[cid].get("names") or {}), "slot_kind": kinds[cid], "slot_since": starts[cid]}
     return {**out, "_names": names}
 
 
@@ -9127,8 +9311,9 @@ def saga_name(col, en):
     return re.sub(r"\s*(Collection|Filmreihe|Sammlung)$", "", name).strip()
 
 
-def details_pair(kind, tid, lang):
-    jobs = [_pool.submit(tmdb, f"{kind}/{tid}", language=l) for l in (lang, "en-US")]
+def details_pair(kind, tid, lang, *, cache_only=False):
+    fetch = partial(tmdb, _cache_only=True) if cache_only else tmdb
+    jobs = [_pool.submit(fetch, f"{kind}/{tid}", language=l) for l in (lang, "en-US")]
     return jobs[0].result(), jobs[1].result()
 
 
@@ -9387,11 +9572,12 @@ def anime_upcoming(entries, lang, today):
     return out
 
 
-def movie_collections(p):
+def movie_collections(p, *, cache_only=False):
     """TMDB collection ids of the sagas they watch: from their movies plus taste.json's rewatch_collections."""
     movies = [e for e in p["entries"] if e["weight"] > 0 and e["stype"] == "movie"][:150]
     cols = {int(c) for c in (read_taste().get("household") or {}).get("rewatch_collections") or []}
-    for job in [_pool.submit(tmdb, f"movie/{e['id']}", language="en-US") for e in movies]:
+    fetch = partial(tmdb, _cache_only=True) if cache_only else tmdb
+    for job in [_pool.submit(fetch, f"movie/{e['id']}", language="en-US") for e in movies]:
         try:
             c = job.result().get("belongs_to_collection")
         except Exception:
@@ -9573,6 +9759,11 @@ def catchup_feed(lang):
         found += [r] if isinstance(r, tuple) else r or []
     found.sort(key=lambda x: (x[0], x[1]))
     return {"tv": [m for *_, m in found][:20]}
+
+
+def ready_feed(lang):
+    from skald import ready
+    return ready.build(SimpleNamespace(**globals()), lang)
 
 
 # --- theme lanes ---------------------------------------------------------------------------
@@ -11075,7 +11266,7 @@ def known_meta(key, kind, lang=LANG, cached=None):
 def catalog_exclusions(cid, person=None):
     masks = row_masks('both' if person == 'together' else person or 'both')
     ignored = {r['key'] for r in title_fixes() if r.get('op') == 'ignore'
-               and (r.get('who') == person or person is None and r.get('who') not in CONFIG['household'].get('guests', []))}
+               and (r.get('who') == person or person is None and r.get('who') not in guest_people(CONFIG))}
     return ignored | masks[0] | masks[2], set(tired_keys({cid}))
 
 
@@ -11967,7 +12158,7 @@ def studios_feed(lang):
 
 # --- backups ---
 BACKUP_FILES = ("commands.json", "skald.json", "legacy.json", ".skald-household", ".skald-format", "feedback.jsonl", "imports.jsonl", "sessions.jsonl", "taste.json", "trakt.json",
-                "history.json", "history-summary.json", "history-forgotten.json", "health-settings.json", "learn.json", "online.json", "metrics.json", "lab.json", "decisions.jsonl", "usage.json",
+                "history.json", "history-summary.json", "history-forgotten.json", "history-seen.json", "health-settings.json", "learn.json", "online.json", "metrics.json", "lab.json", "decisions.jsonl", "usage.json",
                 "searches.jsonl", "emb.json", "facets.json", "memory.json", "memory.log.jsonl", "memory.prev.json", "interview.json", "shelves.json", "undo.jsonl", "wishes.jsonl", "shelf_rules.json",
                 "title_fixes.json", "archetypes.json") + (("connectors.json",) if CONNECTOR_BACKUP else ())
 BACKUP_SKIP = {"addon.json": "secret, never opened", "remote.json": "secret, never opened", "clients.json": "secret, never opened",
@@ -12330,6 +12521,7 @@ def job_specs(d, hashes):
         ("rewatch", [rid('rewatch')], f"{day}/{hh}", 1800, lambda l: {rid('rewatch'): rewatch_feed(l)}),
         ("upcoming", [rid('upcoming')], f"{day}/{d.hour // 6}/{hh}", 1800, lambda l: {rid('upcoming'): upcoming_feed(l)}),
         ("catchup", [rid('catchup')], f"{day}/{hh}{hashes.get('episodes', '')}", 1800, lambda l: {rid('catchup'): catchup_feed(l)}),
+        ("ready", READY_ROWS, f"{day}/{hh}{hashes.get('episodes', '')}", 1800, ready_feed),
         ("lanes", LANE_ROWS, f"source1/{day}/{hh}", 3600, lanes_feed),
         ("leap", [rid('leap')], f"source1/{day}/{hh}", 3600, leap_feed),
         *((person, [cid], f"{day}/{hh}", 3600, lambda l, p=person: member_feed(l, p)) for cid, person in ROW_OWNER.items()),
@@ -12358,7 +12550,7 @@ def job_specs(d, hashes):
             if person in hashes:
                 specs.append((person, [rid(person)], f"{day}/{hashes[person]}", 3 * 3600, lambda l, p=person: archived_feed(l, p)))
     shared = {"because", "rewatch", "upcoming", "catchup", "lanes", "leap", "moods", "docs", "studios", "personal", "week", "docsai",
-              "newtoyou"}
+              "newtoyou", "ready"}
     for key, builder in (('digital', digital_feed), ('toprated', toprated_feed)):
         if row_enabled(rid(key)):
             specs.append((key, [rid(key)], 'wide1/'+day if key == 'toprated' else day, 0, lambda l, k=key, b=builder: {rid(k): b(l)}))
@@ -12369,7 +12561,7 @@ def job_specs(d, hashes):
 
 # AIOStreams caches our manifest (with the row names) for hours but fetches rows fresh. Rows whose name changes
 # (because, lanes) are therefore served as they were when the manifest was last fetched, so name and content agree.
-DYNAMIC = BECAUSE_ROWS + [rid('leap'), rid('newtoyou')] + MOODS_ROWS + LANE_ROWS + SHELF_ROWS
+DYNAMIC = BECAUSE_ROWS + READY_ROWS + [rid('leap'), rid('newtoyou')] + MOODS_ROWS + LANE_ROWS + SHELF_ROWS
 _shown = {}
 _shown_scoped = {}
 _scoping = threading.local()
@@ -12378,6 +12570,23 @@ _pinning = threading.local()
 _pin_cache = {}
 _pin_epoch = 0
 _pin_lock = threading.RLock()
+
+
+def forget_person_caches():
+    from pathlib import Path
+    from skald.health import SERVING_CACHES
+    global _erasure_generation
+    with _pin_lock, _home_lock, _feeds_lock:
+        _erasure_generation += 1
+        for store in (_profiles, _feeds, _shown, _shown_scoped, _pin_cache, _home_cache, _feeds_empty):
+            store.clear()
+        _model.update(sig=None, m=None)
+        with _remote_lock, _imports_lock, _person_model_lock, _taste_ring_lock:
+            for store in (_remote_cache, _imports_cache, _person_models, _taste_ring):
+                store.clear()
+        for name in ('profile.json', 'taste_ring.json', 'learn.json', 'online.json', *SERVING_CACHES,
+                     *('health-cache-'+n for n in SERVING_CACHES)):
+            Path(DATA, name).unlink(missing_ok=True)
 
 
 def pin_decision(lang):
@@ -12401,6 +12610,12 @@ def pin_decision(lang):
         records.update(pins)
         _pinning.feeds = records
         try:
+            if (rid('ready1'), lang) in pins:
+                from skald import ready
+                record = {**pins[rid('ready1'), lang], 'ready_slots': {
+                    who: [[r['key'], r.get('season')] for r in ready.choices(SimpleNamespace(**globals()), lang, who, masks) if r['selected']]
+                    for who, masks in masks_by.items()}}
+                pins[rid('ready1'), lang] = records[rid('ready1'), lang] = record
             above = {who: set() for who in masks_by}
             moods = {who: 0 for who in above}
             cap = rowplan.family_caps(CONFIG)['mood'] if rowplan.capped(CONFIG) else len(MOODS_ROWS)
@@ -12538,20 +12753,26 @@ def feed(cid, lang):
     if hasattr(_pinning, "feeds"):
         return _pinning.feeds.get((cid, lang)) or {}
     scope = getattr(_scoping, "scope", None)
-    shown = _shown if scope is None else _shown_scoped[scope]
+    shown = _shown if scope is None else _shown_scoped.get(scope, {})
     return shown.get((cid, lang)) or _feeds.get((cid, lang)) or {}
 
 
 def save_feeds():
-    with _feeds_lock:
+    with _pin_lock, _feeds_lock:
+        generation = _erasure_generation
         snap = {f"{cid}|{lang}": v for (cid, lang), v in _feeds.items()}
-    tmp = os.path.join(DATA, "feeds.json.tmp")
+    tmp = os.path.join(DATA, "feeds.json." + uuid.uuid4().hex + ".tmp")
     try:
         with open(tmp, "w") as fh:
             json.dump(snap, fh, ensure_ascii=False)
-        os.replace(tmp, os.path.join(DATA, "feeds.json"))
+        with _pin_lock:
+            if generation == _erasure_generation:
+                os.replace(tmp, os.path.join(DATA, "feeds.json"))
     except OSError:
         pass
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def load_state():
@@ -12679,6 +12900,8 @@ def feed_pass(d, retry):
 
 
 def build_feeds(d, hashes, retry, only=None, *, force=False):
+    with _home_lock:
+        generation = _erasure_generation
     _theme_seasons.pending = {}
     ranks = {}
     for lang in list(_langs):
@@ -12721,14 +12944,18 @@ def build_feeds(d, hashes, retry, only=None, *, force=False):
                         retry[(job, lang)] = time.time() + 600
                         continue
                     if rows is None:  # no taste signal yet: keep the old row, check again later
-                        with _feeds_lock:
+                        with _home_lock, _feeds_lock:
+                            if generation != _erasure_generation:
+                                return
                             for cid in cids:
                                 if (cid, lang) not in _feeds:
                                     _feeds_empty.add((cid, lang))
                         retry[(job, lang)] = time.time() + 1800
                         continue
                     names = rows.pop("_names", None) or {}
-                    with _feeds_lock:
+                    with _home_lock, _feeds_lock:
+                        if generation != _erasure_generation:
+                            return
                         for cid in cids:
                             rec = {"stamp": stamp, "built": int(time.time()), "metas": rows.get(cid) or {}}
                             if names.get(cid):
@@ -12801,6 +13028,10 @@ def finish_cold_enrichment(d, retry):
 def feed_worker():
     retry = {}
     while True:
+        try:
+            search_commands.expire(command_context())
+        except Exception as e:
+            _daily_log(f'expiry tick failed: {type(e).__name__}')
         try:
             connectors_tick(time.time())
         except Exception as e:
@@ -13027,7 +13258,8 @@ def human_cards(metas, person=None):
     counts, out = {}, []
     for i, meta in enumerate(metas):
         parts, overview = card_parts(meta)
-        notes = [meta["_memory"]["why"]] if meta.get("_memory") and not child else []
+        ready_note = (meta.get('_row') or {}).get('ready_note')
+        notes = [ready_note] if ready_note else [meta["_memory"]["why"]] if meta.get("_memory") and not child else []
         for part in (() if child else parts):
             if notes:
                 break
@@ -13312,6 +13544,12 @@ def row_months(cid, lang, built=False):
 def row_list(cid, typ, lang, built=False):
     """A row as served. Mixed rows keep one ordered list ('tv', or movies and series interleaved; Watch Again also
     its AI half): type tv serves it whole, movie / series only that kind."""
+    if cid in READY_ROWS:
+        from skald import ready
+        s = SimpleNamespace(**globals())
+        who = _viewer.get() or who_watching()[0]
+        metas = ready.cards(s, ready.slot(s, cid, lang, who), who)
+        return metas if typ == 'tv' else [x for x in metas if x['type'] == typ]
     source = (_feeds.get((cid, lang)) or {}) if built else feed(cid, lang)
     if not season_fits(row_months(cid, lang, built)):
         return []
@@ -13435,7 +13673,7 @@ def adult_people():
 
 
 def member_people():
-    return tuple(p for p in PEOPLE if p not in CONFIG['household'].get('guests', []))
+    return tuple(p for p in PEOPLE if p not in guest_people(CONFIG))
 
 
 def retained_people():
@@ -13625,7 +13863,7 @@ def row_eligible(meta, cid, lang, p, animation=None, *, seed=None):
 def row_pool(lang):
     pool = {}
     for cid in DEDUPE_ORDER:
-        if cid in LAB_ROWS:
+        if cid in LAB_ROWS or cid in READY_ROWS and not row_enabled(cid):
             continue
         # A lane's pinned bench must not change the refill supply of rows above it.
         built = cid in LANES and bool(feed(cid, lang).get("_bench"))
@@ -13938,6 +14176,14 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
         if not row_scope_ok(cid):
             rowplan.observe(cid, code='unsafe')
             return []
+        if cid in READY_ROWS:
+            from skald import ready
+            s = SimpleNamespace(**globals())
+            release = ready.slot(s, cid, lang, who, masks)
+            metas = ready.cards(s, release, who)
+            metas = metas if typ == 'tv' else [x for x in metas if x['type'] == typ]
+            rowplan.observe(cid, metas, None if metas else 'not_today', typ=typ)
+            return metas
         names = feed(cid, lang).get("names") or {}
         if cid.startswith(rid('lab_')):
             scope = getattr(_scoping, 'scope', None)
@@ -14240,7 +14486,7 @@ def build_home(lang, p, masks, who, *, caps=None):
 
 _prefs_stamp = None
 _people_settings = {k: copy.deepcopy(CONFIG['household'].get(k))
-                    for k in ('members', 'guests', 'member_rows', 'labels', 'ages', 'retired', 'retired_rows')}
+                    for k in ('members', 'guests', 'member_rows', 'labels', 'ages', 'retired', 'retired_rows', 'away')}
 
 
 def refresh_preferences():
@@ -14278,7 +14524,7 @@ def refresh_preferences():
             ROW_OWNER = {rid(p): p for p in MEMBER_ROWS}
             TRAKT_PERSON = hh['trakt_member']
             EXPERIENCE_TAGS = {p: set(xs) for p, xs in hh['experiences'].items()}
-            MEMBER_NAMES = ' and '.join(LABELS[p] for p in PEOPLE if p not in hh.get('guests', []))
+            MEMBER_NAMES = ' and '.join(LABELS[p] for p in PEOPLE if p not in guest_people(cfg))
             MEMBER_COUNT = ('one', 'two', 'three', 'four', 'five', 'six')[len(PEOPLE)-1]
             SHELF_ROWS[:] = [rid(f'shelf_{p}_{n}') for p in (*PEOPLE, 'together') for n in range(1, 11)]
             DEDUPE_ORDER[:] = [cid for cid in DEDUPE_ORDER if cid not in old_rows]
@@ -14361,7 +14607,7 @@ def _home_rows(lang, who):
         masks = row_masks(who)
         p, m = _profiles.get("household"), get_model(False)
         scope = getattr(_scoping, "scope", None)
-        shown = _shown if scope is None else _shown_scoped[scope]
+        shown = _shown if scope is None else _shown_scoped.get(scope, {})
         with _feeds_lock:
             generation = tuple((source, k, id(v)) for source, store in enumerate((_feeds, shown))
                                for k, v in sorted(store.items()) if k[1] == lang)
@@ -14381,7 +14627,7 @@ def stats():
     with _usage_lock:
         _usage_roll()
         u = json.loads(json.dumps(_usage))
-    u["caps"] = {**AI_CAPS, "monthly_usd": AI_MONTHLY_USD}
+    u["caps"] = {**AI_CAPS, "monthly_usd": ai_monthly_usd()}
     u["rows"] = {f"{cid}|{lang}": {"built": v.get("built"), "stamp": v.get("stamp"),
                                    "count": {k: len(x) for k, x in (v.get("metas") or {}).items()}}
                  for (cid, lang), v in sorted(_feeds.items())}
@@ -15078,7 +15324,7 @@ def interview_answer(body):
 
 
 REMOTE_PORT = int(os.environ.get("REMOTE_PORT", "8081"))
-REMOTE_ROWS = set(ROW_OWNER) | {rid('foryou'), rid('week'), rid('upcoming'), rid('because'), rid('leap'),
+REMOTE_ROWS = set(ROW_OWNER) | set(READY_ROWS) | {rid('foryou'), rid('week'), rid('upcoming'), rid('because'), rid('leap'),
                rid('rewatch'), rid('interview'), rid('newtoyou')} | set(BECAUSE_ROWS) | set(MOODS_ROWS) | set(LANES) | set(STUDIO_ROWS) | set(DOCS)
 REMOTE_ACTIONS = {"love", "like", "meh", "not_for_us", "not_tonight", "seen"}
 REMOTE_REASONS = ("too dark", "too slow", "too violent", "too silly", "not my genre", "seen enough of these")
@@ -15219,9 +15465,9 @@ def remote_masks():
     tonight = set()
     now = time.time()
     state = feedback_state()
-    special = CONFIG['household'].get('guests') or CONFIG['household'].get('retired_rows')
+    special = guest_people(CONFIG) or CONFIG['household'].get('retired_rows')
     person = (SCOPES.get(getattr(_scoping, 'scope', None)) or _viewer.get() or who_watching()[0]) if special else None
-    people = (person,) if person in PEOPLE and person in CONFIG['household'].get('guests', []) else member_people()
+    people = (person,) if person in PEOPLE and person in guest_people(CONFIG) else member_people()
     blocked = {key for (key, who), e in state['active'].items() if who in people and e['action'] == 'not_for_us'} if special else state['blocked']
     for (key, who), e in state["tonight"].items():
         if who not in people:
@@ -15282,7 +15528,7 @@ def watch_owners(e, moves=None):
 def taste_entries(entries):
     """Household taste evidence; a plain watch loses the share of each member who asked Skald not to learn from it."""
     ignored = {(r["key"], r.get("who")) for r in title_fixes() if r.get("op") == "ignore"
-               and r.get("who") not in CONFIG['household'].get('guests', [])}
+               and r.get("who") not in guest_people(CONFIG)}
     if not ignored:
         return entries
     moves, out = title_moves(), []
@@ -15713,7 +15959,7 @@ def metrics_view(req):
     with _usage_lock:
         _usage_roll()
         usage = {"day": _usage["day"], "month_cost": _usage["month_cost"],
-                 "caps": {**AI_CAPS, "monthly_usd": AI_MONTHLY_USD}}
+                 "caps": {**AI_CAPS, "monthly_usd": ai_monthly_usd()}}
     return {"metrics": report, "decide": decide_stats(), "usage": usage}
 
 
@@ -16099,7 +16345,7 @@ def api_shelves(req):
             plan = shelves.read(SimpleNamespace(**globals()))['plans'].get(body['plan'])
             if not plan or viewer is not None and plan['scope'] not in (viewer, 'together'):
                 raise PermissionError('shelf scope')
-            search_commands.guest_scope(command_context(), viewer, {'people': [plan['scope']]})
+            search_commands.guest_scope(command_context(), viewer, {'people': [plan['scope']], 'shelf': {'scope': plan['scope'], **plan['change']}})
             return shelf_change(plan['scope'], plan['change']['op'], plan=body['plan'])
     result = shelf_list()
     return {**result, 'counts': {p: n for p, n in result['counts'].items() if viewer is None or p in (viewer, 'together')},

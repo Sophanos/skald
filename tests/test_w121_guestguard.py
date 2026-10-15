@@ -13,6 +13,7 @@ from test_w116_settings import SettingsFixture
 
 
 HOUSEHOLD = {
+    'ai_budget': dict(values=[2]),
     'row_rename': dict(values=['foryou', 'Invented picks']),
     'row_hide': dict(values=['top10']), 'row_show': dict(values=['digital']),
     'row_move': dict(values=['foryou', 'episodes']), 'row_lang': dict(values=['en-US']),
@@ -23,7 +24,9 @@ HOUSEHOLD = {
     'member_create': dict(person='kim', label='Kim', age=30),
     'member_update': dict(person='marko', guest=False),
     'member_remove': dict(person='ben'), 'member_rows': dict(person='marko', own_row=True),
+    'member_until': dict(person='marko'),
     'reattribute': dict(person='ben', values=['Invented River']),
+    'member_forget': dict(person='ben'), 'member_away': dict(person='ben'), 'member_back': dict(person='ben'),
 }
 READ = {'settings', 'history', 'shelf_list', 'ask', 'search', 'explain', 'taste_drivers',
         'home_reach', 'home_plan', 'ai_status', 'week_picks', 'row_names', 'lab_status', 'lab_moments'}

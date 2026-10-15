@@ -81,6 +81,7 @@ def select(data, config, now=None, person=None, doc=None):
     bucket, month = metrics.moment(config, now)
     ideas = (read(data) if doc is None else doc)['ideas']
     eligible = [i for i in ideas if i['state'] != 'retired' and
+                (person in i['members'] or not set(i['members']) <= set(config['household'].get('away', []))) and
                 (i.get('months', 'any') == 'any' or month in i['months']) and
                 (person not in (*config['household']['members'], 'together') or person in i['members'] or 'together' in i['members']) and
                 (i['state'] == 'trial' or not i.get('moments') or bucket in i['moments'])]

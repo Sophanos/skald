@@ -159,7 +159,7 @@ class AIBudgetTests(unittest.TestCase):
         self.assertEqual(self.s.ai_status()['last_failure']['reason'], 'skald_cap')
 
     def test_decision_cap_records_failure(self):
-        with patch.object(self.s, 'OR_KEY', 'synthetic'), patch.object(self.s, 'AI_MONTHLY_USD', 0):
+        with patch.object(self.s, 'OR_KEY', 'synthetic'), patch.object(self.s, 'ai_monthly_usd', return_value=0):
             self.s.decide('parse_command', {'query': 'How much AI credit is left?'})
         self.assertEqual(self.s.ai_status()['last_failure']['reason'], 'skald_cap')
 

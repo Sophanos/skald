@@ -235,7 +235,7 @@ class SettingsHistory(unittest.TestCase):
         self.assertEqual(shelves.read(self.s)['wishes'], [])
 
     def test_new_decision_rules_and_unsupported_taste_reset(self):
-        self.assertEqual(self.s.DECISIONS['parse_command']['ver'], 15)
+        self.assertEqual(self.s.DECISIONS['parse_command']['ver'], 17)
         cases = {'what did I change': ('history', []), 'Verlauf': ('history', []),
                  'undo no horror': ('undo', ['no horror']), 'undo the crime shelf': ('undo', ['the crime shelf']),
                  'bring back horror': ('undo', ['horror']), 'redo no horror': ('redo', ['no horror']),
@@ -320,14 +320,14 @@ class SettingsHistory(unittest.TestCase):
         self.assertIn('Old synthetic change', out.getvalue())
         self.assertEqual(before, {name: (self.root/name).read_bytes() for name in before})
 
-    def test_bound_links_cannot_reset_or_undo_other_adults_filters(self):
+    def test_bound_adults_can_undo_a_household_reset(self):
         c.apply(self.s, self.change('hide', ['anime'], person='ben'))
         with self.assertRaises(PermissionError):
             c.preview(self.s, 'reset filters for us', 'ana', 'ana')
         c.apply(self.s, c.preview(self.s, 'reset filters for us', 'ana'))
-        with self.assertRaises(PermissionError):
-            c.preview(self.s, 'undo reset filters for us', 'ana', 'ana')
-        self.assertEqual(self.prefs('ben'), {})
+        plan = c.preview(self.s, 'undo reset filters for us', 'ana', 'ana')
+        c.apply(self.s, plan)
+        self.assertEqual(self.prefs('ben'), {'hide': ['anime']})
 
     def test_unbound_api_can_confirm_a_named_reset(self):
         req = dict(viewer=None, client={'name': 'adult'}, body={'in': {'query': 'reset filters'}, 'person': 'ana', 'no_llm': True})
@@ -344,12 +344,15 @@ class SettingsHistory(unittest.TestCase):
             c.preview(self.s, 'redo stop crime', 'ana')
         self.assertEqual([w['text'] for w in shelves.read(self.s)['wishes']], ['comedy'])
 
-    def test_duplicate_matches_pick_newest_and_apply_the_list_inverse(self):
+    def test_duplicate_matches_ask_and_id_applies_the_list_inverse(self):
         now = self.s.time.time()
         with patch.object(self.s.time, 'time', return_value=now):
             for _ in range(3):
                 c.apply(self.s, c.preview(self.s, 'no horror', 'ana'))
-        c.apply(self.s, c.preview(self.s, 'undo no horror', 'ana'))
+        with self.assertRaisesRegex(ValueError, 'Which change'):
+            c.preview(self.s, 'undo no horror', 'ana')
+        latest = c.journal(self.s)['ana'][-1]['id']
+        c.apply(self.s, c.preview(self.s, 'undo '+latest, 'ana'))
         entries = c.journal(self.s)['ana']
         self.assertTrue(entries[-1].get('undone'))
         self.assertFalse(entries[-2].get('undone'))

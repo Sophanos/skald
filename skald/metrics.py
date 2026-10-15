@@ -24,8 +24,8 @@ def settings(config):
 
 
 def _people(config):
-    from .members import active_people
-    return [p for p in active_people(config) if p not in config['household'].get('guests', [])]
+    from .members import active_people, guest_people
+    return [p for p in active_people(config) if p not in guest_people(config)]
 
 
 def empty():
@@ -142,12 +142,24 @@ def _save(data, state):
     _write(Path(data)/'metrics.json', _totals(state))
 
 
-def forget(data, config, before, person, *, apply=False):
+def forget(data, config, before, person, *, apply=False, erase=False):
     if not any((Path(data)/name).exists() for name in ('metrics.json', 'metrics_shown.json')):
         return 0
     cutoff = dt.datetime.fromisoformat(before).replace(tzinfo=dt.timezone.utc).timestamp()
     with _lock:
         state = _state(data, config, cutoff)
+        if erase:
+            touched = sum(r['person'] in (person, 'together') for r in state['shown'])
+            state['shown'] = [r for r in state['shown'] if r['person'] not in (person, 'together')]
+            for rows in state['folded'].values():
+                for people in rows.values():
+                    for who in (person, 'together'):
+                        touched += who in people
+                        people.pop(who, None)
+            if touched and apply:
+                state['sources'] = {}
+                _save(data, state)
+            return touched
         touched, kept = set(), []
         for record in state['shown']:
             if record['person'] in (person, 'together') and any(t < cutoff for t in record['times']):

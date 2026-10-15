@@ -119,7 +119,7 @@ class W28Fixes(unittest.TestCase):
         (self.data/'legacy.json').write_text(json.dumps(cfg))
         order = Path(self.temp.name)/'order.mjs'
         with setup.server(self.data) as s:
-            requests = [(cid, typ) for cid in s.DEDUPE_ORDER if s.row_enabled(cid) for typ in
+            requests = [(cid, typ) for cid in s.DEDUPE_ORDER if s.row_enabled(cid) and cid not in s.READY_ROWS for typ in
                         (('movie', 'series') if cid in (s.rid('top10'), s.rid('toprated')) else ('series',) if cid in (s.rid('episodes'), s.rid('airing'), s.rid('nextseason')) else ('tv',))]
             order.write_text('const ORDER = [' + ','.join(repr('player.' + cid.split('.', 1)[1] + ':' + typ) for cid, typ in requests) + '];')
             with patch.object(s, 'row_metas', return_value=[]):

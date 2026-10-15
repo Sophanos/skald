@@ -185,7 +185,7 @@ def check_contract(testcase, server, name, fixtures=None):
                     if gate == "lane":
                         server._usage["calls"][spec["lane"] + ":other"] = server.AI_CAPS[spec["lane"]]
                     elif gate == "month":
-                        server._usage["month_cost"] = server.AI_MONTHLY_USD
+                        server._usage["month_cost"] = server.ai_monthly_usd()
                     elif gate == "cap":
                         if spec["cap"] is None:
                             continue
@@ -252,7 +252,7 @@ def synthetic_model(server):
     return m
 
 
-SETUP = {"lab_propose": reset, "explain_pick": synthetic_model, "mood_pick": reset, "theme_source": reset, "theme_season": reset, "rank_titles": synthetic_model}
+SETUP = {"lab_propose": reset, "parse_command": reset, "explain_pick": synthetic_model, "mood_pick": reset, "theme_source": reset, "theme_season": reset, "rank_titles": synthetic_model}
 
 
 def write_legacy(data):

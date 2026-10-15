@@ -69,7 +69,7 @@ class LanesR3(unittest.TestCase):
         s, front, deep = self.s, [], []
         s.CONFIG['household']['home'] = {'family_caps': {'mood': len(s.MOODS_ROWS)}}
         for i, cid in enumerate(s.DEDUPE_ORDER[:s.DEDUPE_ORDER.index(s.LANES[0])]):
-            if not s.row_enabled(cid):
+            if not s.row_enabled(cid) or cid in s.READY_ROWS:
                 continue
             xs = cards(14, 1000+i*100)
             rows = {'movie': xs, 'series': []} if cid in (rid('top10', s.CONFIG), rid('toprated', s.CONFIG)) else {'series': xs} if cid == rid('episodes', s.CONFIG) else {'tv': xs}

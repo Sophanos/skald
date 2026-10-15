@@ -70,14 +70,14 @@ class TogetherFixes(unittest.TestCase):
             before = stamps()
             # Week now uses the calendar boundary and full people signature; other stamps stay unchanged.
             self.assertIn('toprated', before)
-            self.assertEqual(hashlib.sha256(json.dumps({k: v for k, v in before.items() if k not in ('week', 'toprated')}, sort_keys=True).encode()).hexdigest(), 'f11d7d332700d517c9563b7a82f58897199e9dda2d856af872acaff7013efd62')
+            self.assertEqual(hashlib.sha256(json.dumps({k: v for k, v in before.items() if k not in ('week', 'toprated', 'ready')}, sort_keys=True).encode()).hexdigest(), 'f11d7d332700d517c9563b7a82f58897199e9dda2d856af872acaff7013efd62')
             with self.prefs(ana={'kids_age': 8}):
                 child = stamps()
             with self.prefs(ana={'kids_age': 13}):
                 older = stamps()
             with self.prefs(ben={'kids_age': 8}):
                 other = stamps()
-            for job in ('rewatch', 'upcoming', 'catchup', 'because', 'leap', 'lanes', 'moods', 'docs', 'studios', 'personal', 'week', 'docsai'):
+            for job in ('rewatch', 'upcoming', 'catchup', 'ready', 'because', 'leap', 'lanes', 'moods', 'docs', 'studios', 'personal', 'week', 'docsai'):
                 self.assertNotEqual(before[job], child[job], job)
                 if job == 'week':
                     self.assertNotEqual(child[job], older[job], job)

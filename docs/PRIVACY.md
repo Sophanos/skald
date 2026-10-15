@@ -21,6 +21,42 @@ These requests leave it:
 
 Raw exports stay on the laptop. Remote previews send title candidates to your Skald server; pushing sends resolved signals.
 
+## Leaving, guests and forgetting
+
+You can stop someone's influence on household picks without erasing their history.
+Removing a person keeps their saved data and can be undone. Away keeps an adult's
+profile and link working, while their taste stops shaping other people's picks.
+Guests' reactions shape their own picks and shared guest shelves, not household taste.
+When a visit expires, the guest leaves the active household and their shelf stops
+showing; their history and ratings stay saved. A shelf with its own end date is removed
+when that date expires. Guest expiry is not erasure.
+
+"Forget Ben" previews permanent erasure and needs the exact confirmation code.
+It currently accepts adult members, not children or named guests.
+It removes that adult's personal history, ratings, imports, history summaries,
+preferences, names, shelves (including shared shelves), personal row ideas, saved
+commands, memory and interview answers, title corrections and linked clients.
+Their sync accounts, saved sync data and credentials no longer used by another
+account are removed. Their personal and Together row metrics are erased, derived
+taste and row caches are cleared, and household row-play learning starts again.
+Other people's own ratings and data stay.
+
+Together-watches through the forget date stay seen for the others but stop teaching
+their taste. A later watch or someone's own rating can teach taste again. Skald keeps
+a local cutoff for the forgotten id to prevent old syncs from bringing their evidence
+back. After forgetting, no information about that person is sent anywhere;
+their inputs are excluded from later learning and sync results. It cannot retract
+requests already sent to services before the forget.
+
+Backups made before forgetting still contain the old data. Daily archives keep the
+newest 14 distinct backup dates. Among the remaining older dates, they also keep
+the oldest saved date in each of up to eight most recent ISO calendar weeks represented.
+They are pruned as newer backups replace them, not after a fixed number of days.
+The newest three pre-migration archives are
+kept separately. Private `backups/pre-people-*.json` settings copies, including the
+one made before forgetting, have no automatic expiry. Forget does not rewrite any
+of these backups; remove old copies yourself if they must not retain the person.
+
 ## Keep it private
 
 Keep addon links, tokens, data and backups private.

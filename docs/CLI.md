@@ -8,7 +8,35 @@ The copy is read-only. Imports are saved separately in `$XDG_DATA_HOME/skald`,
 or `~/.local/share/skald`. Change that with `--state-dir PATH`.
 `--json` prints machine results. Use `skald COMMAND --help` for flags.
 
-`skald ai status --json` reads saved OpenRouter credit, the last check and failure,
+`skald ai budget --json` reads the household monthly budget in USD, its ceiling
+and whether the ceiling comes from the environment or the default. Preview a
+change with `skald ai budget 5 --person ana --json`, then repeat with `--yes` or
+`--plan HASH`. An explicit `AI_MONTHLY_USD` is the ceiling; otherwise the ceiling
+is 25 USD. Without a saved value the budget uses `AI_MONTHLY_USD` when set,
+otherwise 3 USD.
+Set 0 to turn off paid AI calls until the budget is changed again. Search and
+rows keep their existing fallbacks. Changes take effect without a restart.
+Only adult household members may change this budget. A 1.4.9 server ignores the
+saved budget and uses its environment budget instead.
+
+`skald changes --since 7d --person ana --json` lists saved changes with their id,
+time, scope, actor, name and undone flag. Adults see all scopes. Kids and guests
+see their own scope. Omit `--person` for the local operator view of all scopes.
+The journal retains up to 200 changes per scope for 180 days; older entries may
+have an unknown actor or time. Preview one undo with
+`skald changes undo ID --person ana --json`, then repeat with `--yes` or
+`--plan HASH`. Adults may undo another person's entry; kids and guests may undo
+permitted changes in their own scope, including those made by an adult.
+Undo a later change to the same setting first. The existing
+`skald command --person ana --undo` also undoes a budget change.
+
+Commander understands requests such as “set the AI budget to 5 dollars a month”,
+“turn AI off this month” and “what changed this week”. Budget requests in another
+currency keep the number and show USD in the preview. Changes still need the
+displayed confirmation code. “undo the row rename” can find another person's
+change when an adult asks.
+
+`skald ai status --json` reads saved OpenRouter credit, the household budget and ceiling, the last check and failure,
 Skald spending today and this month, and daily calls used per group. It works
 offline and writes nothing. Add `--refresh` to check the key once now, using
 `OPENROUTER_API_KEY` from the environment. `setup --status` shows a credit line.
@@ -27,9 +55,10 @@ Ask Commander “how much AI credit is left?” to read the same saved numbers.
 | `explain` | Show scoring details, unseen known rank per person, Home row presence, feeling rows sourced from the tagged catalog and the household taste archetype: `skald --snapshot /path/copy explain tmdb:123 --json`. A served Top Rated pick includes its rating, relative taste match and row position; use `--person ana` for that member. |
 | `rows` | Preview rows: `skald --snapshot /path/copy rows --n 10` |
 | `rows pool [--json]` | Read today's seed choices and last background pool counts: `skald --snapshot /path/copy rows pool --json`; missing offline endpoints are reported, and counts carry their build time. |
+| `rows ready [--person NAME] [--json]` | Read saved release marathons: `skald rows ready --json`. Without `--person`, the operator sees every member's qualification reasons and progress. With `--person`, only that viewer's reasons and seen information appear alongside shared release facts. Explicit `household`, `together` and `guest` views contain shared facts only. When no row shows, a plain line explains why; JSON includes `cause` and `message`. Uses local `DATA_DIR` or `--snapshot` offline; it never fetches TMDB or rebuilds feeds. Inspect the two slots with `rows why ready1` and `rows why ready2`. Commander can answer “what should I watch before the new Invented Ember?” from the same data. “Hide the get ready row” and “show it again” control the `ready` family. |
 | `rows reach [--person NAME] [--top N]` | Check how many best unseen known matches appear on each profile's Home, with row ids and the first drop reason for missing titles: `skald --snapshot /path/copy rows reach --top 20 --json`. Omit `--person` for the household and every member. Reads stored data offline; it does not source or rebuild feeds. `--top` defaults to 20 and accepts 1..10000. |
 | `rows plan` | Explain every registered home row, including hidden rows: `skald rows plan --person household --lang en-US --json`. Top Rated cards include type, position, TMDB rating, relative taste match (0..100) and blend score. Feeling rows include `candidate_sources`: catalog and recommendation counts before vetting or balancing, and `missing_cards` skipped because stored artwork is missing. Themed vetting examines the first 40 cards. Counts appear after a rebuild. Themed rows include `season.months` (month numbers, `"any"`, or `null` when unknown) and `season.hidden` for the household's local date. Reads local `DATA_DIR` or `--snapshot`; `--person` also accepts `together`, a member or `guest`. |
-| `rows why ROW` | Explain one row and its kept and dropped cards: `skald rows why mood1 --person ana --json`. Use `skald rows why toprated --person ana --json` to list ranked movies and series with rating and taste. Commander can read the same list through its Home plan operation, or hide and show the row with `hide top rated` and `show top rated series`. Both types share the `toprated` control. Uses the same read-only build as `rows plan`. |
+| `rows why ROW` | Explain one row and its kept and dropped cards: `skald rows why mood1 --person ana --json`. Get Ready summaries in `rows plan` and `rows why` use the same privacy projection as `rows ready`: omit `--person` for the full operator view. Use `skald rows why toprated --person ana --json` to list ranked movies and series with rating and taste. Commander can read the same list through its Home plan operation, or hide and show the row with `hide top rated` and `show top rated series`. Both types share the `toprated` control. Uses the same read-only build as `rows plan`. |
 | `rows prefer` | Preview a household mood or lane limit change: `skald rows prefer --theme mood --more` or `--theme lane --fewer`. Automatic Home defaults to three each; Home can show at most four mood rows and five lane rows. Apply with `--plan HASH` from the preview or `--yes`. Preview and apply refuse a reduction below six populated rows, or the current count if already lower, and never allow zero populated rows. Changes use the existing atomic `skald.json` write; the server reloads them on its next row request or worker pass. Hiding or showing a row preserves both family limits. An explicit household `rows` selection bypasses these limits. |
 | `rows refresh ROW` | Preview refreshing one row: `skald rows refresh mood1`. Apply with `--plan HASH` or `--yes`; the CLI atomically queues row ids in `DATA_DIR/row_refresh.json`, without writing feeds or calling upstream services. The worker clears those rows' stamps and deletes the request at the start of its next feed pass. Older servers ignore the request. A grouped mood or lane build can also rebuild its siblings. Queued CLI refreshes have no undo. |
 | `rows week [--weeks N] [--person NAME] [--json]` | Read saved weekly picks offline, including on an older snapshot. Defaults to the latest saved week; `--weeks 1..8` includes that week and earlier calendar weeks. For example: `skald --snapshot /path/copy rows week --weeks 4 --person ana --json`. |
@@ -212,6 +241,58 @@ Bound tokens can change only their own person. Guest and child tokens cannot cha
 
 `skald command --person ana "history"` lists settings changes with their age.
 
+### Household people and controls
+
+These examples print JSON for an agent or script. Changes preview first; repeat
+the same command with `--plan HASH` from that preview, or `--yes`, to apply.
+Read-only lists need no confirmation. In search, use the exact `yes NN` instead.
+`--person ana` names the adult making the change; the positional name is the target.
+
+| Action / Commander op | Search example | CLI example with JSON output |
+|---|---|---|
+| List people | "my settings" (`settings`) | `skald members list --json` |
+| Add a member (`member_create`) | "Add my mother Vesna" or "Add Vesna" | `skald members add vesna --member --label Vesna --person ana --json` |
+| Add a child (`member_create`) | "Add Kim, she is 12" | `skald members add kim --age 12 --person ana --json` |
+| Ask a missing name or age (`ask`) | "Add my child"; reply with the name, then age | `skald command "Add my child" --person ana --json` |
+| Update an age (`member_update`) | "Update Ben to age 13" | `skald members update ben --age 13 --person ana --json` |
+| Update a name (`member_update`) | "rename Ana to Anja" | `skald members update ana --label Anja --person ana --json` |
+| Add a guest for days (`member_create`) | "Add Marko as a guest for 3 days" | `skald members add marko --guest --days 3 --person ana --json` |
+| Add a guest until a date (`member_create`) | "Add Marko as a guest until 18 October" | `skald members add marko --guest --until 2026-10-18 --person ana --json` |
+| Change guest status (`member_update`) | "Make Marko a full member" | `skald members update marko --member --person ana --json` |
+| Change a guest's end (`member_update`) | "Kim bleibt bis Sonntag" | `skald members update kim --until 2026-10-18 --person ana --json` |
+| Clear a guest's end (`member_update`) | "Let Kim stay without an end date" | `skald members update kim --no-end --person ana --json` |
+| Read a guest's end (`member_until`) | "When does Kim leave?" | `skald command "When does Kim leave?" --person ana --json` |
+| Show an own Home row (`member_rows`) | "Give Kim her own row" | `skald members rows kim on --person ana --json` |
+| Add a guest shelf (`shelf_add`) | "a catalog for Kim and me with heist movies for 3 days" | `skald shelf add "heist movies" --person ana --with-person kim --days 3 --json` |
+| Leave (`member_remove`) | "Ben moved out" | `skald members remove ben --person ana --json` |
+| Forget permanently (`member_forget`) | "Forget Ben" | `skald members forget ben --person ana --json` |
+| Away without an end (`member_away`) | "Ben is away for a while" | `skald members away ben --person ana --json` |
+| Away for days (`member_away`) | "pause Ben for two weeks" | `skald members away ben --days 14 --person ana --json` |
+| Away until a date (`member_away`) | "Ben is away until 1 November" | `skald members away ben --until 2026-11-01 --person ana --json` |
+| Back (`member_back`) | "Ben is back" | `skald members back ben --person ana --json` |
+| Read the AI budget (`ai_status`) | "how much AI credit is left?" | `skald ai budget --json` |
+| Set the monthly budget (`ai_budget`) | "set the AI budget to 5 dollars a month" | `skald ai budget 5 --person ana --json` |
+| List changes (`history`) | "what changed this week" | `skald changes --since 7d --person ana --json` |
+| Undo by name (`undo`) | "undo the AI budget" | `skald changes undo "AI budget" --person ana --json` |
+| Undo by id (`undo`) | "undo ID" | `skald changes undo ID --person ana --json` |
+| Undo the last change (`undo`) | "undo" | `skald command --undo --person ana --json` |
+| View Get Ready (`home_plan`) | "what should I watch before the new Invented Ember?" | `skald rows ready --person ana --json` |
+| Hide Get Ready (`row_hide`) | "hide the get ready row" | `skald command "hide the get ready row" --person ana --json` |
+| Show Get Ready (`row_show`) | "show the get ready row" | `skald command "show the get ready row" --person ana --json` |
+
+The CLI has no `--role` flag: ages 3..17 set the child filter; ages 18..120
+clear it. Search understands adult or child meaning. A child without an age
+gets a question before anyone is added; a title search clears the pending question
+and searches normally. To give a child age without a conversation in a script,
+use `members add NAME --age N`. Guest/member status is separate from age.
+Use `--guest` to switch a member to guest, `rows NAME off` to hide their own row,
+and `shelf add ... --until YYYY-MM-DD` for a shelf with a last date.
+
+Undo by name uses the change's name or identifying words; ids come from `changes`.
+Ambiguous names ask for an id. Unrelated newer changes stay, including newer settings
+when undoing an earlier people change. A conflicting newer value must be undone first.
+Forgetting cannot be undone. Away, back and forget currently target adults only.
+
 Manage household people with `skald members list --json`. It lists display names,
 optional ages, member or guest status, own Home rows and shelf counts. The limit
 is six active people, including guests; retired profiles do not count. Nothing
@@ -222,6 +303,19 @@ if it would put the household above six active profiles.
 Add `--age 12` for a child, `--label Marko` for a display name, or `--own-row`
 when they want a Home row. Guests have no own Home row by default. Repeat the
 same command with `--yes` or `--plan HASH` to apply the preview.
+Add `--days 3` or `--until 2026-10-18` for a temporary guest. Days must be
+1..30, counted from today's date; the guest stays through the end of that
+local day in the household timezone. An explicit date can be today or within
+30 days. `members update kim --days 4 --person ana` previews a new end counted
+from today; `--days 0` or `--no-end` clears it. Full members cannot have an end.
+`members list --json` includes `guest_until` when set. Commander accepts
+`Add Kim as a guest for 3 days`, `Kim bleibt bis Sonntag` and the read-only
+question `When does Kim leave?`.
+
+The running worker retires expired guests on its next minute tick, using the
+usual removal journal. Their evidence stays saved and their active slot is freed.
+`undo` or `bring Kim back` restores them and clears the elapsed end date, so
+they stay back until you set a new end. Children and guests cannot make these changes.
 `skald members update marko --member --person ana` promotes a guest;
 `--guest` changes them back. Neither change adds a row implicitly.
 `skald members rows kim on --person ana --json` previews Kim's own Home row;
@@ -240,18 +334,81 @@ cannot change people. Use `skald members --undo --person ana` or
 `skald command --undo --person ana` to restore the last change. Undo keeps
 unrelated changes and refuses conflicting changes before restoring anything.
 
+`skald members forget ben --person ana --json` previews permanent erasure,
+including an already removed adult. It counts personal feedback, imports,
+history, shelves and Row Lab ideas, and shared watches per remaining member.
+Repeat with `--yes` or `--plan HASH`. Personal data and connector links are
+deleted. Shared watches through today stop teaching taste but their titles stay
+seen. Other people's own ratings stay. Shared shelves with that person are
+deleted. Forget cannot be undone. Existing private settings copies in
+`backups/pre-people-*.json` stay unchanged.
+
+`skald members away ben --person ana --json` previews a temporary absence.
+Apply with `--yes` or `--plan HASH`. Their profile and link keep working and
+their own picks keep learning, like a named guest. Their evidence and settings
+do not affect other people, Together or household rows. Their Home row and
+shelves stay saved. They still count toward the six-profile limit.
+`skald members back ben --person ana --json` previews their return. Both away
+and back support `members --undo --person ana`. Another adult must make these
+changes; children and guests cannot. You cannot pause or forget yourself or
+the last adult at home.
+
+Add `--days 14` or `--until 2026-11-01` to `members away` for a dated absence.
+Days must be 1..30 from today; until must be today or within 30 days. The person
+stays away through that whole local day and returns the following day. The
+preview shows the return date. Repeat away with a new date to shorten or extend
+an absence. Without a date, away keeps its current indefinite behaviour.
+The worker checks dates at startup and each cycle. Automatic returns are
+journaled and undoable. Return and removal clear the date; their undo restores
+it. An expired date restored by undo becomes due again on the next cycle;
+change the away date to extend the absence. Forget clears it permanently.
+
+Commander also accepts `Lena moved out`, `We broke up, remove Lena`,
+`Vesna passed away`, `Vergiss Lena`, `Zaboravi Lenu`, `pause Ben`,
+`Ben ist eine Weile weg`, `Ben je odsutan neko vreme`, `Ben is back`,
+`Ben ist zurück` and `Ben se vratio`. Dated examples include `Ben is away until
+1 November`, `Ben ist bis Ende des Monats weg`, `Ben je odsutan do petka` and
+`pause Ben for two weeks`. Each shows one preview before `yes NN`.
+Removal keeps a neutral description and suggests saying `forget NAME` to erase
+history too. Reasons for leaving are not stored.
+
+`household.away`, `household.away_until` and `history-seen.json` are optional,
+so FORMAT stays unchanged. Older validators retain the absence fields and
+ignore the return date.
+A 1.4.9 rollback ignores absence and treats the person as a full member again.
+It also ignores the new seen-only record, so keep the current server for these
+learning and seen guarantees.
+
 Commander accepts these changes in English, German and Serbian, including
 `Add my best friend Marko as a guest`, `Entferne Ben` and `Ukloni Bena`.
+Every child needs an age. `Add my kids Mia 9 and Leo` asks how old Leo is
+before adding either child. Reply with the age, then confirm the complete preview.
+You can interrupt a pending question with a title search.
 Confirm the exact `yes NN` preview code. `Undo that` reverses the last change.
 `Add a catalog for Marko and me with heist movies` creates a shelf on the
 requesting member's Home, with both people's hides, excluded genres, seen and
 negative filters. Guests' reactions never shape household taste or the Together
 label. Pronouns are used to understand speech and are never stored as profile fields.
+For a guest with ratings, a shared shelf averages the host's and guest's member
+scores equally. With no guest ratings it keeps the host's ranking. Shared shelves
+between full members keep the host's ranking.
+
+Commander also accepts `Make a catalog for Kim on my Home with invented heists
+for 3 days` or `a catalog for Kim and me with invented heists until Sunday`.
+The shelf belongs to the host's own scope and uses Kim as its second person.
+Guest retirement hides it as usual; its own end removes it and records an undo.
+Undoing that expiry restores the shelf without the elapsed end date.
+Temporary shelves and shelves with a guest partner require an adult household member.
+Guest and shelf end dates are optional fields, with no FORMAT change.
+Version 1.4.9 loads them but ignores the end dates: the guest and shelf stay.
 
 Data format stays unchanged: guests, ages, retired people and row ids and the optional
 second person on a shelf are optional fields older servers ignore. Keep the
 current server when using guest isolation and retirement. Retired identities
 remain in the saved members list so older servers can load their client records.
+Before rolling back to 1.4.9, copy `ops/rollback-1.4.9.patch` into that
+source tree and run `patch -p1 < ops/rollback-1.4.9.patch`. It makes undo check saved
+evidence for every person in a multi-person addition before removing anyone.
 Rolling back to df66a3f makes saved retired people active again, removes guest
 isolation and reactivates their scopes and tokens. It ignores retired row ids
 and shared-shelf partner filters. Ages alone are ignored, while existing
@@ -289,7 +446,7 @@ Right after a change, `no, I meant Ben` or `not horror, thriller` fixes it: a pe
 Unclear requests such as `maybe hide some of those?` get one short question and change nothing.
 `I wish there were more gentle mysteries` is noted in `wishes.jsonl` without changing settings.
 `limit my Classics shelf to movies under 90 minutes` adds a filter to one existing shelf (`exclude movies` keeps only series); `Christmas movies every December` adds a shelf that shows only in those months.
-`add a household member named Kim, age 12` and `update Ben to age 13` preview member changes; they apply after a restart, and `undo` reverts them unless a new member already has data.
+`add a household member named Kim, age 12` and `update Ben to age 13` preview member changes; they apply on confirmation, and `undo` reverts them unless a new member already has data.
 `something like Arrival`, `movies by Kim` and `something cozy tonight` run a search and change nothing.
 
 Title commands work on one title and preview first like other changes.
@@ -306,6 +463,12 @@ Plain `undo` reverts a title command; `undo` with a phrase does not target them.
 
 `skald shelf add --person ana --when "sun 05-12" --name "Sunday Classics" "a classic film"` previews a wish and prints its plan hash. Repeat with `--yes` or `--plan HASH` to apply. Use `--together` instead of `--person` for shared slots.
 `skald shelf list [--person ana]` lists wishes. `skald shelf stop --person ana NAME` stops one; a slot number also works. `skald shelf replace --person ana --slot 1 --yes "another wish"` replaces it.
+Add `--days 3` or `--until 2026-10-18` to `shelf add` or `shelf replace`
+for an end date. `--with-person kim` uses Kim's seen titles and hides too.
+For example, `skald shelf add --person ana --with-person kim --days 3
+--json "invented heists"` previews a temporary shelf on Ana's Home.
+Repeat with `--yes` or `--plan HASH`; `skald command --undo --person ana --json`
+restores the previous shelf state.
 `skald shelf count --person ana 6` or `skald shelf count --together 3` changes the number of slots. These commands use local DATA_DIR. GET `/api/v1/shelves` lists a bound member's own wishes plus Together; POST accepts `{ "plan": "HASH" }` from a local preview. Child and guest tokens cannot use this API.
 
 Lowering the shelf count keeps hidden wishes saved. Raise the count to show them again. Shelf filters use the same runtime bounds (1..600 minutes), year bounds (1..9999), two-letter language codes and TMDB genre names as personal preferences.

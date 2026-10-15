@@ -80,6 +80,10 @@ def text(data, lang='en', *, detailed=False):
     if not detailed:
         return line
     lines = [line, t('ai.spend', lang, today=f"{data['spend_today']:.2f}", month=f"{data['spend_month']:.2f}")]
+    if 'budget' in data:
+        b = data['budget']
+        lines.append('AI budget: '+str(b['household'] if b['household'] is not None else 'default 3')+
+                     ' USD/month; ceiling '+str(b['ceiling'])+' USD ('+b['ceiling_source']+').')
     lines.append(t('ai.caps', lang) + ' ' + ', '.join(f"{lane} {n['used']}/{n['cap']}" for lane, n in data['daily_caps'].items()))
     if data['last_failure']:
         lines.append(t('ai.last_failure', lang, reason=t('ai.failure.' + data['last_failure']['reason'], lang)))

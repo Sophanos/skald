@@ -402,7 +402,7 @@ class Surfaces(Base):
     def test_docs_and_changelog(self):
         cli = (ROOT / "docs/CLI.md").read_text()
         self.assertIn("newtoyou", cli)
-        head = (ROOT / "CHANGELOG.md").read_text().split("## 1.4.1", 1)[1].split("**Data changes:** none.", 1)[0]
+        head = (ROOT / "CHANGELOG.md").read_text().split("## 1.4.1\n", 1)[1].split("**Data changes:** none.", 1)[0]
         self.assertIn("New to You", head)
         self.assertIn("archetypes.json", head)
         self.assertLessEqual(len((ROOT / "README.md").read_text().splitlines()), 220)
@@ -471,7 +471,7 @@ class ReviewFixes(Base):
         self.assertEqual(items["ben"]["at"], int(NOW))
 
     def test_parse_command_version_bumped(self):
-        self.assertEqual(self.s.DECISIONS["parse_command"]["ver"], 15)
+        self.assertEqual(self.s.DECISIONS["parse_command"]["ver"], 17)
 
 
 if __name__ == "__main__":

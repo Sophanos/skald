@@ -9,7 +9,7 @@ Names use your household language and follow the current picks.
 `Same Feeling as <title>`, `More from <maker>`, Watch It Again, Coming Soon, mood shelves, theme shelves,
 wish shelves, Fresh Finds and Family Picks.
 
-**Catalogs** are plain lists filtered by your history: Continue Watching and Catch Up
+**Catalogs** are plain lists filtered by your history: Continue Watching, Get Ready and Catch Up
 (your own shows and collections), Top 10, the two Anime rows, Latest Digital Releases and Best Movies / Best Series (Top Rated).
 Documentary and studio shelves start from a catalog and are ranked by household taste.
 
@@ -25,6 +25,7 @@ Experience shelves need saved title tags; OpenRouter creates these tags. Without
 | ✨ New This Week | Weekly picks for each member and Together. | Yes |
 | `Picks for <member>` | Recommendations based on that person's positive history. | No curation call; uses saved experience tags |
 | Coming Soon | Upcoming films and shows. | No |
+| `Get Ready for <release>` | Earlier saga films or unfinished seasons to catch up before a new release. | No |
 | Family Picks (only when a child is set up) | Titles safe for every child, ordered by adult taste. | No |
 | Catch Up | Shows and film collections you can return to. | No |
 | Watch It Again | Favourites and familiar titles to revisit. | No |
@@ -46,6 +47,18 @@ Experience shelves need saved title tags; OpenRouter creates these tags. Without
 "More Like Your Favorites", "Same Feeling, New World" and "Tonight's Mood" are fallback names while shelves build. "Our Picks" is also the member API's row label.
 Wish shelves are rows you ask for in search; see [wish shelves](SEARCH.md#wish-shelves).
 Choose rows with `skald setup rows`; see [setup](SETUP.md#2-add-your-household) for valid keys.
+
+Get Ready helps you catch up before a coming saga film or season, using saved release
+details and your own watching progress. Up to two rows cover releases from seven days
+ago through 42 days ahead. Films follow interest in earlier parts or a saved saga rewatch
+choice; series need known episode progress and unfinished earlier seasons. Normal age,
+hide and dislike filters still apply. Each viewer sees only their own reasons and progress.
+`skald rows ready --person ana --json` explains the saved rows or why none qualifies.
+
+A Because row keeps to films or series so your watching app can show it consistently.
+On a rebuild it can switch after seven days, or sooner if its saved picks would all be
+hidden, watched, disliked or otherwise filtered out. A switch needs suitable new picks;
+it does not promise a full row every time.
 
 ## Personal settings
 

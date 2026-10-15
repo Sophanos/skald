@@ -5,9 +5,10 @@ from pathlib import Path
 
 from . import i18n, members
 
-FIXED = {key: 'row.' + key for key in ('episodes', 'foryou', 'week', 'upcoming', 'catchup', 'rewatch',
+FIXED = {key: 'row.' + key for key in ('episodes', 'foryou', 'week', 'upcoming', 'catchup', 'rewatch', 'ready',
          'because', 'because2', 'because3', 'leap', 'digital', 'toprated', 'family', 'newtoyou', 'hbo', 'paramount')}
 FIXED.update(airing='row.airing', nextseason='row.nextseason', doctrend='row.docs.trending',
+             ready1='row.ready', ready2='row.ready',
              **{key: 'row.docs.' + key for key in ('wonder', 'cosmos', 'history', 'meaning')})
 LANE_TEMPLATE = {'d': 'row.lane.from', 'a': 'row.lane.starring', 'n': 'row.lane.brand', 'c': 'row.lane.from'}
 
@@ -55,7 +56,7 @@ def describe(cid, names, config, lang, lanes=None):
         'lanes': [*[f'lane{i}' for i in range(1, 6)], 'lanebench1', 'lanebench2'],
         'docs': ['wonder', 'cosmos', 'history', 'meaning', 'doctrend', 'docsai'],
         'studios': ['hbo', 'paramount'], 'anime': ['airing', 'nextseason'],
-        'rewatch': ['rewatch', 'rewatchai'], 'because': ['because', 'because2', 'because3'],
+        'rewatch': ['rewatch', 'rewatchai'], 'ready': ['ready1', 'ready2'], 'because': ['because', 'because2', 'because3'],
         'shelves': [key] if key.startswith('shelf_') else []}.items() if key in ids), key)
     custom = text(mapping(hh.get('row_labels')).get(group))
     if custom:

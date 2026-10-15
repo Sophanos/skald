@@ -15,6 +15,66 @@ from decide_kit import load_server, close_server
 
 
 class CommandEval(unittest.TestCase):
+    def test_away_hint_uses_the_named_last_day(self):
+        prompt = commands.command_prompt(ev.synthetic_spec('/synthetic')[0])
+        self.assertIn('until is the last day away, exactly the day the user names', prompt)
+        self.assertIn('Skald brings them back automatically the next local day', prompt)
+        self.assertNotIn('return the following day', prompt)
+
+    def test_wish_hint_separates_hopes_from_supported_actions(self):
+        prompt = commands.command_prompt(ev.synthetic_spec('/synthetic')[0])
+        self.assertIn('wish is a hope about what the picks contain', prompt)
+        self.assertIn('Polite or indirect requests for concrete supported actions', prompt)
+        self.assertIn('use those actions, even when phrased as hopes', prompt)
+        cases = [c for c in ev.load_cases() if c['expect']['op'] == 'wish' or
+                 c['id'] in ('w125-en-08', 'w117-ready-7')]
+        self.assertEqual(sum(c['expect']['op'] == 'wish' for c in cases), 9)
+        self.assertEqual(ev.evaluate(cases)[0]['failed_ids'], [])
+
+    def test_undo_hint_uses_only_the_row_or_shelf_name(self):
+        prompt = commands.command_prompt(ev.synthetic_spec('/synthetic')[0])
+        self.assertIn('For a named row or shelf use only its name in values', prompt)
+        self.assertIn('undo the Comedy shelf is undo [Comedy]', prompt)
+        case = next(c for c in ev.load_cases() if c['id'] == 'w122r1-en-02')
+        self.assertEqual(case['expect']['values'], ['Comedy'])
+        self.assertEqual(ev.evaluate([case])[0]['failed_ids'], [])
+
+    def test_guest_plan_accepts_omitted_adult_role_but_requires_child_role(self):
+        cases = [c for c in ev.load_cases() if c['id'].startswith('int1410-guestplan-')]
+        self.assertEqual(len(cases), 3)
+        for case in cases:
+            with self.subTest(id=case['id']):
+                answer = json.loads(case['recorded']['choices'][0]['message']['content'])
+                answer['steps'][1].pop('role', None)
+                self.assertEqual(ev.score(case['expect'], answer), (True, True))
+                answer['steps'][1]['role'] = 'adult'
+                self.assertEqual(ev.score(case['expect'], answer), (True, True))
+                answer['steps'][0].pop('role')
+                self.assertEqual(ev.score(case['expect'], answer), (True, False))
+
+    def test_people_additions_cover_every_rule_and_keep_step_fields(self):
+        cases = [c for c in ev.load_cases() if c['id'].startswith('w126-')]
+        self.assertGreaterEqual(len(cases), 30)
+        s, spec = ev.synthetic_spec('/synthetic')
+        for lang in ('en', 'de', 'sr'):
+            rows = [c for c in cases if c['lang'] == lang]
+            self.assertEqual({c['rule'] for c in rows}, set(range(1, 8)))
+        for case in cases:
+            inp = {'query': case['text'], **{k: case[k] for k in ('last', 'shown') if k in case}}
+            self.assertIsNone(spec['rule'](inp, {}), case['id'])
+        recorded = {commands.command_state({'query': c['text'], **{k: c[k] for k in ('last', 'shown') if k in c}}):
+                    c['recorded'] for c in cases}
+        report = ev.evaluate(cases, ['synthetic/model'], transport=lambda url, payload, key, timeout:
+                             recorded[payload['messages'][1]['content']])[0]
+        self.assertEqual(report['errors'], {})
+        self.assertEqual(report['now_full_accuracy'], 1)
+        steps = [{'op': 'member_create', 'person': 'mia', 'label': 'Mia', 'guest': False, 'age': 9},
+                 {'op': 'member_create', 'person': 'leo', 'label': 'Leo', 'guest': True, 'age': 4}]
+        expected = {'op': 'plan', 'steps': steps}
+        for field in ('person', 'label', 'guest', 'age'):
+            answer = {'op': 'plan', 'steps': [steps[0], {k: v for k, v in steps[1].items() if k != field}]}
+            self.assertEqual(ev.score(expected, answer), (True, False))
+
     def test_people_row_cases_cover_languages_and_two_candidate_pronouns(self):
         cases = [c for c in ev.load_cases() if c['id'].startswith('w115r1-')]
         self.assertEqual(len(cases), 24)
@@ -77,6 +137,15 @@ class CommandEval(unittest.TestCase):
                 answer = {**expect, 'question': 'Which date or schedule do you mean?'}
                 self.assertEqual(ev.score(expect, answer), (True, True))
                 self.assertEqual(ev.score(expect, {**answer, **guessed}), (True, False))
+
+    def test_person_clarifications_reject_invented_member_data(self):
+        for slot in ('person', 'age'):
+            expect = {'op': 'ask', 'slot': slot}
+            answer = {**expect, 'new_person': True, 'question': 'What should we call them?'}
+            self.assertEqual(ev.score(expect, answer), (True, True))
+            for guessed in ({'label': 'Mama'}, {'age': 7}, {'guest': True}, {'own_row': True}):
+                with self.subTest(slot=slot, guessed=guessed):
+                    self.assertEqual(ev.score(expect, {**answer, **guessed}), (True, False))
 
     def test_future_fields_and_unknown_ops_are_scored_without_runtime_validation(self):
         expect = {'op': 'shelf_filter', 'filters': {'languages': ['DE'], 'runtime': 90}}
@@ -210,32 +279,32 @@ class CommandEval(unittest.TestCase):
             self.assertEqual(ev.main(['--fixture', '--json', str(dest)], out=out), 0)
             reports = json.loads(dest.read_text())
             report = reports[0]
-            # Fixture totals include named-guest scope cases; repeated inputs count once.
-            self.assertEqual(report['count'], 650)
-            self.assertEqual(len(report['results']), 650)
+            # Merged fixture totals include Get Ready and all household controls.
+            self.assertEqual(report['count'], 889)
+            self.assertEqual(len(report['results']), 889)
             self.assertEqual(report['no_answer'], 147)
-            self.assertEqual(sum(r['op_ok'] for r in report['results']), 498)
-            self.assertEqual(sum(r['full_ok'] for r in report['results']), 497)
-            self.assertEqual(report['now_count'], 650)
-            self.assertEqual(report['now_op_accuracy'], 498 / 650)
-            self.assertEqual(report['now_full_accuracy'], 497 / 650)
+            self.assertEqual(sum(r['op_ok'] for r in report['results']), 737)
+            self.assertEqual(sum(r['full_ok'] for r in report['results']), 736)
+            self.assertEqual(report['now_count'], 889)
+            self.assertEqual(report['now_op_accuracy'], 737 / 889)
+            self.assertEqual(report['now_full_accuracy'], 736 / 889)
             self.assertEqual((report['next_count'], report['next_op_accuracy'], report['next_full_accuracy']), (0, 0, 0))
             self.assertEqual(report['by_tier'], {
-                'followup': {'now_count': 24, 'op_accuracy': 1, 'full_accuracy': 1},
-                'base': {'now_count': 286, 'op_accuracy': 226 / 286, 'full_accuracy': 226 / 286},
-                'hard': {'now_count': 340, 'op_accuracy': 248 / 340, 'full_accuracy': 247 / 340},
+                'followup': {'now_count': 45, 'op_accuracy': 1, 'full_accuracy': 1},
+                'base': {'now_count': 316, 'op_accuracy': 256 / 316, 'full_accuracy': 256 / 316},
+                'hard': {'now_count': 528, 'op_accuracy': 436 / 528, 'full_accuracy': 435 / 528},
             })
             self.assertEqual([r['tier'] for r in report['results']],
                              [c.get('tier', 'base') for c in ev.load_cases()])
             self.assertIn('by-tier now accuracy:', out.getvalue())
-            self.assertIn('base 286 cases op 79.02% full 79.02%', out.getvalue())
-            self.assertIn('hard 340 cases op 72.94% full 72.65%', out.getvalue())
+            self.assertIn('base 316 cases op 81.01% full 81.01%', out.getvalue())
+            self.assertIn('hard 528 cases op 82.58% full 82.39%', out.getvalue())
             self.assertEqual([r['contract'] for r in report['results']],
                              [c['contract'] for c in ev.load_cases()])
             self.assertIn('all op accuracy', out.getvalue())
             self.assertIn('now op accuracy', out.getvalue())
             self.assertIn('now full accuracy', out.getvalue())
-            self.assertIn('650', out.getvalue())
+            self.assertIn('889', out.getvalue())
             self.assertEqual(ev.evaluate(ev.load_cases()), reports)
 
     def test_live_metrics_request_and_secret_safe_output(self):

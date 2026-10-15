@@ -40,6 +40,17 @@ def read(data):
     return read_document(data)['items']
 
 
+def seen_keys(data):
+    return set(seen_watches(data))
+
+
+def seen_watches(data):
+    try:
+        return json.loads((Path(data) / 'history-seen.json').read_text())
+    except FileNotFoundError:
+        return {}
+
+
 def read_document(data):
     try:
         return json.loads((Path(data) / SUMMARY).read_text())
@@ -442,12 +453,17 @@ def filter_forgotten(data, config, origin, items, owner=None):
     forgotten = cutoffs(data)
     if not forgotten:
         return items
+    seen = seen_watches(data)
     windows = session_windows(data) if origin == 'history.json' else ()
     kept = []
     for it in items:
         people = owners(it, config, owner or (config['household']['trakt_member'] if origin == 'trakt.json' else None), windows)
         date = it.get('t') if origin == 'imports.jsonl' else (
             dt.datetime.fromtimestamp((it.get('at') or 0) / 1000, dt.timezone.utc).date().isoformat())
+        at = dt.datetime.fromisoformat(date).replace(tzinfo=dt.timezone.utc).timestamp() if origin == 'imports.jsonl' else (it.get('at') or 0) / 1000
+        if (len(people) > 1 or set(people) & {'both', 'together', 'household'} or
+                origin == 'imports.jsonl' and it.get('who') == 'both') and at < seen.get(it.get('key') or it.get('id'), 0):
+            continue
         remaining = [p for p in people if p not in forgotten or date >= forgotten[p]]
         if remaining == people:
             kept.append(it)

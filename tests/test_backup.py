@@ -276,7 +276,7 @@ class BackupTests(ServerCase):
         names.add(LOCK)
         names.add('health-settings.json')
         names.update(re.findall(r"Path\(data\)/'([^'/]+)'", (ROOT / 'skald/metrics.py').read_text()))
-        self.assertEqual(names | {'skald.json', '.skald-format', 'commands.json'}, set(self.s.BACKUP_FILES) | set(self.s.BACKUP_SKIP))
+        self.assertEqual(names | {'skald.json', '.skald-format', 'commands.json', 'history-seen.json'}, set(self.s.BACKUP_FILES) | set(self.s.BACKUP_SKIP))
         self.assertFalse(set(self.s.BACKUP_FILES) & set(self.s.BACKUP_SKIP))
         self.assertTrue(all(self.s.BACKUP_SKIP.values()))
         self.assertTrue({'addon.json', 'remote.json', 'clients.json', 'hydra.json'} <= set(self.s.BACKUP_SKIP))

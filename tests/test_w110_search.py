@@ -142,6 +142,19 @@ class SearchFallbackTests(unittest.TestCase):
         self.assert_notice(metas, 'Skald budget reached')
         self.assertEqual(self.calls, [])
 
+    def test_household_zero_budget_uses_tmdb_without_paid_calls(self):
+        from skald.members import fresh_config
+        cfg = fresh_config(['ana', 'ben'])
+        cfg['household']['ai_monthly_usd'] = 0
+        path = Path(self.s.DATA, 'skald.json')
+        path.write_text(json.dumps(cfg))
+        self.addCleanup(path.unlink)
+        self.literal = [{'id': 990001, 'title': 'Invented Lantern', 'release_date': '2026-01-01'}]
+        metas = self.results('invented quiet mystery')
+        self.assert_notice(metas, 'Skald budget reached')
+        self.assertIn('tmdb:990001', [m['id'] for m in metas])
+        self.assertEqual(self.calls, [])
+
     def test_timeout_fills_from_cached_taste_within_deadline(self):
         release = Event()
         def slow(label, timeout):

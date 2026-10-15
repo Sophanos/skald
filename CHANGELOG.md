@@ -4,6 +4,20 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.4.10
+
+People: add anyone by name, by role or both ("Add my mother Vesna", "Add Vesna", "Add Kim, she is 12", "Meine Mutter Vesna wohnt jetzt bei uns", "Dodaj mamu Vesnu"). Skald asks only for what is missing: a name, or a child's age. A title search typed while it waits for the answer still works as a search.
+Guests can stay for a set time: "Add Marko as a guest for 3 days" or "until Sunday" (1 to 30 days, through the last local day). After the visit they leave the active household and their history and ratings stay saved. A shared shelf can end with the visit too ("a catalog for Marko and me with heist movies for 3 days"). CLI: `members add marko --guest --days 3`, `members update marko --until 2026-10-18` or `--no-end`.
+When someone leaves: "Ben moved out" removes him and keeps his data, and undo brings him back. "Ben is away until 1 November" (or "pause Ben") stops an adult's taste from shaping other people's picks while his profile, link and rows keep working; he comes back on his own the day after the last day, or sooner with "Ben is back". "Forget Ben" permanently erases an adult's personal data after a preview and the exact confirmation code, and cannot be undone. CLI: `members remove`, `members away ben --until 2026-11-01`, `members back`, `members forget`. What forget erases and keeps is listed in [Privacy](docs/PRIVACY.md#leaving-guests-and-forgetting).
+Forget also clears the household's row-play learning (which rows get played), because those plays are not stored per person; it rebuilds as you watch. Together-watches with the forgotten person stay seen for the others but stop teaching their taste.
+AI budget and change list: adults set the household's monthly AI budget from search ("set the AI budget to 5 dollars a month", "turn AI off this month") or with `skald ai budget 5 --person ana`. Without a saved budget nothing changes: `AI_MONTHLY_USD` when set, otherwise 3 USD. "What changed this week" or `skald changes --since 7d` lists saved changes; undo one by name or id (`skald changes undo ID`) and unrelated newer changes stay.
+Get Ready rows: up to two rows of earlier saga films or unfinished seasons to catch up on before a release from seven days ago to 42 days ahead. Each viewer sees only their own reasons. `skald rows ready --person ana --json` explains the rows or why none qualifies.
+Because rows keep to films or series. Odin (AIOStreams Jellyfin mode) remembers a row's kind for a day, so a Because row that switched between them showed up empty. A row now switches kind only after seven days, or sooner when all its saved picks would be filtered out.
+Checked live on the production model: of 108 requests covering away dates, guests, wishes, undo and Get Ready, 107 picked the right action; one Serbian wish became a "more documentaries" preview instead.
+Fix: a test pinned its clock after resetting usage, so two source tests failed on any checkout from 15 October 2026.
+
+**Data changes:** none to the data format (FORMAT stays 5); no migration. New optional fields that older servers ignore: `household.ai_monthly_usd`, `household.guest_until`, `household.away`, `household.away_until`, shelf end dates, change ids, actors and times in the change journal, a kind marker on Because row slots, and `history-seen.json`. Rolling back to 1.4.9: it uses the environment AI budget and ignores the saved one, ignores guest and shelf end dates (guests and shelves stay), shows away people as present, and ignores `history-seen.json`. Forget and its erased data cannot be rolled back. Before a rollback, apply `ops/rollback-1.4.9.patch` to the 1.4.9 source (`patch -p1 < ops/rollback-1.4.9.patch`) so its undo checks every person a multi-person addition added.
+
 ## 1.4.9
 
 Fix for 1.4.8: rows kept building only until Watch It Again saved its saga list; after that For You, the feeling rows and the personal rows stopped refreshing. They rebuild again.

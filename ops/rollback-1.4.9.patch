@@ -1,0 +1,16 @@
+--- a/skald/commands.py
++++ b/skald/commands.py
+@@ -2137,8 +2137,9 @@
+                 if m['name'] != 'pair' and not m['before']['member']:
+                     from .setup import member_data
+-                    rest = copy.deepcopy(cfg)
+-                    rest['taste']['people'].pop(m['name'], None)
+-                    if member_data(Path(s.DATA), m['name'], rest, skip=('commands.json',)):
+-                        raise ValueError(m['name'].title()+' has data; use skald members remove to keep their evidence')
++                    for name in m.get('names', [m['name']]):
++                        rest = copy.deepcopy(cfg)
++                        rest['taste']['people'].pop(name, None)
++                        if member_data(Path(s.DATA), name, rest, skip=('commands.json',)):
++                            raise ValueError(name.title()+' has data; use skald members remove to keep their evidence')
+                 if 'config_before' in m:
+                     cfg = s.validate_config(inverse_prefs(cfg, m['config_before'], m['config_after']), data=s.DATA)

@@ -1,7 +1,7 @@
 # Search and commands
 
 Use the search box in your watching app. **Search** finds titles. **Commands**, typed in the same box,
-change settings, shelves or one title's place in your rows. Each command previews first; type its `yes NN` code to apply it and `undo` to revert.
+change settings, shelves or one title's place in your rows. Changes preview first; type the `yes NN` code to apply and `undo` to revert. Forgetting a person is permanent.
 
 After a search, keep talking in the same box: "more like this", "also some series",
 "but less violent", "something like this but not quite so slow" or "more like the second one".
@@ -106,6 +106,50 @@ With context, the answer adds `previous`: `new`, `refine` or `act`.
 Command cards appear once, in movie search results. Type the exact `yes NN` code to apply a preview.
 The full list of phrases, undo, history and resets is in [change settings from search](SETUP.md#change-settings-from-search).
 Title reactions and the CLI versions are in [personal commands](CLI.md#personal-commands).
+
+## People and household controls
+
+Keep household picks in step with who lives or visits with you. An adult can add people
+by relationship or just a name: "Add my mother Vesna", "Add Vesna" or "Add Kim, she is 12".
+"Meine Mutter Vesna wohnt jetzt bei uns" and "Dodaj mamu Vesnu" work too.
+Moving in means a member; a short visit means a guest. You can also say which you want.
+Guests do not teach household taste. Up to six people can be active, including children and guests.
+
+If a name is missing, Skald asks what to call the person. If a child has no age,
+it asks one short question, such as "How old is Leo?". Reply "7", then confirm the preview.
+When adding several children, nobody is added until all needed ages are given.
+A title search such as "Find the film Arrival" still searches during a pending question
+and clears that question. You can start the addition again later.
+
+| You type | What happens after confirmation |
+|---|---|
+| "Add Kim as a guest for 3 days" | Adds a guest through the end of the date three days from today. |
+| "Kim bleibt bis Sonntag" | Sets an existing guest's last day. |
+| "When does Kim leave?" | Reads the guest's end date, without confirmation. |
+| "Give Kim her own row" | Gives the guest a Home row; guests have none by default. |
+| "a catalog for Kim and me with heist movies for 3 days" | Adds a shelf on your Home for the visit, using both people's filters. |
+| "Ben moved out"; "We broke up, remove Ben"; "Ben passed away" | Removes Ben from the active household, keeping his data. Undo restores him. The reason is not saved. |
+| "Forget Ben"; "Vergiss Ben"; "Zaboravi Bena" | Permanently erases an adult's personal data, even after removal. The preview explains what goes. This cannot be undone. |
+| "Ben is away for a while" | Keeps his profile working but pauses his influence on others' picks until he returns. |
+| "Ben is away until 1 November"; "pause Ben for two weeks" | Does the same through the last local day, then returns him automatically. |
+| "Ben is back" | Ends an adult's absence early. |
+| "set the AI budget to 5 dollars a month" | Sets the household's monthly paid AI limit in USD, within the server's ceiling. |
+| "what changed this week" | Lists the last seven days of visible changes, with ids and undone status. No confirmation needed. |
+| "undo the AI budget"; "undo ID" | Previews reverting a named change or an id from the list, keeping unrelated newer changes. |
+
+Guest visits, dated absences and temporary shelves accept 1 to 30 days, or a date
+from today through 30 days ahead, in the household timezone. The worker ends them
+after that whole day. Expired guests keep their saved history; "bring Kim back"
+undoes the removal and clears the old end date. Use a new date for another visit.
+Away, back and forget currently accept adult targets only. Another adult must make
+the change; you cannot pause or forget yourself or the last adult at home.
+
+The budget stays set until changed again. "turn AI off this month" sets it to 0;
+it does not reset next month. Other currencies keep the number and show USD in the preview.
+Adults can read and undo household changes; children and guests see only their own
+changes and can undo only permitted changes. Undo asks for an id if a name is ambiguous,
+and refuses if a later change to the same setting must be undone first.
+See [data erasure and backups](PRIVACY.md#leaving-guests-and-forgetting) before forgetting anyone.
 
 ## Wish shelves
 

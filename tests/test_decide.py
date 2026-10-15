@@ -161,7 +161,7 @@ class DecideTests(unittest.TestCase):
 
     def test_month_reservation_and_max_usd_clamp(self):
         self.s._usage_roll()
-        self.s._usage["month_cost"] = self.s.AI_MONTHLY_USD - .01
+        self.s._usage["month_cost"] = self.s.ai_monthly_usd() - .01
         with ReplayLLM(self.s) as replay:
             self.assertEqual(self.route(max_usd=20)["why"], "month")
             replay.arm(self.reply(.003))
