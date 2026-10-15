@@ -17,6 +17,7 @@ import shutil
 import statistics
 import sys
 import tempfile
+import threading
 import time
 import tracemalloc
 from unittest.mock import patch
@@ -109,6 +110,7 @@ def overlay(data, profile, n, feedback=True):
 
 @contextmanager
 def offline_server(source, data=FIXTURE / 'data', stubs=None, n=None, profile=None):
+    before = set(threading.enumerate())
     with tempfile.TemporaryDirectory(prefix='skald-profile-') as temp, \
             patch.dict(os.environ, {'TMDB_API': 'offline', 'DATA_DIR': temp, 'OPENROUTER_API_KEY': ''}), \
             patch('urllib.request.urlopen', denied), patch('time.time', return_value=NOW):
@@ -147,10 +149,14 @@ def offline_server(source, data=FIXTURE / 'data', stubs=None, n=None, profile=No
                 s.load_state()
             yield s
         finally:
-            for name in ('_pool', '_outer', '_nzb_pool', '_connector_pool'):
+            # Callers before the leaf pool; then wait for threads this server started so none writes into DATA during removal.
+            for name in ('_outer', '_search_pool', '_pool', '_nzb_pool', '_connector_pool'):
                 pool = getattr(s, name, None)
                 if pool is not None:
                     pool.shutdown(wait=True, cancel_futures=True)
+            deadline = time.monotonic() + 10
+            for thread in set(threading.enumerate()) - before:
+                thread.join(max(0, deadline - time.monotonic()))
 
 
 def sections(source, snapshot=None, n=300):
