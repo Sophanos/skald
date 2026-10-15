@@ -9,10 +9,11 @@ and layout stay the same.
 One-click Stremio install. With an HTTPS address, `skald setup --watch stremio` prints a one-click Stremio Web link for the household, each member and Together: open it, sign in to Stremio and press Install. `skald addon-url --stremio` adds those links and a Stremio Web link (`web.stremio.com`) to the printed URLs, `--person NAME` picks one member, and `--qr` prints that member's link as a QR code to scan with a phone. `--json` returns the links under `install`. Without the new flags `addon-url` prints the same lines as before. `skald setup aiostreams` also prints a one-click link next to the AIOStreams Stremio URL. The QR code is drawn in the terminal by Skald itself, with no new dependency. The links and the QR code contain the private addon token.
 Stremio sign-in by link. `skald setup --connect stremio` with a blank key prompt prints a Stremio link and a QR code; sign in to Stremio there and setup continues by itself, so nobody copies a key or types a password into Skald. If Stremio cannot create a link, setup falls back to the private email and password prompts. The one-click install links and the `--qr` code now use the Stremio Web link, which installs to the Stremio account on every device.
 Fix: Stremio titles watched outside the library now count as watched. Stremio keeps them as removed items, and Skald skipped them, so most Stremio viewing was missing.
+Stremio started films follow the shared watch rule used for player history: stopped early more than two days ago counts as given up, later as interest; resuming or finishing updates it on the next sync. Stremio items with TMDB ids are read too.
 Fix: Stremio requests now send a User-Agent. Stremio refused requests without one, so loves and likes were always reported as unavailable.
 Docs: `docs/CONNECTORS.md` starts with a table to choose a source: what each needs and whether we tested it.
 
-**Data changes:** FORMAT stays 5; no migration. Each `stremio-NAME.history.json` moves from version 1 to 2 on its next sync, which maps the library again; older builds ignore the version and read it as before.
+**Data changes:** FORMAT stays 5; no migration. Each `stremio-NAME.history.json` moves from version 1 to 3 on its next sync, which maps the library again; older builds ignore the version and read it as before.
 
 ## 1.7.0
 

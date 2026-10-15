@@ -171,7 +171,7 @@ class StremioTests(unittest.TestCase):
             events, cursor, stats = self.s._connector_stremio(self.c, NOW)
             self.assertEqual(http.call_count, 6)
             items = {i['id']: i for i in self.s.read_trakt()}
-            self.assertEqual(set(items), {'tmdb:1', 'tmdb:2', 'tmdb:3', 'tmdb:4', 'tmdb:5', 'tmdb:10', 'tmdb:11'})
+            self.assertEqual(set(items), {'tmdb:1', 'tmdb:2', 'tmdb:3', 'tmdb:4', 'tmdb:5', 'tmdb:9', 'tmdb:10', 'tmdb:11'})
             for n in (1, 2, 3, 5):
                 self.assertEqual(items['tmdb:' + str(n)]['signal'], 'watched')
                 self.assertTrue(items['tmdb:' + str(n)]['played'])
@@ -185,6 +185,7 @@ class StremioTests(unittest.TestCase):
             self.assertEqual(library_only['signal'], 'interest')
             self.assertFalse(library_only['played'])
             self.assertEqual(items['tmdb:10']['signal'], 'interest')
+            self.assertEqual((items['tmdb:9']['signal'], items['tmdb:9']['progress']), ('interest', 0.699))
             self.assertFalse(items['tmdb:10']['played'])
             self.assertEqual({e['who'] for e in events}, {self.person})
             self.assertIn('interest', {e['action'] for e in events})
@@ -203,6 +204,33 @@ class StremioTests(unittest.TestCase):
         with patch.object(self.s, '_http_get', side_effect=self.fake), patch.object(self.s, 'tmdb_details', side_effect=self.resolve):
             self.s._connector_stremio(self.c, NOW)
         self.assertEqual({i['id']: i['signal'] for i in self.s.read_trakt() if i['id'] == 'tmdb:5'}, {'tmdb:5': 'watched'})
+
+    def test_started_films_follow_the_shared_watch_rule(self):
+        def started(n, offset, days, **kw):
+            stamp = self.s.datetime.datetime.fromtimestamp(NOW - days * 86400, self.s.datetime.timezone.utc).isoformat()
+            return item(n, removed=True, temp=True, state={'duration': 1000, 'timeOffset': offset, 'lastWatched': stamp}, **kw)
+        self.rows = [started(21, 100, 5), started(22, 100, 1), started(23, 500, 5), started(24, 10, 5),
+                     started(25, 100, 5, type='series')]
+        with patch.object(self.s, '_http_get', side_effect=self.fake), patch.object(self.s, 'tmdb_details', side_effect=self.resolve):
+            self.s._connector_stremio(self.c, NOW)
+        items = {i['id']: i for i in self.s.read_trakt()}
+        self.assertEqual({k: v['signal'] for k, v in items.items() if k != 'tmdb:4' and k != 'tmdb:11'},
+                         {'tmdb:21': 'abandoned', 'tmdb:22': 'interest', 'tmdb:23': 'interest'})
+        self.assertEqual(items['tmdb:21']['weight'], self.s.SIGNAL_WEIGHT['abandoned'])
+        self.assertFalse(items['tmdb:21']['played'])
+        self.rows = [item(21, removed=True, temp=True, state={'timesWatched': 1, 'lastWatched': STAMP})]
+        with patch.object(self.s, '_http_get', side_effect=self.fake), patch.object(self.s, 'tmdb_details', side_effect=self.resolve):
+            self.s._connector_stremio(self.c, NOW + 60)
+        self.assertEqual(next(i for i in self.s.read_trakt() if i['id'] == 'tmdb:21')['signal'], 'watched')
+
+    def test_tmdb_ids_map_without_lookup_and_merge_with_imdb_rows(self):
+        self.rows = [item(31, _id='tmdb:31', state={'timesWatched': 1, 'lastWatched': STAMP}),
+                     item(32, _id='tmdb:3', type='series'), item(3, type='series', state={'timesWatched': 1, 'lastWatched': STAMP})]
+        with patch.object(self.s, '_http_get', side_effect=self.fake), patch.object(self.s, 'tmdb_details', side_effect=self.resolve) as resolve:
+            self.s._connector_stremio(self.c, NOW)
+        items = [i for i in self.s.read_trakt() if i['id'] in ('tmdb:31', 'tmdb:3')]
+        self.assertEqual(sorted((i['id'], i['signal']) for i in items), [('tmdb:3', 'watched'), ('tmdb:31', 'watched')])
+        self.assertNotIn('tmdb:31', [c.args[0]['id'] for c in resolve.call_args_list])
 
     def test_trakt_rating_wins(self):
         rated = {'id': 'tmdb:4', 'type': 'movie', 'rating': 2, 'signal': 'disliked', 'weight': -3}
@@ -350,7 +378,7 @@ class StremioTests(unittest.TestCase):
             self.s._connector_stremio(self.c, NOW)
         self.assertIn(name, data_files(self.s.CONFIG))
         with Engine(self.data) as engine:
-            self.assertEqual(len(engine._server.read_trakt()), 7)
+            self.assertEqual(len(engine._server.read_trakt()), 8)
             self.assertFalse((engine._work/'credentials').exists())
         self.s.backup_state(NOW)
         archive = self.data/'backups'/('state-' + self.s.online_day(NOW)[0] + '.tar.gz')

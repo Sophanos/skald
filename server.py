@@ -5102,7 +5102,7 @@ def _stremio_login(email, password):
     return key
 
 
-STREMIO_RULES = 2  # bump when _stremio_item rules change so cached rows are mapped again
+STREMIO_RULES = 3  # bump when _stremio_item rules change so cached rows are mapped again
 STREMIO_LINK = "https://link.stremio.com/api/v2/"
 
 
@@ -5130,30 +5130,52 @@ def _stremio_link_key(code, *, tries=100, wait=3):
 
 def _stremio_item(row, now):
     raw, kind = row.get("_id"), row.get("type")
-    if not isinstance(raw, str) or not re.fullmatch(r"tt[0-9]+", raw) or kind not in ("movie", "series"):
+    if not isinstance(raw, str) or not re.fullmatch(r"(tt|tmdb:)[0-9]+", raw) or kind not in ("movie", "series"):
         return None
     state = row.get("state") or {}
     duration, progress = state.get("duration") or 0, state.get("timeWatched") or 0
     watched = (state.get("timesWatched") or 0) > 0 or (state.get("flaggedWatched") or 0) > 0 or duration > 0 and progress / duration >= 0.7
+    last = _connector_time(state.get("lastWatched"))
+    signal = "watched" if watched else "interest"
+    if kind == "movie" and not watched:
+        # Where a started film stopped goes through the shared watch rule, like player history.
+        position = min(1, (state.get("timeOffset") or progress) / duration) if duration > 0 else 0
+        signal = classify({"type": "movie", "progress": position, "at": last * 1000 if last else None}, now)[0]
+        if signal == "opened":
+            signal = "interest"
+            position = 0
+    else:
+        position = 0
     # Stremio stores titles watched outside the library as removed temporary items.
-    if (row.get("removed") or row.get("temp")) and not watched:
+    if (row.get("removed") or row.get("temp")) and not watched and not position:
         return None
-    title = _mdblist_title({"ids": {"imdb": raw}, "title": row.get("name")}, "movies" if kind == "movie" else "shows")
+    ids = {"imdb": raw} if raw.startswith("tt") else {"tmdb": int(raw[5:])}
+    title = _mdblist_title({"ids": ids, "title": row.get("name")}, "movies" if kind == "movie" else "shows")
     if title is None:
         return None
     title["plays"] = []
-    at = _connector_time(state.get("lastWatched")) if watched else None
+    at = last if watched else None
     if at is not None:
         title["plays"] = [math.floor(at / 60 + 0.5)]
     exported = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     it = _trakt_import_history({"exported_at": exported, "movies": [title], "shows": []}, now)["items"][0]
     it.update(type=kind, played=watched, plays=max(1, state.get("timesWatched") or 0) if watched else 0,
-              signal="watched" if watched else "interest", weight=it["weight"] if at is not None else 2 if watched else 1)
+              signal=signal, weight=it["weight"] if at is not None else 2 if watched else SIGNAL_WEIGHT[signal])
+    if position:
+        it["progress"] = round(position, 3)
+        if signal == "abandoned" and last:
+            it["at"] = last * 1000
     if kind == "series" and watched:
         episode = re.fullmatch(r"tt[0-9]+:([0-9]+):([0-9]+)", state.get("video_id") or "")
         if episode:
             it.update(episodes_played=1, last_episode=[int(n) for n in episode.groups()])
     return it
+
+
+def _stremio_stronger(it, old):
+    """Two Stremio rows for one title (IMDb and TMDB ids) keep the stronger signal."""
+    order = ("abandoned", "interest", "watched")
+    return old is None or order.index(it["signal"]) > order.index(old["signal"])
 
 
 def _connector_stremio(c, now, budget=None, *, readonly=False):
@@ -5179,8 +5201,8 @@ def _connector_stremio(c, now, budget=None, *, readonly=False):
         previous = old.get("library", {}).get(raw, {}) if old.get("version") == STREMIO_RULES else {}
         it = previous.get("item") if row == previous.get("state") else _stremio_item(row, now)
         records[raw] = {"state": row, "item": it}
-        if it:
-            items[(it["type"], it["imdb"])] = dict(it)
+        if it and _stremio_stronger(it, items.get((it["type"], it["id"]))):
+            items[(it["type"], it["id"])] = dict(it)
     likes, cached = {}, old.get("likes", {})
     library_items, likes_available = items.copy(), True
     from skald.ingest import rating_signal
@@ -5206,19 +5228,20 @@ def _connector_stremio(c, now, budget=None, *, readonly=False):
                     if not isinstance(raw, str) or not re.fullmatch(r"tt[0-9]+", raw) or meta.get("type", kind) != kind:
                         continue
                     cache_key = kind + ":" + raw
-                    it = items.get((kind, raw)) or cached.get(cache_key) or _stremio_item({"_id": raw, "type": kind, "name": meta.get("name")}, now)
+                    it = (next((v for v in items.values() if v["type"] == kind and v.get("imdb") == raw), None)
+                          or cached.get(cache_key) or _stremio_item({"_id": raw, "type": kind, "name": meta.get("name")}, now))
                     if it is None:
                         continue
                     it = dict(it)
                     signal, weight = IMPORT_SIGNALS[rating_signal(rating)]
                     it.update(signal=signal, weight=weight, rating=rating)
-                    items[(kind, raw)] = likes[cache_key] = it
+                    items[(kind, it["id"])] = likes[cache_key] = it
     except StremioRateLimited:
         raise
     except Exception:
         likes_available, items, likes = False, library_items, {}
         for cache_key, it in cached.items():
-            ident = it['type'], it['imdb']
+            ident = it['type'], it['id']
             merged = {**it, **items.get(ident, {}), **{field: it[field] for field in ('signal', 'weight', 'rating') if field in it}}
             items[ident] = likes[cache_key] = merged
     doc = {"version": STREMIO_RULES, "source": "stremio", "library": records, "likes": likes, "items": list(items.values())}

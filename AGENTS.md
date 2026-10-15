@@ -41,7 +41,7 @@ Never commit DATA, watch history, credentials, tokens or private snapshots.
 - `skald/boot.py`: container startup. `skald/live.py`: explicit SSH snapshot and import transport.
 - `skald/recipes.py`: setup and watching text. `skald/remote.py`: linked HTTP API and import upload.
 - `skald/setup.py`: household setup, private credentials and laptop linking.
-- `skald/trakt.py`: Trakt device login. `skald/plays.py`: Odin watch state from AIOStreams.
+- `skald/trakt.py`: Trakt device login. `skald/plays.py`: Jellyfin-app and AIOStreams-app watch state.
 - Home helpers: `skald/row_names.py`, `skald/rowplan.py`, `skald/lab.py`, `skald/ready.py`.
 - `skald/ingest/`: one parser per export; `skald/ingest/__init__.py` holds the candidate model
   and source registry, `skald/ingest/resolve.py` matches titles.
@@ -54,6 +54,9 @@ Never commit DATA, watch history, credentials, tokens or private snapshots.
 
 ## Keep the project working
 
+Skald owns every watch rule; Stremio, Trakt and Jellyfin apps (Odin) only deliver raw history,
+so name rules after Skald. classify() in `server.py` decides watched, interest, given up or opened;
+connectors pass it progress and dates (Trakt and PMDB still keep their own thresholds).
 Build every row and catalog id with rid(); never use a literal prefix.
 Never rewrite stored ids. A stored DATA shape change needs a numbered migration
 in `skald/migrate.py`, a bump of FORMAT, and a migration test.
@@ -72,22 +75,19 @@ Models pick titles and actions; new text users read comes from fixed strings in 
 Forget and erase must remove anything new stored about a person; add a test that proves it.
 Do not widen who can read, change or erase another person's data; leave the adult filter alone.
 
-Grow the evals with the feature. When you add or change a command, a search
-phrase or anything a model parses, add cases in the same change:
-`eval/commands_cases.jsonl` for commands, `eval/fixtures/decisions/<name>.jsonl`
-for search routing, title resolution and picks. Cover English, German and
-Serbian, typos, indirect wording and look-alikes that must not trigger it.
-Mark cases for behaviour not built yet `"contract": "next"`; switch them to
-`now` when it lands. A new op or op hint also needs SKILL.md regenerated and the
-tests that pin op counts updated on purpose. Before a release, compare models with
-`python eval/commands_eval.py --live --models A,B` and note accuracy and cost
-in the eval README.
+Grow the evals with the feature. When you add or change a command, a search phrase or anything a
+model parses, add cases in the same change: `eval/commands_cases.jsonl` for commands,
+`eval/fixtures/decisions/<name>.jsonl` for search routing, title resolution and picks. Cover
+English, German and Serbian, typos, indirect wording and look-alikes that must not trigger it. Mark
+cases for behaviour not built yet `"contract": "next"`; switch them to `now` when it lands. A new op
+or op hint also needs SKILL.md regenerated and the tests that pin op counts updated on purpose.
+Before a release, compare models with `python eval/commands_eval.py --live --models A,B` and note
+accuracy and cost in the eval README.
 
-Version releases slowly. A patch release (1.4.1) carries fixes and small
-additions that need no DATA migration and change no command, setting or default.
-A minor release (1.5.0) is only for a FORMAT bump, a changed or removed command
-or setting, or a changed default users will notice. Batch work into one release;
-do not release per feature. Add each change to the next CHANGELOG entry.
+Version releases slowly. A patch release (1.4.1) carries fixes and small additions that need no DATA
+migration and change no command, setting or default. A minor release (1.5.0) is only for a FORMAT
+bump, a changed or removed command or setting, or a changed default users will notice. Batch work
+into one release; do not release per feature. Add each change to the next CHANGELOG entry.
 
 Generated text has one source. Do not hand-edit its copies:
 
