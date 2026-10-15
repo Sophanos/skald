@@ -76,6 +76,10 @@ def prepare(s, cfg, person, before, shared='keep'):
     counts = dict(feedback=0, history=0, imports=0, summaries=0, shelves=0, ideas=0,
                   preferences=len(cfg['taste']['people'].get(person, {}).get('prefs', {})), labels=1, links=len(links),
                   shared={p: 0 for p in s.PEOPLE if p != person})
+    days = plays.days_state(data)
+    counts['watching_days'] = len(days.pop(person, []))
+    if counts['watching_days']:
+        changes[plays.WATCHING_DAYS] = json.dumps(days)+'\n'
     seen = history.seen_watches(data)
     windows = history.session_windows(data)
     cutoff = history.forget_cutoff(before)

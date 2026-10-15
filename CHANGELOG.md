@@ -4,6 +4,15 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.6.1
+
+Parents can follow a child's watching. A current adult (not a guest, not away) can read a child's plays (`python -m skald plays recent kim --person ana`, `plays why TITLE kim --person ana`), what shapes the child's picks (`python -m skald taste align kim --person ana`) and the child's watching days (`python -m skald plays around kim --person ana`). In search, ask "What did Kim watch this week?", "What does Kim like?" or "When is Kim around?". Watching days show the last day, how many of the last 7 and 28 days had watching, the usual weekdays once there are 3 full weeks of data, runs of 3 or more days in a row and gaps of 7 or more days. Skald shows dates and counts only and never says why. Only plays from the child's own Odin/AIOStreams login count: a shared or household login never does, and marking a season as watched is not a watching day. Children, guests and away adults still read only their own plays, and adults still cannot read each other's. Reading a child's likes cannot change them.
+Forgetting a child removes their watching days, and the preview counts them. A forget with a cutoff date removes the days before it. Erasing the household removes the file.
+Fix: over HTTPS, a bulk "mark as watched" at the edge of plays retention could lose its bulk mark and then count as real watching. The mark now stays as long as any of its plays are kept.
+Timing tests no longer fail on slow machines, and CI no longer runs a second time for a release tag.
+
+**Data changes:** none to the data format (FORMAT stays 5); no migration. New private file `watching-days.json` (children only, dates only, last 56 days). Rolling back to 1.6.0 needs no restore; 1.6.0 ignores the file but does not remove it when you forget a child, so delete it after a rollback if needed.
+
 ## 1.6.0
 
 Forget keeps shared watches by default. When you erase a person, the watches they shared with others keep teaching the people who stay, with the erased person taken out of them. `--shared drop` removes those watches from everyone's taste as in 1.5.0; their titles stay seen. The preview counts shared watches per remaining person and now works without a TMDB connection.

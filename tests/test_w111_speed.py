@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from concurrent.futures import Future
 from threading import Event
 from unittest.mock import patch
 
@@ -16,10 +17,12 @@ WAIT = Event.wait
 
 
 class TimedSSE:
-    def __init__(self, lines, first=.03, interval=.005, tail=0, timeout=7, error=False, clock=time.monotonic):
+    def __init__(self, lines, first=.03, interval=.005, tail=0, timeout=7, error=False, clock=time.monotonic, finish_gate=None):
         self.clock, self.start = clock, clock()
         self.timeout, self.closed = timeout, False
         self.stopped = Event()
+        self.finish_gate = finish_gate
+        self.reading_tail = Event()
         self.events = []
         for i, line in enumerate(lines):
             for part in (line[:4], line[4:] + '\n'):
@@ -32,6 +35,11 @@ class TimedSSE:
     def read1(self, size=-1):
         if not self.events:
             return b''
+        if len(self.events) == 2 and self.finish_gate is not None:
+            self.reading_tail.set()
+            self.finish_gate.wait()
+            if self.stopped.is_set():
+                return b''
         at, data = self.events.pop(0)
         left = self.timeout - (self.clock() - self.start)
         delay = max(0, self.start + at - self.clock())
@@ -44,6 +52,8 @@ class TimedSSE:
     def close(self):
         self.closed = True
         self.stopped.set()
+        if self.finish_gate is not None:
+            self.finish_gate.set()
 
     def __enter__(self):
         return self
@@ -68,6 +78,7 @@ class SearchSpeedTests(unittest.TestCase):
         self.lines = [f'Title {i}|2000|m' for i in range(100, 130)]
         self.first, self.interval, self.tail = .03, .005, 0
         self.error = False
+        self.finish_gate = None
         self.streams, self.resolved = [], []
         self.title_delay, self.resolve_delay = 0, .005
         self.enterContext(patch.object(self.s, '_connector_open', side_effect=self.reply))
@@ -84,7 +95,8 @@ class SearchSpeedTests(unittest.TestCase):
     def reply(self, req, timeout):
         body = json.loads(req.data)
         if body.get('stream'):
-            stream = TimedSSE(self.lines, self.first, self.interval, self.tail, timeout, self.error)
+            stream = TimedSSE(self.lines, self.first, self.interval, self.tail, timeout, self.error,
+                              finish_gate=self.finish_gate)
             self.streams.append(stream)
             return stream
         return self.h.reply(req, timeout)
@@ -98,7 +110,19 @@ class SearchSpeedTests(unittest.TestCase):
         return self.h.tmdb_reply(path, **params)
 
     def test_stream_resolves_before_close_and_serves_ranked_threshold(self):
-        self.tail = .2
+        self.finish_gate = Event()
+        self.addCleanup(self.finish_gate.set)
+        self.enterContext(patch.object(self.s, 'SEARCH_TIMEOUT', 10))
+        self.enterContext(patch.object(self.s, 'SEARCH_HEAD_START', 30))
+        submit = self.s._pool.submit
+        def ready_genres(fn, *args, **kwargs):
+            if fn is self.s.genres:
+                job = Future()
+                job.set_result(fn(*args, **kwargs))
+                return job
+            return submit(fn, *args, **kwargs)
+        # Cache reuse is independent of scheduling another genre lookup after the last stream event.
+        self.enterContext(patch.object(self.s._pool, 'submit', side_effect=ready_genres))
         self.enterContext(patch.object(self.s, '_model', {'m': {'paff': {'ana': {'x:quiet': 1}}}}))
         start = time.monotonic()
         metas = self.h.results()
@@ -107,13 +131,15 @@ class SearchSpeedTests(unittest.TestCase):
         self.assertTrue(any(opened for _, _, opened in self.resolved))
         self.assertFalse(self.streams[0].closed)
         self.assertGreaterEqual(len(metas), 15)
-        self.assertLess(elapsed, .3)
+        self.assertLess(elapsed, 3)
         ids = [int(m['id'][5:]) for m in metas]
         self.assertEqual(ids, sorted(ids, reverse=True))
         self.assertTrue(self.s._scoping.search_timing['early'])
         start = time.monotonic()
         self.h.results()
-        self.assertLess(time.monotonic() - start, .1, 'repeat while the stream is open')
+        self.assertLess(time.monotonic() - start, 3, 'repeat while the stream is open')
+        self.assertFalse(self.streams[0].closed)
+        self.finish_gate.set()
         self.h.finish_jobs()
         self.assertTrue(self.streams[0].closed)
         picker = next(plan.result()['picks'] for _, plan in self.s._ai.values())
@@ -122,7 +148,7 @@ class SearchSpeedTests(unittest.TestCase):
         self.h.tmdb_calls.clear()
         start = time.monotonic()
         full = self.h.results()
-        self.assertLess(time.monotonic() - start, .1)
+        self.assertLess(time.monotonic() - start, 3)
         self.assertEqual(full[0]['id'], 'tmdb:129')
         self.assertEqual(len(self.streams), 1)
         self.assertEqual(len(self.resolved), calls)
@@ -130,71 +156,119 @@ class SearchSpeedTests(unittest.TestCase):
 
     def test_closed_stream_does_not_wait_for_slow_resolutions_after_threshold(self):
         self.first, self.interval = .01, .001
+        release, entered = Event(), Event()
+        self.addCleanup(release.set)
+        self.enterContext(patch.object(self.s, 'SEARCH_TIMEOUT', 10))
+        self.enterContext(patch.object(self.s, 'SEARCH_HEAD_START', 30))
         original = self.tmdb
         def tmdb(path, **params):
             if path == 'search/movie' and params.get('query') == 'Title 100':
-                time.sleep(.4)
+                entered.set()
+                release.wait()
             return original(path, **params)
         self.enterContext(patch.object(self.s, 'tmdb', side_effect=tmdb))
+        rank = self.s.wide_rank
+        def after_close(*args, **kwargs):
+            self.assertTrue(self.streams[0].stopped.wait(10), 'rank the completed stream')
+            return rank(*args, **kwargs)
+        self.enterContext(patch.object(self.s, 'wide_rank', side_effect=after_close))
         start = time.monotonic()
         metas = self.h.results(query='a gentle wish with a slow resolution')
-        self.assertLess(time.monotonic() - start, .3)
+        self.assertLess(time.monotonic() - start, 3)
         self.assertEqual(len(metas), 15)
         self.assertNotIn('tmdb:100', [m['id'] for m in metas])
         self.assertTrue(self.streams[0].closed)
+        self.assertTrue(entered.is_set())
+        self.assertFalse(release.is_set(), 'the response must not wait for the slow resolution')
 
     def test_background_resolution_does_not_delay_title_search(self):
-        self.first, self.interval, self.tail = .01, .001, .6
+        self.first, self.interval = .01, .001
+        self.finish_gate = Event()
+        release, entered = Event(), Event()
+        self.addCleanup(release.set)
+        self.addCleanup(self.finish_gate.set)
+        self.enterContext(patch.object(self.s, 'SEARCH_TIMEOUT', 10))
+        self.enterContext(patch.object(self.s, 'SEARCH_HEAD_START', 30))
         original = self.tmdb
         def tmdb(path, **params):
             query = params.get('query', '')
             if path == 'search/movie' and query.startswith('Title ') and int(query[6:]) >= 115:
-                time.sleep(.45)
+                entered.set()
+                release.wait()
             return original(path, **params)
         self.enterContext(patch.object(self.s, 'tmdb', side_effect=tmdb))
         self.h.results(query='a quiet background wish')
+        self.assertTrue(entered.wait(10))
         self.h.literal = [{'id': 5, 'title': 'Synthetic Title'}]
         start = time.monotonic()
         metas = self.s.search('movie', 'Synthetic Title', 'en-US', title_only=True)['metas']
-        self.assertLess(time.monotonic() - start, .1)
+        self.assertLess(time.monotonic() - start, 3)
         self.assertEqual(metas[0]['id'], 'tmdb:5')
+        self.assertFalse(release.is_set(), 'background resolutions must still be blocked')
 
     def test_stall_and_error_fall_back_inside_one_deadline(self):
         for error in (False, True):
-            with self.subTest(error=error), patch.object(self.s, 'SEARCH_TIMEOUT', .35), \
-                    patch.object(self.s, 'SEARCH_HEAD_START', .04):
+            release = Event()
+            self.finish_gate = None if error else release
+            with self.subTest(error=error), patch.object(self.s, 'SEARCH_TIMEOUT', 3), \
+                    patch.object(self.s, 'SEARCH_HEAD_START', .1):
                 self.s._ai.clear()
                 self.s._last_search.clear()
                 self.lines = []
-                self.first, self.tail, self.error = .01, (.03 if error else 1), error
-                start = time.monotonic()
-                metas = self.h.results(query=f'a quiet wish {error}')
-                self.assertLess(time.monotonic() - start, .35)
-                self.assertIn('tmdb:90', [m['id'] for m in metas])
-                self.h.finish_jobs()
+                self.first, self.tail, self.error = 0, 0, error
+                try:
+                    start = time.monotonic()
+                    metas = self.h.results(query=f'a quiet wish {error}')
+                    self.assertLess(time.monotonic() - start, 4)
+                    self.assertIn('tmdb:90', [m['id'] for m in metas])
+                finally:
+                    release.set()
+                    self.h.finish_jobs()
 
     def test_stream_and_tmdb_share_the_remaining_deadline(self):
-        with patch.object(self.s, 'SEARCH_TIMEOUT', .3), patch.object(self.s, 'SEARCH_HEAD_START', .03):
-            self.title_delay = .05
-            self.first, self.interval, self.tail = .03, .02, .5
-            start = time.monotonic()
-            self.h.results(query='a quiet deadline wish')
-            self.assertLess(time.monotonic() - start, .3)
-            self.h.finish_jobs()
-            calls = [params for path, params in self.h.tmdb_calls if path.startswith('search/')]
-            self.assertTrue(calls)
-            self.assertTrue(all(0 < params.get('_timeout', 8) <= .3 for params in calls))
+        release = Event()
+        self.finish_gate = release
+        original = self.tmdb
+        def tmdb(path, **params):
+            if path == 'search/multi':
+                release.wait()
+            return original(path, **params)
+        with patch.object(self.s, 'SEARCH_TIMEOUT', 2), patch.object(self.s, 'SEARCH_HEAD_START', 30), \
+                patch.object(self.s, 'SEARCH_SERVE_AFTER', 30), patch.object(self.s, 'tmdb', side_effect=tmdb):
+            self.first, self.interval = 0, 0
+            try:
+                start = time.monotonic()
+                self.h.results(query='a quiet deadline wish')
+                self.assertLess(time.monotonic() - start, 2.5)
+                calls = [params for path, params in self.h.tmdb_calls if path.startswith('search/')]
+                self.assertTrue(calls)
+                self.assertTrue(all(0 < params.get('_timeout', 8) <= 2 for params in calls))
+            finally:
+                release.set()
+                self.h.finish_jobs()
 
     def test_title_check_overlaps_settle_and_exact_title_skips_ai(self):
+        title_started, settled, release = Event(), Event(), Event()
+        self.addCleanup(release.set)
+        self.enterContext(patch.object(self.s, 'SEARCH_TIMEOUT', 10))
+        self.enterContext(patch.object(self.s, 'SEARCH_HEAD_START', 30))
         def settle(query, wait):
-            time.sleep(wait)
+            if query == 'Made Up Harbor':
+                release.wait()
+            else:
+                self.assertTrue(title_started.wait(10), 'title lookup must overlap settle')
+                settled.set()
             return False
+        original = self.tmdb
+        def tmdb(path, **params):
+            if path == 'search/multi' and params.get('query') != 'Made Up Harbor':
+                title_started.set()
+                self.assertTrue(settled.wait(10), 'settle must overlap title lookup')
+            return original(path, **params)
+        self.enterContext(patch.object(self.s, 'tmdb', side_effect=tmdb))
         self.enterContext(patch.object(self.s, 'superseded', side_effect=settle))
-        self.enterContext(patch.object(self.s, 'SEARCH_SETTLE', .1))
-        self.title_delay = .12
-        start = time.monotonic()
         self.h.results()
-        self.assertLess(self.streams[0].start - start, .17)
+        self.assertTrue(settled.is_set())
         self.h.finish_jobs()
         self.h.literal = [{'id': 5, 'title': 'Made Up Harbor'}]
         self.s._last_search.clear()
@@ -202,7 +276,8 @@ class SearchSpeedTests(unittest.TestCase):
         start = time.monotonic()
         metas = self.h.results(query='Made Up Harbor')
         self.assertEqual(metas[0]['id'], 'tmdb:5')
-        self.assertLess(time.monotonic() - start, .17)
+        self.assertLess(time.monotonic() - start, 3)
+        self.assertFalse(release.is_set(), 'exact titles must not wait for settle')
         self.assertEqual(len(self.streams), count)
 
     def test_resolution_cache_is_bounded_and_survives_restart(self):

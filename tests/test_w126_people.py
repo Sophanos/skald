@@ -19,7 +19,7 @@ def plan(*steps):
 
 class People(Household):
     def test_command_contract_invalidates_older_model_answers(self):
-        self.assertEqual(self.s.DECISIONS['parse_command']['ver'], 18)
+        self.assertEqual(self.s.DECISIONS['parse_command']['ver'], 19)
 
     def test_multi_person_undo_keeps_later_budget_and_lists_both_changes(self):
         c.apply(self.s, c.preview(self.s, '', 'ana', answer=plan(

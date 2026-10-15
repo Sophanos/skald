@@ -32,7 +32,7 @@ HOUSEHOLD = {
 }
 READ = {'settings', 'history', 'shelf_list', 'ask', 'search', 'explain', 'taste_drivers',
         'home_reach', 'home_plan', 'ai_status', 'week_picks', 'row_names', 'lab_status', 'lab_moments',
-        'plays_status', 'plays_recent', 'plays_explain', 'plays_check'}
+        'plays_status', 'plays_recent', 'plays_explain', 'plays_check', 'plays_around'}
 OWN = {'hide', 'show', 'exclude_genre', 'include_genre', 'focus', 'unfocus', 'discovery', 'years',
        'like', 'dislike', 'seen', 'less', 'more', 'runtime', 'kids_age', 'undo', 'redo', 'reset', 'shelf_add',
        'shelf_stop', 'shelf_count', 'plan', 'correct', 'wish', 'shelf_filter', 'shelf_schedule',

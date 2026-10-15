@@ -353,8 +353,15 @@ def _forget(data, config, before, person, *, apply):
     cutoff = dt.datetime.combine(day, dt.time(), dt.timezone.utc).timestamp()
     data = Path(data)
     changes = {}
+    from . import plays
+    saved_days = plays.days_state(data)
+    kept_days = {p: [d for d in days if p != person or d >= before] for p, days in saved_days.items()}
+    kept_days = {p: days for p, days in kept_days.items() if days}
+    if kept_days != saved_days:
+        changes[plays.WATCHING_DAYS] = json.dumps(kept_days)+'\n'
     windows = session_windows(data)
     count = {'raw': 0, 'summaries': 0, 'facts': 0, 'dry_run': not apply}
+    count['watching_days'] = len(saved_days.get(person, []))-len(kept_days.get(person, []))
     raw_import_ids = set()
     for name, cid, owner in sources(config, data):
         path = data / name

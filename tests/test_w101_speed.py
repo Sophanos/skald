@@ -29,49 +29,60 @@ class Search(unittest.TestCase):
     def test_typo_title_keeps_ready_picker_after_person_timeout_or_failure(self):
         self.route['choice'] = 'title'
         self.llm_picks.side_effect = self.real_llm_picks
-        clock, wait = time.monotonic, Future.result
-        origin = clock()
+        release = threading.Event()
+        self.addCleanup(release.set)
         def slow_person(path, **kwargs):
-            time.sleep(.2)
+            release.wait()
             return {'results': []}
+        self.enterContext(patch.object(self.s, 'SEARCH_TIMEOUT', 2))
+        self.enterContext(patch.object(self.s, 'SEARCH_HEAD_START', 30))
         for lookup in (slow_person, RuntimeError('synthetic person failure')):
             self.s._ai.clear()
             self.s._last_search.clear()
             self.tmdb.side_effect = lookup
             with self.subTest(lookup=lookup), patch.object(self.s, 'llm_text', return_value='Arrival|2016|m') as picker, \
-                    patch.object(self.s, 'resolve_pick', return_value=({'id': 42, 'title': 'Arrival', 'release_date': '2016-01-01'}, {})), \
-                    patch.object(self.s.time, 'monotonic', side_effect=lambda: (clock() - origin) * 50), \
-                    patch.object(Future, 'result', lambda future, timeout=None: wait(future, None if timeout is None else timeout / 50)):
-                start = clock()
-                metas = self.results('Arrivl')
-                elapsed = clock() - start
-                self.assertEqual([(meta['id'], meta['name']) for meta in metas], [('tmdb:42', self.s.AI_MARK+'Arrival')])
-                self.assertLess(elapsed, .18, 'typo fallback exceeded the scaled .14-second deadline')
-                self.finish_pickers()
+                    patch.object(self.s, 'resolve_pick', return_value=({'id': 42, 'title': 'Arrival', 'release_date': '2016-01-01'}, {})):
+                # This test needs a ready answer before the person lookup consumes its budget.
+                self.s.ai_future('Arrivl').result(timeout=10)['picks'].result(timeout=10)
+                try:
+                    start = time.monotonic()
+                    metas = self.results('Arrivl')
+                    self.assertLess(time.monotonic() - start, 3, 'person lookup exceeded the search deadline plus startup margin')
+                    self.assertEqual([(meta['id'], meta['name']) for meta in metas], [('tmdb:42', self.s.AI_MARK+'Arrival')])
+                finally:
+                    release.set()
+                    self.finish_pickers()
                 self.assertEqual(picker.call_count, 1)
 
     def test_slow_person_search_and_credits_respect_deadline(self):
         self.route['choice'] = 'title'
         self.llm_picks.return_value = []
-        clock, wait = time.monotonic, Future.result
-        origin = clock()
-        def tmdb(path, **kw):
-            time.sleep(.12)
-            if path == 'search/person':
-                return {'results': [{'id': 7, 'name': 'Tom Hanks'}]}
-            return {'cast': [{'id': 90, 'title': 'Credit', 'media_type': 'movie'}]}
-        self.tmdb.side_effect = tmdb
-        for title in ('Tom Hanks', 'A normal title result', None):
-            self.s._ai.clear()
-            self.s._last_search.clear()
-            self.search_both.return_value = ([{'id': 40, 'title': title}] if title else [], {})
-            with self.subTest(title=title), patch.object(self.s.time, 'monotonic', side_effect=lambda: (clock() - origin) * 50), \
-                    patch.object(Future, 'result', lambda future, timeout=None: wait(future, None if timeout is None else timeout / 50)):
-                start = clock()
-                metas = self.results('Tom Hanks')
-                elapsed = clock() - start
-            self.assertLess(elapsed, .18, 'person lookup exceeded the scaled .14-second search deadline')
-            self.assertEqual([m['id'] for m in metas], ['tmdb:40'] if title else [])
+        self.enterContext(patch.object(self.s, 'SEARCH_TIMEOUT', 2))
+        self.enterContext(patch.object(self.s, 'SEARCH_HEAD_START', 30))
+        for phase in ('search/person', 'person/7/combined_credits'):
+            for title in ('Tom Hanks', 'A normal title result', None):
+                release, finished = threading.Event(), threading.Event()
+                def tmdb(path, **kw):
+                    if path == phase:
+                        release.wait()
+                        finished.set()
+                    if path == 'search/person':
+                        return {'results': [{'id': 7, 'name': 'Tom Hanks'}]}
+                    return {'cast': [{'id': 90, 'title': 'Credit', 'media_type': 'movie'}]}
+                self.tmdb.side_effect = tmdb
+                self.s._ai.clear()
+                self.s._last_search.clear()
+                self.search_both.return_value = ([{'id': 40, 'title': title}] if title else [], {})
+                with self.subTest(phase=phase, title=title):
+                    try:
+                        start = time.monotonic()
+                        metas = self.results('Tom Hanks')
+                        self.assertLess(time.monotonic() - start, 3, 'person lookup exceeded the search deadline plus startup margin')
+                        self.assertEqual([m['id'] for m in metas], ['tmdb:40'] if title else [])
+                    finally:
+                        release.set()
+                        # Drain the blocked lookup before changing its mock for the next case.
+                        self.assertTrue(finished.wait(10))
 
     def test_nonempty_invalid_picker_falls_back_and_is_retried(self):
         self.llm_picks.side_effect = self.real_llm_picks
@@ -98,9 +109,10 @@ class Search(unittest.TestCase):
 
     def test_slow_identity_lookup_starts_ai_only_for_last_prefix(self):
         entered = {q: threading.Event() for q in ('Ince', 'Incep', 'Incept')}
+        release = threading.Event()
         def identity(query, lang):
             entered[query].set()
-            time.sleep(1)
+            release.wait()
             return False
         self.looks_like_title.side_effect = identity
         self.superseded.side_effect = self.real_superseded
@@ -109,14 +121,21 @@ class Search(unittest.TestCase):
             with self.s.addon_scope('ana'):
                 self.s.log_search(query)
                 return self.results(query)
-        with patch.object(self.s, 'SEARCH_SETTLE', .02), ThreadPoolExecutor(max_workers=3) as player:
-            jobs = []
-            for query in entered:
-                jobs.append(player.submit(lane, query))
-                self.assertTrue(entered[query].wait(.5))
-                if query != 'Incept':
-                    time.sleep(.15)
-            rows = [job.result(timeout=2) for job in jobs]
+        result = Future.result
+        def wait(future, timeout=None):
+            # Identity has a hardcoded 0.8s wait; hold it until every prefix is registered.
+            return result(future, timeout=10 if timeout == .8 else timeout)
+        with patch.object(self.s, 'SEARCH_SETTLE', 0), patch.object(self.s, 'SEARCH_TIMEOUT', 30), \
+                patch.object(Future, 'result', wait), ThreadPoolExecutor(max_workers=3) as player:
+            try:
+                jobs = []
+                for query in entered:
+                    jobs.append(player.submit(lane, query))
+                    self.assertTrue(entered[query].wait(10))
+                release.set()
+                rows = [job.result(timeout=10) for job in jobs]
+            finally:
+                release.set()
         self.assertEqual([call.args[1]['query'] for call in self.decide.call_args_list], ['Incept'])
         self.finish_pickers()
         self.assertEqual([call.args[1].splitlines()[0] for call in self.llm_picks.call_args_list], ['Incept'])
@@ -145,24 +164,29 @@ class Search(unittest.TestCase):
 
     def test_context_picker_waits_for_router_and_meets_deadline(self):
         self.results('first wish')
-        started = threading.Event()
-        parallel = []
+        started, routed, release = threading.Event(), threading.Event(), threading.Event()
         def route(*args):
-            parallel.append(started.is_set())
-            time.sleep(.08)
+            routed.set()
+            release.wait()
             return {'answer': {**self.route, 'previous': 'new'}, 'source': 'llm'}
         self.decide.side_effect = route
         def pick(*args):
             started.set()
-            time.sleep(.06)
             return self.picks[:5]
         self.llm_picks.side_effect = pick
-        original = Future.result
-        def wait(future, timeout=None):
-            return original(future, timeout=.15 if timeout and timeout > 2 else timeout)
-        with patch.object(Future, 'result', wait):
-            self.assertTrue(self.results('next wish'))
-        self.assertEqual(parallel, [False])
+        with patch.object(self.s, 'SEARCH_TIMEOUT', 10), patch.object(self.s, 'SEARCH_HEAD_START', 30), \
+                ThreadPoolExecutor(max_workers=1) as player:
+            try:
+                job = player.submit(self.results, 'next wish')
+                self.assertTrue(routed.wait(10))
+                self.assertFalse(started.is_set(), 'context picker must wait for the router')
+                start = time.monotonic()
+                release.set()
+                self.assertTrue(job.result(timeout=3))
+                self.assertLess(time.monotonic() - start, 3)
+                self.assertTrue(started.is_set())
+            finally:
+                release.set()
 
     def test_per_type_cache_and_prompt(self):
         self.legacy_picker()
@@ -199,11 +223,14 @@ class Search(unittest.TestCase):
             self.assertEqual(series_row.result(timeout=2), [])
 
     def test_ordered_player_session_keeps_both_lanes_within_deadline(self):
-        s, deadline, scale = self.s, .875, 8
+        s, deadline = self.s, 4
         with s._decide_lock:
             s._decide_cache.clear()
         clock, future_result = time.monotonic, Future.result
-        origin, lock = clock(), threading.Lock()
+        lock = threading.Lock()
+        release = threading.Event()
+        self.addCleanup(release.set)
+        series_served = {}
         foreign = 'etwas Warmes und Lustiges für heute Abend'
         routes = {'dark movies': ('request', 'new'), 'but less violent': ('request', 'refine'),
                   'Dark': ('title', 'refine'), foreign: ('request', 'new')}
@@ -224,7 +251,11 @@ class Search(unittest.TestCase):
                 prompts.append((system, tokens, stype))
                 if not combined:
                     raw_starts[query, stype] = clock()
-            time.sleep(deadline if query == 'dark movies' and stype == 'movie' else .5 if stype == 'movie' else .3)
+            if stype == 'movie':
+                if query == 'dark movies':
+                    release.wait()
+                else:
+                    self.assertTrue(series_served[query].wait(10), 'series must finish before the movie picker')
             with lock:
                 pick_ends[query, stype, combined] = clock()
             first = (501 if combined else 101) + (100 if stype == 'series' else 0)
@@ -237,7 +268,8 @@ class Search(unittest.TestCase):
                 with lock:
                     router_calls.append((query, timeout))
                 def reply():
-                    time.sleep(.45 if query == 'dark movies' else .12)
+                    if query == 'dark movies':
+                        release.wait()
                     return {'answers': {'route': {'choice': choice, 'confidence': .99},
                                         'watched': {'choice': 'any'}, 'list': {'choice': 'best'},
                                         'previous': {'choice': previous}}}
@@ -252,72 +284,71 @@ class Search(unittest.TestCase):
                         fallbacks.append(answer['why'])
                 return answer
 
-            def scaled_wait(future, timeout=None):
-                return future_result(future, timeout=None if timeout is None else timeout / scale)
-
-            event_wait = threading.Event.wait
-            def scaled_event_wait(event, timeout=None):
-                return event_wait(event, None if timeout is None else timeout / scale)
-
             def lane(stype, query, barrier):
                 with s.addon_scope('ana'):
-                    barrier.wait(timeout=1)
+                    barrier.wait(timeout=10)
                     start = clock()
                     result = s.search(stype, query, 'de-DE' if query == foreign else 'en-US')
                     finish = clock()
+                    if stype == 'series':
+                        series_served[query].set()
                     return result['metas'], finish - start, finish
 
             self.looks_like_title.side_effect = lambda query, lang: query == 'Dune'
             self.search_both.side_effect = title_results
             self.llm_picks.side_effect = pick
             self.decide.side_effect = route
-            # Scale production deadline arithmetic and Future waits, leaving real sleeps unchanged.
-            with patch.object(s.time, 'monotonic', side_effect=lambda: (clock() - origin) * scale), \
-                    patch.object(Future, 'result', scaled_wait), \
-                    patch.object(threading.Event, 'wait', scaled_event_wait), \
-                    patch.dict(s.DECISIONS['route_query']['llm'], timeout=.25), \
-                    patch.object(s, 'openrouter', side_effect=transport), \
-                    patch.object(s, 'feed', return_value={'metas': {'tv': [{'id': 'tmdb:301', 'type': 'movie', 'name': 'Cached movie'}]}}):
-                steps = [('Dune', 'title', None), ('dark movies', 'request', 'Dune'),
-                         ('but less violent', 'refine', 'dark movies'), ('history', 'control', None),
-                         ('Dark', 'title', 'but less violent'), (foreign, 'request', 'Dark')]
-                for query, intent, previous in steps:
-                    with self.subTest(query=query):
-                        barrier = threading.Barrier(2)
-                        jobs = {stype: player.submit(lane, stype, query, barrier) for stype in ('movie', 'series')}
-                        rows = {stype: future_result(job, timeout=1) for stype, job in jobs.items()}
-                        for stype, (metas, elapsed, _) in rows.items():
-                            if intent in ('request', 'refine'):
-                                self.assertTrue(metas, (query, stype, 'empty request lane'))
-                                self.assertTrue(all(meta['type'] == stype for meta in metas))
-                            elif intent == 'title':
-                                ident = (801 if query == 'Dune' else 901) + (stype == 'series')
-                                self.assertEqual([(m['id'], m['name']) for m in metas], [(f'tmdb:{ident}', query)])
-                            self.assertLess(elapsed, deadline, (query, stype, elapsed))
-                        if intent == 'control':
-                            self.assertEqual(rows['movie'][0][0]['name'], 'History for Ana')
-                            self.assertTrue(rows['movie'][0][0]['id'].startswith(s.rid('cmd:')))
-                            self.assertEqual(rows['series'][0], [])
-                            with s.addon_scope('ana'):
-                                self.assertEqual(s.last_search()['query'], 'but less violent')
-                        if previous:
-                            self.assertEqual([i['last'] for i in inputs if i['query'] == query], [previous, previous])
-                            if intent == 'refine':
-                                self.assertFalse(any(q == query for q, _ in raw_starts))
-                            else:
-                                for stype in rows:
-                                    self.assertGreaterEqual(raw_starts.get((query, stype), float('inf')), min(router_answers[query]))
-                        if intent in ('request', 'refine'):
-                            combined = intent == 'refine'
-                            self.assertLess(rows['series'][2], pick_ends.get((query, 'movie', combined), float('inf')),
-                                            'series waited for the longer movie answer')
-                            first = 501 if combined else 101
-                            if query == 'dark movies':
+            try:
+                # Ordering uses Events; only the deliberately blocked movie consumes the deadline.
+                with patch.object(s, 'SEARCH_TIMEOUT', 3), \
+                        patch.object(s, 'SEARCH_HEAD_START', 30), \
+                        patch.object(s, 'SEARCH_WIDE_TIMEOUT', 3), \
+                        patch.dict(s.DECISIONS['route_query']['llm'], timeout=.25), \
+                        patch.object(s, 'openrouter', side_effect=transport), \
+                        patch.object(s, 'feed', return_value={'metas': {'tv': [{'id': 'tmdb:301', 'type': 'movie', 'name': 'Cached movie'}]}}):
+                    steps = [('Dune', 'title', None), ('dark movies', 'request', 'Dune'),
+                             ('but less violent', 'refine', 'dark movies'), ('history', 'control', None),
+                             ('Dark', 'title', 'but less violent'), (foreign, 'request', 'Dark')]
+                    for query, intent, previous in steps:
+                        with self.subTest(query=query):
+                            series_served[query] = threading.Event()
+                            barrier = threading.Barrier(2)
+                            jobs = {stype: player.submit(lane, stype, query, barrier) for stype in ('movie', 'series')}
+                            rows = {stype: future_result(job, timeout=10) for stype, job in jobs.items()}
+                            for stype, (metas, elapsed, _) in rows.items():
+                                if intent in ('request', 'refine'):
+                                    self.assertTrue(metas, (query, stype, 'empty request lane'))
+                                    self.assertTrue(all(meta['type'] == stype for meta in metas))
+                                elif intent == 'title':
+                                    ident = (801 if query == 'Dune' else 901) + (stype == 'series')
+                                    self.assertEqual([(m['id'], m['name']) for m in metas], [(f'tmdb:{ident}', query)])
+                                self.assertLess(elapsed, deadline, (query, stype, elapsed))
+                            if intent == 'control':
+                                self.assertEqual(rows['movie'][0][0]['name'], 'History for Ana')
                                 self.assertTrue(rows['movie'][0][0]['id'].startswith(s.rid('cmd:')))
-                                self.assertEqual(rows['movie'][0][1]['id'], 'tmdb:301')
-                            else:
-                                self.assertEqual(rows['movie'][0][0]['id'], f'tmdb:{first}')
-                            self.assertEqual(rows['series'][0][0]['id'], f'tmdb:{first + 100}')
+                                self.assertEqual(rows['series'][0], [])
+                                with s.addon_scope('ana'):
+                                    self.assertEqual(s.last_search()['query'], 'but less violent')
+                            if previous:
+                                self.assertEqual([i['last'] for i in inputs if i['query'] == query], [previous, previous])
+                                if intent == 'refine':
+                                    self.assertFalse(any(q == query for q, _ in raw_starts))
+                                else:
+                                    for stype in rows:
+                                        self.assertGreaterEqual(raw_starts.get((query, stype), float('inf')), min(router_answers[query]))
+                            if intent in ('request', 'refine'):
+                                combined = intent == 'refine'
+                                self.assertLess(rows['series'][2], pick_ends.get((query, 'movie', combined), float('inf')),
+                                                'series waited for the longer movie answer')
+                                first = 501 if combined else 101
+                                if query == 'dark movies':
+                                    self.assertTrue(rows['movie'][0][0]['id'].startswith(s.rid('cmd:')))
+                                    self.assertEqual(rows['movie'][0][1]['id'], 'tmdb:301')
+                                else:
+                                    self.assertEqual(rows['movie'][0][0]['id'], f'tmdb:{first}')
+                                self.assertEqual(rows['series'][0][0]['id'], f'tmdb:{first + 100}')
+            finally:
+                release.set()
 
         self.assertEqual(sum(query == 'dark movies' for query, _ in router_calls), 1)
         self.assertTrue(all(timeout == .25 for _, timeout in router_calls))

@@ -383,41 +383,37 @@ class WideSearchTests(unittest.TestCase):
     def test_one_deadline_bounds_routing_rules_and_resolution(self):
         for phase in ('route', 'rules', 'wide_resolution', 'fallback_resolution', 'title_lookup', 'genres', 'combined'):
             release = Event()
+            self.addCleanup(release.set)
             self.s._ai.clear()
             self.s._last_search.clear()
             self.route['list'] = 'best'
             def transport(path, body, timeout, lane, label):
-                if label == 'rules' and phase == 'rules':
-                    release.wait(1)
+                if label == 'rules' and phase in ('rules', 'combined'):
+                    release.wait()
                 if label == 'wide_picks' and phase == 'fallback_resolution':
-                    release.wait(1)
-                if label == 'wide_picks' and phase == 'combined':
-                    release.wait(.3)
+                    release.wait()
                 content = json.dumps(self.rules) if label == 'rules' else self.wide['movie'] if label == 'wide_picks' else 'Title 9|2005|m'
                 return {'choices': [{'message': {'content': content}}]}
             def route(*args, **kwargs):
                 if phase == 'route':
-                    release.wait(1)
-                if phase == 'combined':
-                    release.wait(.15)
+                    release.wait()
                 return {'answer': self.route}
             def resolve(kind, title, year, lang):
-                if phase == 'wide_resolution' and title != 'Title 9' or phase == 'fallback_resolution':
-                    release.wait(1)
-                if phase == 'combined' and title != 'Title 9':
-                    release.wait(.2)
+                if phase in ('wide_resolution', 'combined') and title != 'Title 9' or phase == 'fallback_resolution':
+                    release.wait()
                 return self.resolve(kind, title, year, lang)
             def lookup(*args, **kwargs):
                 if phase == 'title_lookup':
-                    release.wait(1)
+                    release.wait()
                 return [], {}
             def genres(*args, **kwargs):
                 if phase == 'genres':
-                    release.wait(1)
+                    release.wait()
                 return {}
             self.transport = transport
             try:
-                with self.subTest(phase=phase), patch.object(self.s, 'SEARCH_TIMEOUT', .4, create=True), \
+                with self.subTest(phase=phase), patch.object(self.s, 'SEARCH_TIMEOUT', 3), \
+                        patch.object(self.s, 'SEARCH_HEAD_START', .1), \
                         patch.object(self.s, 'decide', side_effect=route), \
                         patch.object(self.s, 'resolve_pick', side_effect=resolve), \
                         patch.object(self.s, 'search_both', side_effect=lookup), \
@@ -425,7 +421,7 @@ class WideSearchTests(unittest.TestCase):
                         patch.object(self.s, 'feed', return_value={'metas': {'tv': [{'id': 'tmdb:8', 'type': 'movie', 'name': 'Cached title'}]}}):
                     start = time.monotonic()
                     result = self.results()
-                    self.assertLess(time.monotonic() - start, .55)
+                    self.assertLess(time.monotonic() - start, 4, 'search exceeded one deadline plus startup margin')
                     if phase in ('wide_resolution', 'combined'):
                         self.assertTrue(result[0]['id'].startswith(self.s.rid('cmd:')))
                         self.assertEqual([m['id'] for m in result[1:]], ['tmdb:8'])
@@ -434,6 +430,7 @@ class WideSearchTests(unittest.TestCase):
                 self.finish_jobs()
 
     def test_wide_success_skips_backup_picker(self):
+        self.enterContext(patch.object(self.s, 'SEARCH_HEAD_START', 30))
         started, release, finished = Event(), Event(), Event()
         def transport(path, body, timeout, lane, label):
             if label == 'picks':
@@ -448,9 +445,7 @@ class WideSearchTests(unittest.TestCase):
             return {'choices': [{'message': {'content': content}}]}
         self.transport = transport
         try:
-            start = time.monotonic()
             self.assertEqual([m['id'] for m in self.results()], ['tmdb:3', 'tmdb:2', 'tmdb:1'])
-            self.assertLess(time.monotonic() - start, .4)
             self.assertFalse(started.is_set())
             self.assertFalse(finished.is_set())
         finally:

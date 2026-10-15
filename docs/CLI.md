@@ -56,6 +56,9 @@ Run these against the engine's local DATA directory. Every command accepts `--js
 | `skald plays compare` | Read both paths and print differences per person. Writes nothing. |
 | `skald plays recent --person ana --limit 20 --json` | Read recent learned plays with episode, time, path and backfill flag. Limit: 1 to 120, default 20. |
 | `skald plays why "Invented Lantern" --person ana --json` | Explain a saved title or id with login prefix, path, time and backfill flag. |
+| `skald plays recent kim --person ana --json` | Ana reads Kim's plays this week. `recent [NAME]` without a name reads the asker's own plays. |
+| `skald plays why "Invented Lantern" kim --person ana --json` | Ana reads why a title was counted for Kim. The optional child name follows the title. |
+| `skald plays around kim --person ana --json` | Read Kim's watching days, last day, counts, usual weekdays, stretches and gaps. Requires a current adult asking about a child. |
 | `skald connectors mappings --json` | Show eight-character login prefixes, people, paths and mapped, unmapped or conflict status. Writes nothing. |
 
 Settings use the optional top-level `plays` object in `skald.json`: `mode`,
@@ -101,6 +104,31 @@ to them. Guests keep their own access until their stay ends.
 results in a minute”. The household limit is one request per two minutes, recorded
 when queued, including failed attempts. HTTP 429 backoff delays scheduled retries.
 
+Current household adults may also read a child's plays and taste. The adult cannot
+be a guest or away. Adults still cannot read each other's plays. Reading a child's
+plays uses exactly the child's own view, including shared watches that name the child.
+In Commander, ask "What did Kim watch this week?" (`plays_recent`, `person: kim`),
+"Why did you count Invented Lantern as watched by Kim?" (`plays_explain`,
+`values: ["Invented Lantern"]`, `person: kim`) or "What does Kim like?"
+(`taste_drivers`, `person: kim`). These reads change nothing.
+
+"When is Kim around?" uses the read-only `plays_around` op with `person: kim` and
+no values. Watching days come only from Kim's own mapped Odin/AIOStreams login.
+Shared logins never count. Without an own mapped login, the answer gives
+`python -m skald setup aiostreams --member kim` instead of counts.
+JSON returns `last_day` (or null), `around`, `days_7`, `days_28`, `usual_weekdays`,
+`stretches`, `gaps` and fixed translated `text`. Days use the household time zone
+and start at 05:00. `around` means watching on at least one of the last seven
+logical days, including today. It does not say where the child is.
+Usual weekdays use completed Monday-to-Sunday weeks wholly inside the 56-day
+window that have watching data. A weekday must appear in at least half of those
+weeks; fewer than three such weeks gives null. Weekdays use `mon` through `sun`.
+Stretches contain at least three consecutive watching days, newest first, at most
+five. Gaps contain at least seven days without watching between two watching
+days, newest first, at most three. Both have `start`, `end` and `days`.
+The optional private `watching-days.json` file stores only child ids and day lists.
+Older servers ignore it, so FORMAT stays unchanged and no migration is needed.
+
 ## See your taste
 
 | Command | What it does and an example |
@@ -108,6 +136,7 @@ when queued, including failed attempts. HTTP 429 backoff delays scheduled retrie
 | `me` | Show what is known about you, including your taste archetype: `skald --snapshot /path/copy me --person alex` |
 | `taste show` | Show your taste profile: `skald --snapshot /path/copy taste show --person alex` |
 | `taste align` | Read the titles and facets shaping your picks, with correction previews: `skald --snapshot /path/copy taste align --person alex --limit 10 --json`. Omit `--person` for the household. Writes nothing. |
+| `taste align NAME --person ADULT --json` | Read a child's taste, for example `skald taste align kim --person ana --json`. Here `NAME` is the child and `--person` is the current adult asking. Child reads omit correction previews. With no `NAME`, the existing `--person` subject and household default stay the same. Commander uses `taste_drivers` with `person: kim`. |
 | `taste why` | Explain a title's fit: `skald --snapshot /path/copy taste why tmdb:123 --person alex` |
 | `taste report` | Summarize recent learning: `skald --snapshot /path/copy taste report --since 7` |
 | `taste calibration` | Inspect the reference, score percentiles and cached row match bands without fetching or writing: `skald taste calibration --person alex --json` |

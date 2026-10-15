@@ -370,6 +370,7 @@ class SearchFallbackTests(unittest.TestCase):
         self.assertEqual(context['query'], 'dark thrillers')
 
     def test_fast_broad_starts_three_calls(self):
+        self.enterContext(patch.object(self.s, 'SEARCH_HEAD_START', 30))
         self.assertEqual([m['id'] for m in self.results()], ['tmdb:90'])
         self.assertCountEqual(self.labels(), ['wide_picks', 'rules', 'route_query'])
 
@@ -465,6 +466,8 @@ class SearchFallbackTests(unittest.TestCase):
                 self.assertEqual([m['id'] for m in self.results()], ['tmdb:71', 'tmdb:70'])
 
     def test_refinement_does_not_start_raw_rules_or_backup(self):
+        # A slow runner can pass the 0.5s head start and fairly start the narrow hedge.
+        self.enterContext(patch.object(self.s, 'SEARCH_HEAD_START', 30))
         self.results(query='a cozy wish')
         self.finish_jobs()
         self.calls.clear()

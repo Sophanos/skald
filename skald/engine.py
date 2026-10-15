@@ -284,9 +284,9 @@ class Engine:
     def _facets(self, model, person=None, types="xktd", n=10, keys=None):
         return facet_view(model, person, types, n, keys)
 
-    def align(self, person=None, limit=10):
+    def align(self, person=None, limit=10, *, viewer=None):
         from .alignment import view
-        return view(self._server, self._profile, self._model, person, limit)
+        return view(self._server, self._profile, self._model, person, limit, viewer=viewer)
 
     def profile(self, person=None):
         self._person(person)

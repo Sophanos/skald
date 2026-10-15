@@ -59,7 +59,7 @@ from types import SimpleNamespace
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -872,7 +872,7 @@ ROUTE_Q = {
             "title": "The whole text is a name: one movie, series, person or franchise they want to find, possibly misspelled, partial or translated. If any part of the text is not part of that name (a content type, a mood, a comparison, a year, a wish, a verb, a reference to the user), it is not a title. A lone word is a name, even if it could also describe a mood.",
             "request": "The text asks to be shown titles now by describing them rather than naming one: a mood, theme, subject, feeling, genre with a feeling, similarity to something, a ranking, or the user's own viewing history (titles they have or have not watched, or want to watch again). A descriptive word together with a content type, in any language, is a request unless the whole text is itself a known title. It changes nothing saved.",
             "discover": "The text is only a genre and/or a year or decade, with no mood, theme or other wish.",
-            "command": "The text asks the app to change or remember something for later: the user's taste, filters, settings, members, or their rows, shelves and catalogs; or it tells the app how they felt about a specific title or that they already saw it; or it asks what the app has learned about a person, when a named household guest's stay ends, or how much AI credit or spending remains. Questions about preparing for a coming saga film or season by watching earlier parts or catching up read the saved get-ready rows and are commands. A title called Get Ready is a title search. Asking to be shown titles from their own history is a request, not a command.",
+            "command": "The text asks the app to change or remember something for later: the user's taste, filters, settings, members, or their rows, shelves and catalogs; or it tells the app how they felt about a specific title or that they already saw it; or it asks what the app has learned about a person, when a named household guest's stay ends, or how much AI credit or spending remains. Questions about a named child's watched titles, likes, watching days, usual watching weekdays or when the child is around are commands that read facts. Title names like When Kim Is Around stay title searches. Questions about preparing for a coming saga film or season by watching earlier parts or catching up read the saved get-ready rows and are commands. A title called Get Ready is a title search. Asking to be shown titles from their own history is a request, not a command.",
         }},
     "watched": {"type": "choice",
         "instructions": "Does the user limit results by their own viewing history? Only count wording about the user's (or their household's) own watching. Words that belong to a title name or describe a plot do not count.",
@@ -1831,7 +1831,7 @@ def route_parse(resp, batch):
               **({"previous": answers.get("previous", {}).get("choice") or "new"} if "last" in batch[0] else {})}, a.get("confidence") or 0)]
 
 
-decision("route_query", ver=8, lane="search", cap=None, ttl=30 * DAY,
+decision("route_query", ver=9, lane="search", cap=None, ttl=30 * DAY,
     inp={"query": str, "last": (str, None), "shown": (str, [str, 30], None), "context_key": (str, None)}, out={"choice": ("title", "discover", "request", "command", None), "confidence": (float, None),
                            "watched": ("unseen", "seen", "any", None), "list": ("best", "taste", None), "previous": ("new", "refine", "act", None)},
     norm=route_norm, rule=None, params={},
@@ -14765,6 +14765,9 @@ def refresh_preferences():
             command_context()
     if plays_before != CONFIG.get('plays'):
         connectors_load(time.time())
+    from skald import plays
+    if os.path.exists(os.path.join(DATA, plays.WATCHING_DAYS)):
+        plays.prune_watching_days(DATA, CONFIG, time.time())
 
 
 def row_metas(cid, typ, lang, who=None):

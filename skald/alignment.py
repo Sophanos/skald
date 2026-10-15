@@ -8,7 +8,10 @@ from .i18n import t
 DOMINANT_SHARE = .5
 
 
-def view(s, profile, model, person=None, limit=10):
+def view(s, profile, model, person=None, limit=10, *, viewer=None):
+    if viewer is not None:
+        from .plays import read_person
+        person = read_person(s, viewer, person)
     if person in ('household', 'together'):
         person = None
     if person is not None and person not in s.PEOPLE:
@@ -92,6 +95,9 @@ def view(s, profile, model, person=None, limit=10):
             fixes.append(fix)
         checks.extend(dict(signal=signal, key=key[0], kind=key[1], title=driver['title'],
                            share=driver['share'], fixes=fixes) for signal in signals)
+    if viewer is not None and viewer != person:
+        for check in checks:
+            check['fixes'] = []
     return dict(person=person, drivers=list(drivers.values())[:limit], taste=taste, check=checks)
 
 

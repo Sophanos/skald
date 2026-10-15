@@ -23,6 +23,7 @@ from .ingest import parse, sources
 from .ingest.resolve import normal
 from . import intake, guide
 from . import live, remote
+from .i18n import t
 
 
 def parser():
@@ -82,8 +83,8 @@ def parser():
     plays = commands.add_parser('plays', help='read Odin plays and choose database or HTTPS')
     plays.add_argument('--json', action='store_true', default=argparse.SUPPRESS, help='print JSON')
     actions = plays.add_subparsers(dest='plays_action', help='Odin plays operation')
-    for op in ('mode', 'every', 'person', 'check', 'compare', 'recent', 'why'):
-        action = actions.add_parser(op, help='Odin plays '+op)
+    for op in ('mode', 'every', 'person', 'check', 'compare', 'recent', 'why', 'around'):
+        action = actions.add_parser(op, help=t('plays.help.around') if op == 'around' else 'Odin plays '+op)
         action.add_argument('--json', action='store_true', default=argparse.SUPPRESS, help='print JSON')
         if op == 'mode':
             action.add_argument('value', choices=('auto', 'db', 'https', 'off'), help='path selection mode')
@@ -98,6 +99,10 @@ def parser():
                 action.add_argument('--limit', type=int, default=20, help='1 to 120 plays, default 20')
             else:
                 action.add_argument('title', help='saved title or title id')
+            action.add_argument('name', nargs='?', help=t('plays.help.name'))
+        elif op == 'around':
+            action.add_argument('name', help=t('plays.around_person'))
+            action.add_argument('--person', required=True, choices=PEOPLE, help=t('plays.help.adult'))
     ai = commands.add_parser('ai', help='show saved AI credit and spending').add_subparsers(dest='ai_action', required=True)
     status = ai.add_parser('status', help='show saved credit; --refresh checks OpenRouter once')
     status.add_argument('--refresh', action='store_true', help='check OpenRouter now')
@@ -173,6 +178,7 @@ def parser():
     taste = cmd(commands, "taste").add_subparsers(dest="taste", required=True)
     person(cmd(taste, "show"))
     align = cmd(taste, "align")
+    align.add_argument('name', nargs='?', help=t('plays.help.taste'))
     align.add_argument("--person", choices=(*PEOPLE, "household"), help="member to inspect; omit for the household")
     align.add_argument("--limit", type=int, default=10, help="maximum drivers and facets per kind, 1..100")
     cmd(taste, "calibration").add_argument("--person", choices=(*PEOPLE, "together", "household"))
@@ -225,7 +231,6 @@ def parser():
     week.add_argument("--weeks", type=int, default=1, help="calendar weeks to read, 1..8")
     week.add_argument("--person", help="member name")
     week.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
-    from .i18n import t
     lab_help = lambda key: t('lab.help.'+key, members.CONFIG['region']['lang'])
     lab = row_actions.add_parser('lab', help=lab_help('title'))
     lab.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
@@ -992,7 +997,12 @@ def main(argv=None, out=None):
             if args.live:
                 raise ValueError('taste align reads local DATA_DIR or --snapshot only; omit --live')
             with redirect_stdout(sys.stderr), Engine(args.snapshot or os.environ.get('DATA_DIR', '/data')) as engine:
-                data = engine.align(args.person, args.limit)
+                if args.name:
+                    from .plays import read_person
+                    subject = read_person(engine._server, args.person, args.name)
+                    data = engine.align(subject, args.limit, viewer=args.person)
+                else:
+                    data = engine.align(args.person, args.limit)
             if args.json:
                 print(json.dumps(data, ensure_ascii=False, allow_nan=False), file=out)
             else:
@@ -1077,12 +1087,14 @@ def main(argv=None, out=None):
                 elif args.plays_action == 'compare':
                     data = plays.compare(s)
                 elif args.plays_action == 'recent':
-                    data = plays.recent(s, args.person, args.limit)
+                    data = plays.recent(s, args.person, args.limit, person=args.name)
                 elif args.plays_action == 'why':
-                    data = plays.explain(s, args.person, args.title)
+                    data = plays.explain(s, args.person, args.title, person=args.name)
+                elif args.plays_action == 'around':
+                    data = plays.around(s, args.person, args.name)
                 else:
                     data = plays.status(s)
-            print(json.dumps(data, ensure_ascii=False) if args.json else plays.text(data), file=out)
+            print(json.dumps(data, ensure_ascii=False) if args.json else data.get('text') or plays.text(data, s.CONFIG['region'].get('row_lang') or s.LANG), file=out)
             return 0
         if args.command == 'connectors' and args.connector_action == 'mappings':
             from . import plays, setup

@@ -21,6 +21,28 @@ These requests leave it:
 
 Raw exports stay on the laptop. Remote previews send title candidates to your Skald server; pushing sends resolved signals.
 
+## Children's watching days
+
+Current adults in the household may read a child's plays, likes and watching days.
+Guests and away adults cannot read a child's data. Children and guests read only
+their own plays and taste. Watching days are available only to current adults.
+Adults still cannot read each other's plays. Reading a child's taste gives no
+correction previews or extra permission to change it.
+
+The private `watching-days.json` file keeps only child ids and dates with at least
+one play from that child's own mapped Odin/AIOStreams login. It contains no titles,
+times or logins. A shared or household login never creates a child's watching day.
+Skald does not guess who watched. Bulk backfill times do not count as watching days.
+Days start at 05:00 in the household time zone. The rolling window is 56 days,
+independent of raw play retention, and older dates are pruned on plays reads,
+retention cleanup and settings reloads. Adults see dates and counts, with no claim
+about holidays, visits or where a child is staying.
+
+Only children have entries. Making a child an adult removes their day list.
+Forgetting a child removes their watching days and counts them in the preview.
+Forgetting history before a cutoff date removes earlier watching days and keeps
+the cutoff day and later days. Whole-household erase deletes the file.
+
 ## Leaving, guests and forgetting
 
 You can stop someone's influence on household picks without erasing their history.

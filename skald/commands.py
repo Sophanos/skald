@@ -51,7 +51,7 @@ REGISTRY = {
     'explain': _op('title', kids=True, scope='read', hint='explain is a why question about one title in the picks and changes nothing: "Why is Dune here?" values [Dune].'),
     'like_results': _op('results', feedback='love', hint='like_results saves every shown result as the actor\'s taste: "I like these, save them as my taste". Use only with shown results context; kind null values [] person null.'),
     'shelf_from_results': _op('results', kids=True, hint='shelf_from_results saves the shown results as a row or shelf named from the last search: "save this as a row". Use only with shown results context; kind null values [] person null.'),
-    'taste_drivers': _op('read', kids=True, hint='taste_drivers reads what shapes this person\'s picks, with drivers and correction previews; changes nothing: kind null values [], language the speaker\'s BCP 47 language code (en, de, sr-latn or sr-cyrl). '
+    'taste_drivers': _op('read', kids=True, hint='taste_drivers reads what shapes this person\'s picks, with drivers and correction previews; changes nothing: kind null values [], person the named child or null for the viewer, language the speaker\'s BCP 47 language code (en, de, sr-latn or sr-cyrl). Adults may read a child\'s taste, without correction previews. "What does Kim like?" person kim. '
                         '"what shapes my picks?", "warum empfiehlst du mir so viele Krimis?", "zašto mi stalno nudiš anime?" are taste_drivers. A why question about one named title is explain; asking for titles now is a search.'),
     'home_reach': _op('read', kids=True, hint='home_reach checks whether the best unseen known taste matches appear on Home, read only; kind null values [], person only if named. "are my best matches on my home?" is home_reach. A title named Best Matches at Home is a search; a why question about one title is explain.'),
     'home_plan': _op('home', kids=True, scope='read', hint='home_plan explains home rows, read only: "why these rows?" values [], "why does Because show this" values [because], "why don\'t I see mood rows" values [moods]; kind null. Values [lanes] explain the lane family. '
@@ -93,14 +93,15 @@ REGISTRY.update({
     'member_away': _op('member', hint='member_away pauses a named adult, person their id, kind null values []: "Ben is away for a while", "Ben rents a flat for a few months", "pause Ben", "Ben ist eine Weile weg", "Ben je odsutan neko vreme". Optional days 1..30 from today or until YYYY-MM-DD. until is the last day away, exactly the day the user names; never add a day to it. Skald brings them back automatically the next local day. Resolve dates from the supplied local today: "Ben is away until 1 November", "Ben ist bis Ende des Monats weg", "Ben je odsutan do petka", "pause Ben for two weeks" days 14. Without a stated end, omit both date fields. Changing an already away adult\'s end uses the same op. Infer meaning in any language, including typos and indirect wording. A title called Ben Is Away or Until Ben Returns is a search.'),
     'member_back': _op('member', hint='member_back ends a named adult\'s absence, person their id, kind null values []: "Ben is back", "Ben ist zurück", "Ben se vratio". A title called Ben Is Back is a search.'),
     'plays_status': _op('plays', kids=True, scope='read', hint='plays_status reads whether Skald sees Odin watches, connection path and checks; kind null values [] person null. Questions about watching being recorded are status, never a setting change.'),
-    'plays_recent': _op('plays', kids=True, scope='read', hint='plays_recent reads the viewer\'s watched titles in the past week, including shared watches they joined; kind null values [] person null. It is about what I watched, not new weekly recommendations.'),
+    'plays_recent': _op('plays', kids=True, scope='read', hint='plays_recent reads the viewer\'s or a named child\'s watched titles in the past week, including shared watches they joined; kind null values [] person the named child or null for the viewer. "What did Kim watch this week?" person kim. Adults may read children, never other adults. It is about watched titles, not new weekly recommendations or a child\'s watching-day patterns.'),
     'plays_mode': _op('plays', scope='household', hint='plays_mode changes Odin watch reading; kind null values [auto/db/https/off] person null. Auto prefers the mounted database and falls back to HTTPS. Disabling watch reading is off.'),
     'plays_every': _op('plays', scope='household', hint='plays_every changes how often Odin watches are read; kind null values [duration such as 5m,15m,1h,6h] person null. Use m for minutes and h for hours.'),
     'plays_person': _op('plays', hint='plays_person switches reading watches for one member; kind null values [on/off], person the named member or null for the viewer. It changes collection, not who can see history.'),
     'plays_check': _op('plays', kids=True, scope='read', hint='plays_check asks to read Odin watches now; kind null values [] person null. Requests for an immediate watch sync use this op; reading connection status uses plays_status. A title named Invented Watch Check is a search, never a command.'),
-    'plays_explain': _op('plays', kids=True, scope='read', hint='plays_explain explains why one title was counted as watched, with login prefix, db or https path, time and backfill; changes nothing. kind null values [title] person null. "why did you count Invented Lantern as watched?", "warum zählt Erfundene Laterne als gesehen?", "zašto se Izmišljeni fenjer računa kao gledan?" use this op. Asking why a recommendation appears is explain; a title search is not a command.'),
+    'plays_explain': _op('plays', kids=True, scope='read', hint='plays_explain explains why one title was counted as watched, with login prefix, db or https path, time and backfill; changes nothing. kind null values [title] person the named child or null for the viewer. Adults may read children, never other adults. "why did you count Invented Lantern as watched?", "warum zählt Erfundene Laterne als gesehen?", "zašto se Izmišljeni fenjer računa kao gledan?" use this op. Asking why a recommendation appears is explain; a title search is not a command.'),
 })
 REGISTRY['household_erase'] = _op('erase', scope='household', hint='household_erase previews erasing every person and all household data, including Skald backups and saved logins. Read only; only the server CLI can erase with two confirmations. kind null values [] person null. "erase everything", "delete all our data", "Lösche alle unsere Daten", "Obriši sve naše podatke". Infer meaning in any language, including typos and indirect wording. Forgetting one named person is member_forget, removing a shelf is shelf_stop, clearing settings is reset. A film called Erase Everything is a title search, never an erase request.')
+REGISTRY['plays_around'] = _op('plays', scope='read', hint='plays_around reads a named child\'s watching days, last watching day, usual weekdays, stretches and gaps; changes nothing. kind null values [] person the child id, language en, de, sr-latn or sr-cyrl. "When is Kim around?", "Wann schaut Kim?", "Kada Kim obično gleda?" ask for these facts. Infer meaning in any language, including typos and indirect wording. Never infer holidays or where the child is staying. A title called When Kim Is Around is a title search, not this op. Questions about watched titles in the past week use plays_recent.')
 OPS = tuple(REGISTRY)
 BASE = ('op', 'kind', 'values', 'person')
 STEP = {'op': (*OPS, None), 'kind': ('movie', 'tv', 'series', 'genre', 'people', 'languages', 'countries', 'similar', 'mood', 'title', None),
@@ -784,7 +785,7 @@ def register(s):
         body = request(batch[0], fallback_model, fallback_effort)
         body['max_tokens'] = 1200
         return body
-    s.decision('parse_command', ver=18, lane='search', cap=None, ttl=30*s.DAY,
+    s.decision('parse_command', ver=19, lane='search', cap=None, ttl=30*s.DAY,
         inp={'query': str, 'last': (str, None), 'shown': (str, [str, 30], None), 'rows': ([{'id': str, 'label': str}, 100], None),
              'people': ([{'id': str, 'label': str}, 100], None), 'today': (str, None), 'last_row_action': ({'id': str, 'action': str, 'at': float}, None)}, out=OUT,
         norm=lambda inp: {**s.route_norm(inp), **{k: inp[k] for k in ('rows', 'people', 'today', 'last_row_action') if inp.get(k) is not None}}, rule=rule, params={},
@@ -1064,7 +1065,11 @@ def _preview(s, text, viewer=None, bound=None, answer=None, scope=None, prior=No
                 raise PermissionError('This read applies to another member')
             data = view(s, target if target in (*s.PEOPLE, 'together') else None)
             return dict(read_only=True, people=[], name='Best matches on Home', description=reach_text(data), reach=data)
-        target = shelf_scope(s, change['person'], viewer, bound)
+        if change['op'] == 'taste_drivers' and change['person'] not in ('together', 'both'):
+            from .plays import read_person
+            target = read_person(s, bound if bound in (*s.PEOPLE, s.GUEST) else viewer, change['person'])
+        else:
+            target = shelf_scope(s, change['person'], viewer, bound)
         if change['op'] == 'row_names':
             from .row_names import view
             data = view(s.DATA, s.CONFIG)
@@ -1074,8 +1079,7 @@ def _preview(s, text, viewer=None, bound=None, answer=None, scope=None, prior=No
         if change['op'] == 'taste_drivers':
             from .alignment import view, text as alignment_text
             actor = bound if bound in s.PEOPLE else viewer
-            if actor in s.PEOPLE and target not in (actor, 'together'):
-                raise PermissionError('This read applies to another member')
+            reader = actor if target != 'together' else None
             profile = s._profiles.get('household')
             if profile is None and not getattr(s, '_CONFIG_READONLY', False):
                 # A second engine would load all of server.py again inside the live server.
@@ -1083,9 +1087,9 @@ def _preview(s, text, viewer=None, bound=None, answer=None, scope=None, prior=No
             if profile is None:
                 from .engine import Engine
                 with Engine(s.DATA) as engine:
-                    data = engine.align(target)
+                    data = engine.align(target, viewer=reader)
             else:
-                data = view(s, profile, s.get_model(False), target)
+                data = view(s, profile, s.get_model(False), target, viewer=reader)
             description = alignment_text(data, s.CONFIG['region'].get('row_lang') or change['language'] or s.LANG)
             return dict(read_only=True, people=[target], name=description.splitlines()[0], description=description, alignment=data)
         if change['op'] == 'history':
@@ -1541,7 +1545,7 @@ def member_preview(s, text, change, viewer, bound, *, base=None):
                          " without "+s.LABELS[name]+"'s name. To remove them too, add --shared drop."
                          for p, n in forgotten['counts']['shared'].items()] if forgotten['shared'] == 'keep' else
                         [str(n)+' shared watches stop teaching '+s.LABELS[p] for p, n in forgotten['counts']['shared'].items()])
-        description = '\n'.join([str(n)+' '+key+' deleted' for key, n in forgotten['counts'].items() if key != 'shared'] +
+        description = '\n'.join([s.t('plays.days_deleted', count=n) if key == 'watching_days' else str(n)+' '+key+' deleted' for key, n in forgotten['counts'].items() if key != 'shared'] +
             shared_lines + ['This cannot be undone.' if forgotten['shared'] == 'keep' else 'Shared titles stay seen. This cannot be undone.',
             'Existing private settings copies stay unchanged.'] +
             ([leave.odin_reminder(s.LABELS[name])] if forgotten['odin'] else []) + [erase])

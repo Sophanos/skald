@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 
 from decide_kit import close_server, load_server
 import test_w110_search as fallback
+from test_w111_speed import TimedSSE
 
 
 def event(value):
@@ -82,11 +83,13 @@ class SearchReviewTests(unittest.TestCase):
         return stream
 
     def test_byte_trickle_closes_at_absolute_deadline(self):
-        stream = self.stream([(.01, bytes([c])) for c in event({'choices': []})])
+        payload = event({'choices': []})
+        stream = self.stream([(.01, bytes([c])) for c in payload])
         start = time.monotonic()
         with self.assertRaises(TimeoutError):
             self.s.openrouter('/api/v1/chat/completions', {}, .05, 'search', 'wide_picks', lambda text: None)
-        self.assertLess(time.monotonic() - start, .1)
+        self.assertLess(time.monotonic() - start, 1)
+        self.assertLess(stream.reads, len(payload), 'the absolute deadline must close before the trickle finishes')
         self.assertTrue(stream.closed.is_set())
 
     def test_fragmented_events_keep_text_and_finalize_usage_once(self):
@@ -141,46 +144,52 @@ class SearchReviewTests(unittest.TestCase):
                     raise TimeoutError('synthetic narrow failure')
             self.h.transport = narrow_fails
             with self.subTest(status=status), patch.object(self.s, '_connector_open', side_effect=reply), \
-                    patch.object(self.s, 'SEARCH_TIMEOUT', .3):
+                    patch.object(self.s, 'SEARCH_TIMEOUT', 3):
                 start = time.monotonic()
                 self.h.assert_notice(self.h.results(), notice)
-                self.assertLess(time.monotonic() - start, .3)
+                self.assertLess(time.monotonic() - start, 4)
                 self.h.finish_jobs()
 
     def test_cancel_after_early_serve_closes_active_stream(self):
-        first = event({'choices': [{'delta': {'content': '\n'.join(f'Title {i}|2000|m' for i in range(100, 118)) + '\n'}}]})
-        stream = FragmentedSSE([(0, first), (.5, event({'choices': []})), (0, b'data: [DONE]\n')])
+        release = Event()
+        self.addCleanup(release.set)
+        stream = TimedSSE([f'Title {i}|2000|m' for i in range(100, 118)], first=0,
+                          interval=0, timeout=30, finish_gate=release)
         def reply(req, timeout):
             return stream if json.loads(req.data).get('stream') else self.h.reply(req, timeout)
         with patch.object(self.s, '_connector_open', side_effect=reply), \
-                patch.object(self.s, 'SEARCH_TIMEOUT', .25), patch.object(self.s, 'SEARCH_SERVE_AFTER', .05):
+                patch.object(self.s, 'SEARCH_TIMEOUT', 10), patch.object(self.s, 'SEARCH_SERVE_AFTER', 0), \
+                patch.object(self.s, 'SEARCH_HEAD_START', 30):
+            start = time.monotonic()
             self.assertEqual(len(self.h.results()), 15)
+            self.assertLess(time.monotonic() - start, 3)
             self.assertTrue(self.s._scoping.search_timing['early'])
             picker = next(plan.result()['picks'] for _, plan in self.s._ai.values())
-            self.assertFalse(stream.closed.is_set())
+            self.assertTrue(stream.reading_tail.wait(10), 'cancel during an active read')
+            self.assertFalse(stream.closed)
+            start = time.monotonic()
             self.s.cancel_search_picks(picker)
-            self.assertTrue(stream.closed.wait(.08), 'cancel must interrupt an active read')
+            self.assertTrue(stream.stopped.wait(2), 'cancel must interrupt an active read')
             with self.assertRaises(TimeoutError):
-                picker.result(timeout=.08)
-            reads = stream.reads
-            time.sleep(.02)
-            self.assertEqual(stream.reads, reads)
+                picker.result(timeout=2)
+            self.assertLess(time.monotonic() - start, 3)
+            self.assertEqual(len(stream.events), 2, 'cancel must leave the unread tail alone')
 
     def test_cancel_stops_queued_resolutions_and_new_submissions(self):
         release, entered = Event(), Event()
-        self.addCleanup(release.set)
         pool = ThreadPoolExecutor(max_workers=1)
         self.addCleanup(pool.shutdown)
+        self.addCleanup(release.set)
         self.enterContext(patch.object(self.s, '_search_pool', pool))
         stream = self.s.SearchStream('movie', {})
         def resolve(*args):
             entered.set()
-            release.wait(1)
+            release.wait()
         with patch.object(self.s, 'resolve_pick', side_effect=resolve) as resolved:
-            stream.resolving('movie', 'en-US', time.monotonic() + 2)
+            stream.resolving('movie', 'en-US', time.monotonic() + 30)
             for i in range(5):
                 stream.add((f'Title {i}', '2000', 'movie', ''))
-            self.assertTrue(entered.wait(1))
+            self.assertTrue(entered.wait(10))
             picker = Mock(search_stop=Event(), search_stream=stream, search_rules=None, search_fallback=None)
             self.s.cancel_search_picks(picker)
             count = len(stream.jobs)
@@ -192,19 +201,21 @@ class SearchReviewTests(unittest.TestCase):
 
     def test_new_search_stops_old_hedge(self):
         release, entered = Event(), Event()
+        self.addCleanup(release.set)
         def transport(label, timeout):
             if label == 'wide_picks':
                 entered.set()
-                release.wait(1)
+                release.wait()
         self.h.transport = transport
-        with self.s.addon_scope('ana'), patch.object(self.s, 'SEARCH_HEAD_START', .08):
+        with self.s.addon_scope('ana'), patch.object(self.s, 'SEARCH_HEAD_START', 30):
             self.s.start_search('old synthetic wish')
-            plan = self.s.ai_future('old synthetic wish', deadline=time.monotonic() + 2)
-            picker = plan.result(timeout=1)['picks']
+            plan = self.s.ai_future('old synthetic wish', deadline=time.monotonic() + 30)
+            picker = plan.result(timeout=10)['picks']
             try:
-                self.assertTrue(entered.wait(1))
+                self.assertTrue(entered.wait(10))
                 self.s.start_search('new synthetic wish')
-                picker.search_hedge.result(timeout=.3)
+                release.set()
+                picker.search_hedge.result(timeout=10)
                 self.assertNotIn('picks', [label for label, *_ in self.h.calls])
                 self.assertTrue(picker.search_stop.is_set())
             finally:
@@ -213,12 +224,12 @@ class SearchReviewTests(unittest.TestCase):
     def test_new_search_stops_queued_provider_jobs(self):
         release = Event()
         pool = ThreadPoolExecutor(max_workers=1)
-        pool.submit(release.wait, 1)
         try:
+            pool.submit(release.wait)
             with self.s.addon_scope('ana'), patch.object(self.s, '_pool', pool):
                 self.s.start_search('old queued wish')
-                plan = self.s.ai_future('old queued wish', deadline=time.monotonic() + 2)
-                picker = plan.result(timeout=1)['picks']
+                plan = self.s.ai_future('old queued wish', deadline=time.monotonic() + 30)
+                picker = plan.result(timeout=10)['picks']
                 self.s.start_search('new queued wish')
                 release.set()
                 pool.shutdown()

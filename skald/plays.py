@@ -10,11 +10,13 @@ from pathlib import Path
 import sqlite3
 import threading
 import urllib.parse
+from zoneinfo import ZoneInfo
 
 COLUMNS = ('uuid', 'media_type', 'base_id', 'last_played_at', 'played', 'kind', 'favorite',
            'duration_ms', 'position_ms', 'rating', 'likes', 'dropped', 'season', 'episode')
 FIX = 'skald setup aiostreams'
-_request_lock = threading.Lock()
+WATCHING_DAYS = 'watching-days.json'
+_request_lock = threading.RLock()
 
 
 class HistoryTruncated(ValueError):
@@ -267,7 +269,7 @@ def row_key(row):
     return row[1], row[2], row[12], row[13]
 
 
-def https(s, previous=None, now=None):
+def https(s, previous=None, now=None, *, watching=None):
     base, accounts = logins(s)
     budget, cache, profiles, skipped = {'bytes': 0, 'pages': 0}, {}, {}, set()
     for person, login in accounts.items():
@@ -341,6 +343,9 @@ def https(s, previous=None, now=None):
             row[6] = int(key in favorites)
         bursts = set(prior.get('bursts', [])) | {m for m, ids in minutes.items() if len(ids) >= s.BACKFILL_PLAYS}
         cache[person] = dict(login=fingerprint, seen=seen, rows=list(rows.values()), bursts=sorted(bursts))
+    if watching is not None:
+        watching.extend(row for account in cache.values() for row in account['rows']
+                        if (row[3] or 0)//60000 not in account['bursts'])
     prune_cache(s.DATA, s.CONFIG, {'https': cache}, s.time.time() if now is None else now)
     combined = {}
     backfills = set()
@@ -362,6 +367,106 @@ def state(s):
         return json.loads((Path(s.DATA)/'plays.json').read_text())
     except FileNotFoundError:
         return {}
+
+
+def days_state(data):
+    try:
+        return json.loads((Path(data)/WATCHING_DAYS).read_text())
+    except FileNotFoundError:
+        return {}
+
+
+def logical_day(config, at):
+    local = dt.datetime.fromtimestamp(at, ZoneInfo(config['region']['tz']))
+    return (local - dt.timedelta(hours=5)).date()
+
+
+def prune_days(data, config, saved, now):
+    from . import history
+    from .members import active_people
+    today = logical_day(config, now).isoformat()
+    start = (dt.date.fromisoformat(today)-dt.timedelta(days=55)).isoformat()
+    cutoffs = history.cutoffs(data)
+    children = [p for p in active_people(config) if config['taste']['people'].get(p, {}).get('prefs', {}).get('kids_age') is not None]
+    return {p: kept for p, days in saved.items() if p in children
+            and (kept := sorted({d for d in days if max(start, cutoffs.get(p, start)) <= d <= today}))}
+
+
+def _save_days(s, rows, now, bursts=()):
+    from . import setup
+    saved = days_state(s.DATA)
+    doc = copy.deepcopy(saved)
+    mapped = {r['login']: r['person'] for r in person_mapping(s) if r['status'] == 'mapped'}
+    for row in rows:
+        person = mapped.get(row[0][:8].lower())
+        if (person in s.PEOPLE and s.kids_age(person) is not None and person_on(s.CONFIG, person)
+                and row[4] and row[3] and row[3]/1000 <= now
+                and (row[0][:8].lower(), row[3]//60000) not in bursts):
+            doc.setdefault(person, []).append(logical_day(s.CONFIG, row[3]/1000).isoformat())
+    doc = prune_days(s.DATA, s.CONFIG, doc, now)
+    if doc != saved:
+        setup.write_private(Path(s.DATA)/WATCHING_DAYS, json.dumps(doc)+'\n')
+    return doc
+
+
+def watching_days(s):
+    from . import history
+    with history.locked(s.DATA), _request_lock:
+        mapped = {r['login']: r['person'] for r in person_mapping(s) if r['status'] == 'mapped'}
+        rows = [r['row'] for r in state(s).get('records', []) if not r['backfilled'] and mapped.get(r['row'][0]) == r['person']]
+        return _save_days(s, rows, s.time.time())
+
+
+def prune_watching_days(data, config, now):
+    from . import history, setup
+    with history.locked(data), _request_lock:
+        saved = days_state(data)
+        cleaned = prune_days(data, config, saved, now)
+        if cleaned != saved:
+            setup.write_private(Path(data)/WATCHING_DAYS, json.dumps(cleaned)+'\n')
+
+
+def around(s, viewer, person, *, language=None):
+    from .i18n import t
+    from .shelves import DAYS
+    person = read_person(s, viewer, person, child_only=True)
+    lang = language or s.CONFIG['region'].get('row_lang') or s.LANG
+    name = s.LABELS[person]
+    saved = watching_days(s)
+    if not any(r['person'] == person and r['status'] == 'mapped' for r in person_mapping(s)):
+        command = 'python -m skald setup aiostreams --member '+person
+        return dict(person=person, setup=command, text=t('plays.around_setup', lang, name=name, command=command))
+    today = logical_day(s.CONFIG, s.time.time())
+    start = today-dt.timedelta(days=55)
+    days = [dt.date.fromisoformat(d) for d in saved.get(person, [])]
+    weeks = {}
+    runs = []
+    for day in days:
+        monday = day-dt.timedelta(days=day.weekday())
+        if monday >= start and monday+dt.timedelta(days=6) < today:
+            weeks.setdefault(monday, set()).add(day.weekday())
+        if runs and day == runs[-1][-1]+dt.timedelta(days=1):
+            runs[-1].append(day)
+        else:
+            runs.append([day])
+    usual = [DAYS[n] for n in range(7) if sum(n in w for w in weeks.values())*2 >= len(weeks)] if len(weeks) >= 3 else None
+    def span(first, last):
+        return dict(start=first.isoformat(), end=last.isoformat(), days=(last-first).days+1)
+    stretches = [span(run[0], run[-1]) for run in reversed(runs) if len(run) >= 3][:5]
+    gaps = [span(left+dt.timedelta(days=1), right-dt.timedelta(days=1))
+            for left, right in reversed(list(zip(days, days[1:]))) if (right-left).days >= 8][:3]
+    data = dict(person=person, last_day=days[-1].isoformat() if days else None,
+                around=bool(days and days[-1] >= today-dt.timedelta(days=6)),
+                days_7=sum(d >= today-dt.timedelta(days=6) for d in days),
+                days_28=sum(d >= today-dt.timedelta(days=27) for d in days),
+                usual_weekdays=usual, stretches=stretches, gaps=gaps)
+    last = t('plays.today' if days[-1] == today else 'plays.yesterday', lang) if days and (today-days[-1]).days <= 1 else data['last_day'] or t('plays.never', lang)
+    lines = [t('plays.around_summary', lang, name=name, count=data['days_7'], last=last)]
+    if usual:
+        lines.append(t('plays.usually', lang, days=', '.join(t('plays.weekday.'+d, lang) for d in usual)))
+    for key, spans in (('stretch', stretches), ('gap', gaps)):
+        lines.extend(t('plays.'+key, lang, start=r['start'], end=r['end']) for r in spans)
+    return {**data, 'text': ' '.join(lines)}
 
 
 def prune_cache(data, config, saved, now, *, person=None, before=None, shared='drop'):
@@ -387,7 +492,7 @@ def prune_cache(data, config, saved, now, *, person=None, before=None, shared='d
     accounts = saved.get('https', {})
     for who, account in accounts.items():
         account['rows'] = [r for r in account.get('rows', []) if keep(who, r)]
-        account['bursts'] = [m for m in account.get('bursts', []) if keep(who, [None, None, None, m*60000])]
+        account['bursts'] = [m for m in account.get('bursts', []) if any((r[3] or 0)//60000 == m for r in account['rows'])]
         if not keep(who, [None, None, None, account.get('seen', 0)]):
             account['seen'] = 0
     if maximum is not None:
@@ -413,6 +518,11 @@ def purge(data, config, now, *, person=None, before=None, apply=True):
             cleaned = prune_cache(data, config, copy.deepcopy(saved), now, person=person, before=before)
             if apply and cleaned != saved:
                 setup.write_private(path, json.dumps(cleaned)+'\n')
+        if person is None:
+            saved = days_state(data)
+            cleaned = prune_days(data, config, saved, now)
+            if apply and cleaned != saved:
+                setup.write_private(Path(data)/WATCHING_DAYS, json.dumps(cleaned)+'\n')
 
 
 def status(s, *, checked=None):
@@ -440,13 +550,14 @@ def check(s, now=None):
         previous = prune_cache(s.DATA, s.CONFIG, state(s), now)
     doc = chosen.pop('_doc', None)
     rows = doc.pop('_rows', []) if doc is not None else []
+    day_rows = list(rows)
     result = {**previous, **chosen, 'last_check': now,
               'mode': settings(s.CONFIG)['mode'], 'error': chosen.get('error'), 'backoff_until': 0,
               'new_plays': dict.fromkeys(s.PEOPLE, 0)}
     bursts = set()
     if chosen['path'] == 'https':
         try:
-            doc, result['https'], result['unmatched_ids'] = https(s, previous.get('https'), now)
+            doc, result['https'], result['unmatched_ids'] = https(s, previous.get('https'), now, watching=day_rows)
             for who, account in result['https'].items():
                 rows.extend(account['rows'])
                 bursts.update((r[0], m) for r in account['rows'] for m in account.get('bursts', []))
@@ -470,8 +581,9 @@ def check(s, now=None):
         result['records'] = latest.get('records', [])
         if doc is not None:
             mapped = {r['login']: r['person'] for r in mappings(s)['items'] if r['status'] == 'mapped'}
-            counts = Counter((r[0][:8].lower(), r[3]//60000) for r in rows if r[5] == 'episode' and r[4] and r[3])
+            counts = Counter((r[0][:8].lower(), r[3]//60000) for r in day_rows if r[5] == 'episode' and r[4] and r[3])
             bursts.update(k for k, n in counts.items() if n >= s.BACKFILL_PLAYS)
+            _save_days(s, day_rows, now, bursts)
             records = {(r['person'], *row_key(r['row'])): r for r in result['records']
                        if mapped.get(r['row'][0]) == r['person']}
             old = {(it.get('profile'), it['type'], it['id']): it for it in s.read_history()}
@@ -560,9 +672,10 @@ def change(s, op, value, person=None):
     return status(s)
 
 
-def text(data):
+def text(data, language='en'):
     if 'items' in data:
-        return '\n'.join(json.dumps(it, ensure_ascii=False) for it in data['items']) or 'No plays found'
+        from .i18n import t
+        return '\n'.join(json.dumps(it, ensure_ascii=False) for it in data['items']) or t('plays.empty', language)
     if 'differences' in data:
         lines = ['Paths agree' if data['equal'] else 'Paths differ']
         for person, rows in data['differences'].items():
@@ -596,9 +709,27 @@ def may_see(s, viewer, item):
     return shared
 
 
-def recent(s, viewer, limit=20, *, title=None):
+def read_person(s, viewer, person=None, *, child_only=False):
+    from .commands import member_name
+    from .i18n import t
+    person = member_name(s, person) if person else viewer
+    child = person in s.PEOPLE and s.kids_age(person) is not None
+    if (child and viewer in s.adult_people()) or (not child_only and person == viewer and viewer in s.PEOPLE):
+        return person
+    raise PermissionError(t('plays.read_own', s.LANG))
+
+
+def heading(s, person, op, language=None):
+    from .i18n import t
+    return t('plays.'+op, language or s.CONFIG['region'].get('row_lang') or s.LANG, name=s.LABELS[person])
+
+
+def recent(s, viewer, limit=20, *, title=None, person=None):
+    if person is not None:
+        viewer = read_person(s, viewer, person)
     if type(limit) is not int or not 1 <= limit <= 120:
         raise ValueError('plays limit: use 1 to 120')
+    watching_days(s)
     now = s.time.time()
     profile = s._profiles.get('household')
     if profile is None:
@@ -639,10 +770,10 @@ def recent(s, viewer, limit=20, *, title=None):
     return dict(items=sorted(items, key=lambda it: -(it['at'] or 0))[:limit])
 
 
-def explain(s, viewer, title):
+def explain(s, viewer, title, *, person=None):
     if not isinstance(title, str) or not title.strip():
         raise ValueError('plays why needs a title')
-    return recent(s, viewer, 120, title=title)
+    return recent(s, viewer, 120, title=title, person=person)
 
 
 def run_check(s):
@@ -665,21 +796,31 @@ def preview(s, query, change, viewer, bound, *_):
     actor = bound if bound in (*s.PEOPLE, s.GUEST) else viewer
     if actor not in s.PEOPLE:
         raise PermissionError('Choose who is watching to read or change plays')
+    if op == 'around':
+        if values:
+            from .i18n import t
+            raise ValueError(t('plays.around_person', s.LANG))
+        data = around(s, actor, change['person'], language=s.CONFIG['region'].get('row_lang') or change['language'])
+        return dict(read_only=True, people=[data['person']], name=heading(s, data['person'], op, s.CONFIG['region'].get('row_lang') or change['language']),
+                    description=data['text'], plays=data)
     if op in ('status', 'recent', 'explain', 'check'):
-        if (len(values) != 1 if op == 'explain' else bool(values)) or change['person'] not in (None, actor):
-            raise PermissionError('Read your own plays')
-        data = explain(s, actor, values[0]) if op == 'explain' else recent(s, actor) if op == 'recent' else run_check(s) if op == 'check' else status(s)
+        from .i18n import t
+        lang = s.CONFIG['region'].get('row_lang') or change['language'] or s.LANG
+        if (len(values) != 1 if op == 'explain' else bool(values)) or op in ('status', 'check') and change['person'] not in (None, actor):
+            raise PermissionError(t('plays.read_own', s.LANG))
+        subject = read_person(s, actor, change['person']) if op in ('recent', 'explain') else actor
+        data = explain(s, subject, values[0]) if op == 'explain' else recent(s, subject) if op == 'recent' else run_check(s) if op == 'check' else status(s)
         if 'new_plays' in data:
             data['new_plays'] = {actor: data['new_plays'].get(actor, 0)}
             data.pop('people', None)
             data.pop('mappings', None)
-        description = text(data) if op in ('recent', 'explain') else 'Checking now, results in a minute' if data.get('queued') else text(data)
+        description = text(data, lang) if op in ('recent', 'explain') else 'Checking now, results in a minute' if data.get('queued') else text(data, lang)
         if data.get('queued') and data.get('next_check') is not None and data.get('backoff_until', 0) > s.time.time():
             when = dt.datetime.fromtimestamp(data['next_check'], dt.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
             description = 'Check queued for '+when+' (Retry-After backoff)'
         if data.get('rate_limited'):
             description += '\nCheck already requested; try again in '+str(data['retry_after'])+' seconds'
-        return dict(read_only=True, people=[actor], name='Odin plays' if op != 'recent' else 'Your plays this week',
+        return dict(read_only=True, people=[subject], name=heading(s, subject, op, lang) if op in ('recent', 'explain') else 'Odin plays',
                     description=description, plays=data)
     commands.people(s, viewer=viewer, bound=bound)
     if len(values) != 1 or op not in ('mode', 'every', 'person') or op != 'person' and change['person'] is not None:

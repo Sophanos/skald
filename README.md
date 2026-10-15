@@ -179,9 +179,9 @@ Get Ready brings earlier saga films or unfinished seasons together before a new 
 
 ## People in your household
 
-Add people from search: "Add my mother Vesna", "Add Vesna" or "Add Kim, she is 12". A child without an age gets a question; reply, then confirm with `yes NN`.
-German: "Meine Mutter Vesna wohnt jetzt bei uns".
-Serbian: "Dodaj mamu Vesnu".
+Add people from search: "Add my mother Vesna", "Add Vesna" or "Add Kim, she is 12". A child without an age gets a question; reply, then confirm with `yes NN`. German: "Meine Mutter Vesna wohnt jetzt bei uns". Serbian: "Dodaj mamu Vesnu".
+
+Current household adults can ask "What did Kim watch this week?", "What does Kim like?" or "When is Kim around?" to read a child's plays, taste and watching days. Guests and away adults cannot do this. Watching days come only from the child's own Odin/AIOStreams login and keep 56 days of dates, with no titles or times. Shared logins never count. Skald shows dates and counts without guessing where the child is. [Privacy](docs/PRIVACY.md#childrens-watching-days).
 
 "Add Marko as a guest for 3 days" adds a visitor without changing household taste. "a catalog for Marko and me with heist movies for 3 days" adds a shelf on your Home. Both end after the last local day; saved guest history stays.
 

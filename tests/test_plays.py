@@ -159,6 +159,39 @@ class Plays(unittest.TestCase):
         start, limit = int(query['StartIndex'][0]), int(query['Limit'][0])
         return Reply(dict(Items=rows[start:start+limit], TotalRecordCount=len(rows), StartIndex=start))
 
+    def test_child_watching_days_survive_https_raw_retention(self):
+        from skald import plays
+        self.database()
+        self.https()
+        self.s.CONFIG['taste']['people']['ana']['prefs'] = {'kids_age': 9}
+        self.s.CONFIG['plays'] = {'mode': 'https'}
+        self.s.CONFIG['history']['max_raw_items'] = 0
+        plays.check(self.s, NOW)
+        self.assertEqual(plays.days_state(self.data), {'ana': [plays.logical_day(self.s.CONFIG, NOW).isoformat()]})
+        self.assertEqual(plays.state(self.s)['records'], [])
+        self.assertEqual(plays.state(self.s)['https']['ana']['rows'], [])
+
+    def test_child_backfill_never_creates_watching_day(self):
+        from skald import plays
+        self.database()
+        self.rows = self.rows[-5:]
+        self.replace_db(self.rows)
+        self.https()
+        for i, row in enumerate(self.http_rows['a1b2c3d4'][1:]):
+            row['Id'] = 'b2'+f'{i:030x}'
+        self.s.CONFIG['taste']['people']['ana']['prefs'] = {'kids_age': 9}
+        for mode in ('https', 'db'):
+            for retention in ({}, {'max_raw_items': 0}, {'max_raw_items': 1}, {'keep_raw_days': 0}):
+                with self.subTest(mode=mode, retention=retention), patch.object(self.s.time, 'time', return_value=NOW):
+                    for name in ('plays.json', plays.WATCHING_DAYS):
+                        (self.data/name).unlink(missing_ok=True)
+                    self.s.CONFIG['plays'] = {'mode': mode}
+                    self.s.CONFIG['history'] = {'source': 'aiostreams_db', **retention}
+                    for at in (NOW, NOW+900):
+                        self.assertEqual(plays.check(self.s, at)['path'], mode)
+                        self.assertEqual(plays.days_state(self.data), {})
+                        self.assertEqual(plays.watching_days(self.s), {})
+
     def test_https_parity_switch_dedup_and_compare_no_writes(self):
         from skald import plays
         self.database()
@@ -427,6 +460,27 @@ class Plays(unittest.TestCase):
         self.assertIsNone(item['at'])
         self.assertEqual(item['episodes_played'], 5)
         self.assertEqual(item['entries'], 5)
+
+    def test_https_backfill_flag_survives_partial_minute_retention(self):
+        from skald import plays
+        self.database()
+        at = NOW//60*60+40
+        self.rows = [[*r[:3], int((at-(30 if i < 4 else 0))*1000), *r[4:]]
+                     for i, r in enumerate(self.rows[-5:])]
+        self.https()
+        self.s.CONFIG['plays'] = {'mode': 'https'}
+        burst = self.http_rows['a1b2c3d4'][:]
+        for maximum in (None, 1):
+            with self.subTest(max_raw_items=maximum):
+                (self.data/'plays.json').unlink(missing_ok=True)
+                self.s.CONFIG['history'] = dict(source='aiostreams_db', keep_raw_days=1, max_raw_items=maximum)
+                self.http_rows['a1b2c3d4'] = burst[:]
+                self.assertEqual(plays.check(self.s, at)['path'], 'https')
+                self.http_rows['a1b2c3d4'] = burst[-1:]
+                self.assertEqual(plays.check(self.s, at+self.s.DAY-10)['path'], 'https')
+                records = plays.state(self.s)['records']
+                self.assertEqual(len(records), 1)
+                self.assertTrue(all(r['backfilled'] for r in records))
 
     def test_opaque_ids_are_reported_without_guessing_from_provider_ids(self):
         from skald import plays
