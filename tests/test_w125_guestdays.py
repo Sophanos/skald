@@ -34,25 +34,25 @@ class GuestDays(Household):
         answer = dict(op='plan', kind=None, values=[], person=None, steps=[
             dict(op='member_create', kind=None, values=[], person='kim', label='Kim',
                  guest=True, role='child', age=12, days=3),
-            dict(op='member_create', kind=None, values=[], person='marko', label='Marko',
+            dict(op='member_create', kind=None, values=[], person='oskar', label='Oskar',
                  guest=True, until='2026-10-18')])
         with ReplayLLM(self.s) as llm:
             llm.arm({'choices': [{'message': {'content': json.dumps(answer)}}]})
-            parsed = self.s.decide('parse_command', {'query': 'Add Kim and Marko as temporary guests',
+            parsed = self.s.decide('parse_command', {'query': 'Add Kim and Oskar as temporary guests',
                                                     'today': '2026-10-15'})
         self.assertEqual(parsed['answer'], answer)
         c.apply(self.s, c.preview(self.s, '', 'ana', answer=parsed['answer']))
         self.assertEqual(c.config(self.s)['household']['guest_until'],
-                         {'kim': '2026-10-18', 'marko': '2026-10-18'})
+                         {'kim': '2026-10-18', 'oskar': '2026-10-18'})
         self.assertEqual(self.s.kids_age('kim'), 12)
-        self.assertIsNone(self.s.kids_age('marko'))
+        self.assertIsNone(self.s.kids_age('oskar'))
 
     def test_multi_person_undo_checks_every_person_for_evidence(self):
         answer = dict(op='plan', steps=[
             dict(op='member_create', kind=None, values=[], person=name, label=name.title(), guest=True)
-            for name in ('kim', 'marko')])
+            for name in ('kim', 'oskar')])
         c.apply(self.s, c.preview(self.s, '', 'ana', answer=answer))
-        self.s.write_feedback(dict(who='marko', key='tmdb:990001', kind='movie',
+        self.s.write_feedback(dict(who='oskar', key='tmdb:990001', kind='movie',
                                    title='Invented Heist', action='love'))
         before = (self.root / 'skald.json').read_bytes()
         with self.assertRaisesRegex(ValueError, 'has data'):
@@ -126,23 +126,23 @@ class GuestDays(Household):
         self.assertEqual(c.config(self.s)['taste']['people']['ana']['prefs']['hide'], ['anime'])
 
     def test_bound_member_undo_confirms_in_search_and_command_api(self):
-        self.guest(person='marko', days=1)
+        self.guest(person='oskar', days=1)
         self.now += dt.timedelta(days=2)
         c.expire(self.s)
         for transport in ('search', 'api'):
             with self.subTest(transport=transport), ReplayLLM(self.s) as llm:
-                llm.arm({'choices': [{'message': {'content': json.dumps(dict(op='undo', values=['Marko']))}}]})
+                llm.arm({'choices': [{'message': {'content': json.dumps(dict(op='undo', values=['Oskar']))}}]})
                 if transport == 'search':
                     with patch.object(c, 'context', return_value=('w92', 'ana', 'ana')):
-                        c.special(self.s, 'bring Marko back', 'movie', routed=True)
+                        c.special(self.s, 'bring Oskar back', 'movie', routed=True)
                         self.confirm()
                 else:
-                    req = dict(viewer='ana', client={'name': 'round1'}, body={'in': {'query': 'bring Marko back'}})
+                    req = dict(viewer='ana', client={'name': 'round1'}, body={'in': {'query': 'bring Oskar back'}})
                     plan = c.api_preview(self.s, req)['preview']
                     c.api_apply(self.s, {**req, 'body': {'plan': plan['plan']}})
-                self.assertIn('marko', self.s.PEOPLE)
-                self.assertNotIn('marko', c.config(self.s)['household'].get('guest_until', {}))
-                c.apply(self.s, self.plan('member_remove', 'marko'))
+                self.assertIn('oskar', self.s.PEOPLE)
+                self.assertNotIn('oskar', c.config(self.s)['household'].get('guest_until', {}))
+                c.apply(self.s, self.plan('member_remove', 'oskar'))
 
     def test_update_extend_shorten_clear_promote_and_undo(self):
         self.guest(days=2)
@@ -248,7 +248,7 @@ class GuestDays(Household):
 
     def test_expiry_logs_individual_failures_and_continues(self):
         self.guest(days=1)
-        self.guest(person='marko', days=1)
+        self.guest(person='oskar', days=1)
         c.apply(self.s, self.shelf(days=1))
         c.apply(self.s, self.shelf(person='ben', days=1))
         self.now += dt.timedelta(days=2)
@@ -265,7 +265,7 @@ class GuestDays(Household):
             c.expire(self.s)
         self.assertEqual([w['scope'] for w in shelves.read(self.s)['wishes']], ['ana'])
         self.assertIn('kim', self.s.PEOPLE)
-        self.assertNotIn('marko', self.s.PEOPLE)
+        self.assertNotIn('oskar', self.s.PEOPLE)
         self.assertEqual(log.call_count, 2)
         self.assertIn('OSError', log.call_args_list[0].args[0])
         self.assertIn('ValueError', log.call_args_list[1].args[0])

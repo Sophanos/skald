@@ -84,7 +84,7 @@ class CommandEval(unittest.TestCase):
             self.assertEqual(sum(c['expect']['op'] == 'member_rows' for c in rows), 4)
             ambiguous = [c for c in rows if c['expect']['op'] == 'ask']
             self.assertEqual(len(ambiguous), 2)
-            self.assertTrue(all('Kim' in c['last'] and 'Marko' in c['last'] for c in ambiguous))
+            self.assertTrue(all('Kim' in c['last'] and 'Oskar' in c['last'] for c in ambiguous))
         recorded = {commands.command_state({'query': c['text'], **{k: c[k] for k in ('last', 'shown') if k in c}}): c['recorded'] for c in cases}
         report = ev.evaluate(cases, ['synthetic/model'], transport=lambda url, payload, key, timeout:
                              recorded[payload['messages'][1]['content']])[0]

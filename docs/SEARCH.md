@@ -110,8 +110,8 @@ Title reactions and the CLI versions are in [personal commands](CLI.md#personal-
 ## People and household controls
 
 Keep household picks in step with who lives or visits with you. An adult can add people
-by relationship or just a name: "Add my mother Vesna", "Add Vesna" or "Add Kim, she is 12".
-"Meine Mutter Vesna wohnt jetzt bei uns" and "Dodaj mamu Vesnu" work too.
+by relationship or just a name: "Add my mother Eva", "Add Eva" or "Add Kim, she is 12".
+"Meine Mutter Eva wohnt jetzt bei uns" and "Dodaj mamu Evu" work too.
 Moving in means a member; a short visit means a guest. You can also say which you want.
 Guests do not teach household taste. Up to six people can be active, including children and guests.
 

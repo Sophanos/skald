@@ -162,7 +162,7 @@ class AwayUntil(Household):
                     c.apply(self.s, self.plan('member_back'))
 
     def test_expiry_isolates_failures_and_keeps_guest_expiry(self):
-        for person, guest in (('kim', False), ('marko', True)):
+        for person, guest in (('kim', False), ('oskar', True)):
             c.apply(self.s, self.plan('member_create', person, label=person.title(), guest=guest,
                                       **({'days': 1} if guest else {})))
         for person in ('ben', 'kim'):
@@ -176,7 +176,7 @@ class AwayUntil(Household):
         with patch.object(c, 'preview', side_effect=fail), patch.object(self.s, '_daily_log') as log:
             c.expire(self.s)
         self.assertEqual(c.config(self.s)['household']['away'], ['ben'])
-        self.assertNotIn('marko', self.s.PEOPLE)
+        self.assertNotIn('oskar', self.s.PEOPLE)
         self.assertEqual(log.call_count, 1)
         self.assertIn('ValueError', log.call_args.args[0])
 

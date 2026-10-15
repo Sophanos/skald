@@ -29,7 +29,7 @@ class Plays(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.data = Path(temp.name)
-        self.cfg = members.fresh_config(['ana', 'ben', 'kim', 'marko'])
+        self.cfg = members.fresh_config(['ana', 'ben', 'kim', 'oskar'])
         self.write_config()
         self.s = load_server(self.data)
         self.addCleanup(close_server, self.s)
@@ -996,15 +996,15 @@ class Plays(unittest.TestCase):
         self.write_config()
         self.s.refresh_preferences()
         prefixes = ('a1b2c3d4', 'b1b2c3d4', 'c1b2c3d4', 'd1b2c3d4', 'e1b2c3d4')
-        people = ('ana', 'ben', 'kim', 'marko', 'household')
+        people = ('ana', 'ben', 'kim', 'oskar', 'household')
         opts = self.s.CONFIG['connectors']['aiostreams_db']['options']
         opts['profiles'] = dict(zip(prefixes, people))
         rows = [(p, *self.rows[1][1:]) for p in prefixes]
         self.replace_db(rows)
         self.s._profiles['household'] = {'entries': [dict(key='tt0990002', title='Invented Lantern')]}
         plays.check(self.s, NOW)
-        for actor in ('ana', 'ben', 'kim', 'marko'):
-            with self.subTest(actor=actor), patch.object(self.s, 'GUEST', 'marko'), patch.object(self.s.time, 'time', return_value=NOW), \
+        for actor in ('ana', 'ben', 'kim', 'oskar'):
+            with self.subTest(actor=actor), patch.object(self.s, 'GUEST', 'oskar'), patch.object(self.s.time, 'time', return_value=NOW), \
                     patch.object(setup, 'server', side_effect=lambda *a, **kw: nullcontext(self.s)):
                 expected = {actor} | ({'household'} if actor in ('ana', 'ben') else set())
                 recent = plays.recent(self.s, actor)
@@ -1262,12 +1262,12 @@ class Plays(unittest.TestCase):
 
     def test_shared_plays_respect_named_guests_away_and_child_roles(self):
         from skald import plays
-        self.cfg['household'].update(guests=['marko'], guest_until={'marko': '2026-10-18'}, away=['ben'])
+        self.cfg['household'].update(guests=['oskar'], guest_until={'oskar': '2026-10-18'}, away=['ben'])
         self.cfg['taste']['people']['kim']['prefs'] = {'kids_age': 12}
         self.write_config()
         self.s.refresh_preferences()
         shared = dict(profile='household', type='movie', id='tmdb:998001', played=True, at=int(NOW*1000))
-        for viewer in ('ana', 'ben', 'kim', 'marko', self.s.GUEST):
+        for viewer in ('ana', 'ben', 'kim', 'oskar', self.s.GUEST):
             with self.subTest(viewer=viewer):
                 self.assertEqual(plays.may_see(self.s, viewer, shared), viewer == 'ana')
                 self.assertEqual(plays.may_see(self.s, viewer, {**shared, 'history_by': ['together']}), viewer == 'ana')
@@ -1276,16 +1276,16 @@ class Plays(unittest.TestCase):
     def test_plays_guests_and_away_change_only_their_own_collection(self):
         from skald import commands
         self.cfg['plays'] = {}
-        self.cfg['household'].update(guests=['marko'], guest_until={'marko': '2026-10-18'}, away=['ben'])
+        self.cfg['household'].update(guests=['oskar'], guest_until={'oskar': '2026-10-18'}, away=['ben'])
         self.cfg['taste']['people']['kim']['prefs'] = {'kids_age': 12}
         self.write_config()
         self.s.refresh_preferences()
-        for actor in ('ben', 'marko', 'kim', self.s.GUEST):
+        for actor in ('ben', 'oskar', 'kim', self.s.GUEST):
             for op, values, person in (('plays_mode', ['off'], None), ('plays_every', ['1h'], None),
                                        ('plays_person', ['off'], 'ana'), ('plays_person', ['off'], 'together')):
                 with self.subTest(actor=actor, op=op, person=person), self.assertRaises(PermissionError):
                     commands.preview(self.s, '', actor, answer=self.answer(op, values, person))
-        for actor in ('ben', 'marko'):
+        for actor in ('ben', 'oskar'):
             commands.apply(self.s, commands.preview(self.s, '', actor, answer=self.answer('plays_person', ['off'])))
             self.assertFalse(commands.config(self.s)['plays']['people'][actor])
             commands.undo(self.s, [actor], actor=actor)

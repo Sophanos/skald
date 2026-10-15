@@ -339,14 +339,14 @@ Read-only lists need no confirmation. In search, use the exact `yes NN` instead.
 | Action / Commander op | Search example | CLI example with JSON output |
 |---|---|---|
 | List people | "my settings" (`settings`) | `skald members list --json` |
-| Add a member (`member_create`) | "Add my mother Vesna" or "Add Vesna" | `skald members add vesna --member --label Vesna --person ana --json` |
+| Add a member (`member_create`) | "Add my mother Eva" or "Add Eva" | `skald members add eva --member --label Eva --person ana --json` |
 | Add a child (`member_create`) | "Add Kim, she is 12" | `skald members add kim --age 12 --person ana --json` |
 | Ask a missing name or age (`ask`) | "Add my child"; reply with the name, then age | `skald command "Add my child" --person ana --json` |
 | Update an age (`member_update`) | "Update Ben to age 13" | `skald members update ben --age 13 --person ana --json` |
 | Update a name (`member_update`) | "rename Ana to Anja" | `skald members update ana --label Anja --person ana --json` |
-| Add a guest for days (`member_create`) | "Add Marko as a guest for 3 days" | `skald members add marko --guest --days 3 --person ana --json` |
-| Add a guest until a date (`member_create`) | "Add Marko as a guest until 18 October" | `skald members add marko --guest --until 2026-10-18 --person ana --json` |
-| Change guest status (`member_update`) | "Make Marko a full member" | `skald members update marko --member --person ana --json` |
+| Add a guest for days (`member_create`) | "Add Oskar as a guest for 3 days" | `skald members add oskar --guest --days 3 --person ana --json` |
+| Add a guest until a date (`member_create`) | "Add Oskar as a guest until 18 October" | `skald members add oskar --guest --until 2026-10-18 --person ana --json` |
+| Change guest status (`member_update`) | "Make Oskar a full member" | `skald members update oskar --member --person ana --json` |
 | Change a guest's end (`member_update`) | "Kim bleibt bis Sonntag" | `skald members update kim --until 2026-10-18 --person ana --json` |
 | Clear a guest's end (`member_update`) | "Let Kim stay without an end date" | `skald members update kim --no-end --person ana --json` |
 | Read a guest's end (`member_until`) | "When does Kim leave?" | `skald command "When does Kim leave?" --person ana --json` |
@@ -387,8 +387,8 @@ is six active people, including guests; retired profiles do not count. Nothing
 in this list contains connector secrets. Undo refuses to reactivate someone
 if it would put the household above six active profiles.
 
-`skald members add marko --guest --person ana --json` previews a named guest.
-Add `--age 12` for a child, `--label Marko` for a display name, or `--own-row`
+`skald members add oskar --guest --person ana --json` previews a named guest.
+Add `--age 12` for a child, `--label Oskar` for a display name, or `--own-row`
 when they want a Home row. Guests have no own Home row by default. Repeat the
 same command with `--yes` or `--plan HASH` to apply the preview.
 Add `--days 3` or `--until 2026-10-18` for a temporary guest. Days must be
@@ -404,7 +404,7 @@ The running worker retires expired guests on its next minute tick, using the
 usual removal journal. Their evidence stays saved and their active slot is freed.
 `undo` or `bring Kim back` restores them and clears the elapsed end date, so
 they stay back until you set a new end. Children and guests cannot make these changes.
-`skald members update marko --member --person ana` promotes a guest;
+`skald members update oskar --member --person ana` promotes a guest;
 `--guest` changes them back. Neither change adds a row implicitly.
 `skald members rows kim on --person ana --json` previews Kim's own Home row;
 use `off` to hide it. Repeat with `--yes` or `--plan HASH` to apply, and use
@@ -471,7 +471,7 @@ it. An expired date restored by undo becomes due again on the next cycle;
 change the away date to extend the absence. Forget clears it permanently.
 
 Commander also accepts `Lena moved out`, `We broke up, remove Lena`,
-`Vesna passed away`, `Vergiss Lena`, `Zaboravi Lenu`, `pause Ben`,
+`Eva passed away`, `Vergiss Lena`, `Zaboravi Lenu`, `pause Ben`,
 `Ben ist eine Weile weg`, `Ben je odsutan neko vreme`, `Ben is back`,
 `Ben ist zurück` and `Ben se vratio`. Dated examples include `Ben is away until
 1 November`, `Ben ist bis Ende des Monats weg`, `Ben je odsutan do petka` and
@@ -488,12 +488,12 @@ It also ignores the new seen-only record, so keep the current server for these
 learning and seen guarantees.
 
 Commander accepts these changes in English, German and Serbian, including
-`Add my best friend Marko as a guest`, `Entferne Ben` and `Ukloni Bena`.
+`Add my best friend Oskar as a guest`, `Entferne Ben` and `Ukloni Bena`.
 Every child needs an age. `Add my kids Mia 9 and Leo` asks how old Leo is
 before adding either child. Reply with the age, then confirm the complete preview.
 You can interrupt a pending question with a title search.
 Confirm the exact `yes NN` preview code. `Undo that` reverses the last change.
-`Add a catalog for Marko and me with heist movies` creates a shelf on the
+`Add a catalog for Oskar and me with heist movies` creates a shelf on the
 requesting member's Home, with both people's hides, excluded genres, seen and
 negative filters. Guests' reactions never shape household taste or the Together
 label. Pronouns are used to understand speech and are never stored as profile fields.

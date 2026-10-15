@@ -8,10 +8,9 @@
 
 **Skald learns what each person in your home likes and fills your TV with rows picked for them.**
 
-Up to six people get their own rows, plus Together rows for watching as a group.
-You steer it from the search box on your TV: ask for a mood, ask why a title showed up, or tell it who really watched.
-
-Self-hosted in one container. Works in Odin (Apple TV and Mac), Stremio and Jellyfin apps through AIOStreams; your stream addons still play the video.
+- **Everyone at home:** up to six people, each with their own rows, plus Together rows for watching as a group. Children get rows filtered for their age; guests can stay for a few days.
+- **Steered by typing:** in the search box on your TV, ask for a mood, ask why a title showed up, say what you loved or who really watched. Skald learns from it, shows each change before it applies and can undo it. English, German and Serbian work at the same time.
+- **Yours:** self-hosted in one container; history and taste are stored on your machine. Works in Odin (Apple TV and Mac), Stremio and Jellyfin apps through AIOStreams; your stream addons still play the video.
 
 <img src="docs/images/skald-odin.jpg" alt="Skald rows in Odin on a Mac for a test household" width="960">
 
@@ -207,10 +206,10 @@ No extra app needed. The search field in Odin or Stremio finds titles ("Dune" se
 
 | People and family | Skald |
 |---|---|
-| "Add my mother Vesna" | Adds a member. A name alone works too. |
+| "Add my mother Eva" | Adds a member. A name alone works too. |
 | "My girlfriend Lena is moving in" | Adds Lena. Also in German and Serbian. |
 | "Add Kim, she is 12" | Adds a child. Kim's rows follow her age. |
-| "Add Marko as a guest for 3 days" | A visitor who does not change household taste. |
+| "Add Oskar as a guest for 3 days" | A visitor who does not change household taste. |
 | "Ben is away until 1 November" | Pauses Ben's influence on household picks. |
 | "What did Kim watch this week?" | A parent reads a child's plays. |
 | "When is Kim around?" | A parent sees a child's watching days. |

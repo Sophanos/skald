@@ -47,8 +47,8 @@ class People(Household):
 
     def test_relationship_and_bare_names_keep_the_resolved_label(self):
         for text, label in [('Add my new flatmate Jonas', 'Jonas'), ('My girlfriend Lena is moving in', 'Lena'),
-                            ('Add my mother Vesna', 'Vesna'), ('Meine Mutter Vesna wohnt jetzt bei uns', 'Vesna'),
-                            ('Dodaj mamu Vesnu', 'Vesna'), ('Add Vesna', 'Vesna'),
+                            ('Add my mother Eva', 'Eva'), ('Meine Mutter Eva wohnt jetzt bei uns', 'Eva'),
+                            ('Dodaj mamu Evu', 'Eva'), ('Add Eva', 'Eva'),
                             ('Füge Jonas hinzu', 'Jonas'), ('Dodaj Jonasa', 'Jonas')]:
             with self.subTest(text=text):
                 before = c.config(self.s)
@@ -60,11 +60,11 @@ class People(Household):
                 self.assertEqual(c.config(self.s), before)
 
     def test_guest_comes_from_model_meaning(self):
-        for text, guest in [('My mother Vesna visits for a week', True), ('Lena is staying a few days', True),
+        for text, guest in [('My mother Eva visits for a week', True), ('Lena is staying a few days', True),
                             ('Jonas only visits sometimes', True), ('My friend Jonas is over for the weekend', True),
-                            ('My mother Vesna lives with us now', False), ('My partner Lena is moving in', False)]:
+                            ('My mother Eva lives with us now', False), ('My partner Lena is moving in', False)]:
             with self.subTest(text=text):
-                label = 'Vesna' if 'Vesna' in text else 'Lena' if 'Lena' in text else 'Jonas'
+                label = 'Eva' if 'Eva' in text else 'Lena' if 'Lena' in text else 'Jonas'
                 answer = {**member(label), 'guest': guest}
                 pending = c.preview(self.s, text, 'ana', answer=answer)
                 self.assertEqual(label.casefold() in pending['member']['config_after']['household']['guests'], guest)
@@ -79,7 +79,7 @@ class People(Household):
         self.assertEqual(self.files(), before)
 
     def test_name_reply_becomes_label_including_an_explicit_role_word(self):
-        for label, text in (('Vesna', 'Add my mother'), ('Mama', 'Add my girlfriend')):
+        for label, text in (('Eva', 'Add my mother'), ('Mama', 'Add my girlfriend')):
             with self.subTest(label=label):
                 self.model_say(text, dict(op='ask', slot='person', new_person=True,
                                                    question='What should we call her?'))
@@ -111,17 +111,17 @@ class People(Household):
                 c.pending(self.s).clear()
                 self.model_say('Add my mother', dict(op='ask', slot='person', new_person=True,
                                                     question='What should we call her?'), results=recent)
-                _, context = self.model_say('Vesna', member('Vesna'), routed=routed, results=recent)
+                _, context = self.model_say('Eva', member('Eva'), routed=routed, results=recent)
                 self.assertIn('Add my mother', context)
                 self.assertIn('What should we call her?', context)
                 self.assertNotIn('Dune', context)
-                self.assertEqual(c.get_pending(self.s, 'w92')['change']['label'], 'Vesna')
+                self.assertEqual(c.get_pending(self.s, 'w92')['change']['label'], 'Eva')
 
     def test_command_input_prefers_pending_question_to_recent_results(self):
         from skald.rowplan import command_input
         self.model_say('Add my mother', dict(op='ask', slot='person', new_person=True,
                                             question='What should we call her?'))
-        inp = command_input(self.s, 'Vesna', dict(query='Dune', rows={}),
+        inp = command_input(self.s, 'Eva', dict(query='Dune', rows={}),
                             viewer='ana', prior=c.get_pending(self.s, 'w92'))
         self.assertEqual(inp['last'], 'Add my mother\nQuestion: What should we call her?')
         self.assertNotIn('shown', inp)
@@ -245,7 +245,7 @@ class People(Household):
         self.assertEqual(self.files(), before)
 
     def test_six_person_cap_is_one_clear_message_and_no_writes(self):
-        for label in ('Vesna', 'Mia', 'Leo'):
+        for label in ('Eva', 'Mia', 'Leo'):
             c.apply(self.s, c.preview(self.s, '', 'ana', answer=member(label)))
         before = self.files()
         card, _ = self.model_say('Add Jonas and Lena', plan(member('Jonas'), member('Lena')))
@@ -259,7 +259,7 @@ class People(Household):
         self.assertEqual(self.files(), before)
 
     def test_apply_rechecks_capacity_for_the_whole_plan(self):
-        for label in ('Vesna', 'Mia'):
+        for label in ('Eva', 'Mia'):
             c.apply(self.s, c.preview(self.s, '', 'ana', answer=member(label)))
         pending = c.preview(self.s, '', 'ana', answer=plan(member('Jonas'), member('Lena')))
         c.apply(self.s, c.preview(self.s, '', 'ana', answer=member('Leo')))
@@ -328,10 +328,10 @@ class People(Household):
             for answer in (member('Jonas'), plan(member('Jonas'), member('Lena'))):
                 with self.subTest(viewer=viewer, answer=answer), self.assertRaises(PermissionError):
                     c.preview(self.s, '', viewer, answer=answer)
-        c.apply(self.s, c.preview(self.s, '', 'ana', answer={**member('Vesna'), 'guest': True}))
+        c.apply(self.s, c.preview(self.s, '', 'ana', answer={**member('Eva'), 'guest': True}))
         for answer in (member('Jonas'), plan(member('Jonas'), member('Lena'))):
             with self.subTest(answer=answer), self.assertRaises(PermissionError):
-                c.preview(self.s, '', 'vesna', answer=answer)
+                c.preview(self.s, '', 'eva', answer=answer)
 
     def test_apply_rechecks_the_actor_for_a_multi_person_plan(self):
         pending = c.preview(self.s, '', 'ana', answer=plan(member('Jonas'), member('Lena')))

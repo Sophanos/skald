@@ -18,25 +18,25 @@ class People(Household):
 
     def test_guest_create_preview_limit_and_exact_undo(self):
         before = c.config(self.s)
-        plan = self.plan('member_create', 'marko', guest=True, label='Marko', age=30)
+        plan = self.plan('member_create', 'oskar', guest=True, label='Oskar', age=30)
         self.assertEqual(c.config(self.s), before)
         c.apply(self.s, plan)
         cfg = c.config(self.s)
-        self.assertEqual(cfg['household']['guests'], ['marko'])
-        self.assertNotIn('marko', cfg['household']['member_rows'])
+        self.assertEqual(cfg['household']['guests'], ['oskar'])
+        self.assertNotIn('oskar', cfg['household']['member_rows'])
         self.assertEqual(cfg['household']['labels']['pair'], 'you both')
-        self.assertEqual(cfg['household']['ages']['marko'], 30)
+        self.assertEqual(cfg['household']['ages']['oskar'], 30)
         c.undo(self.s, ['ana'])
         self.assertEqual(c.config(self.s), before)
-        for name in ('kim', 'marko', 'kim2', 'marko2'):
+        for name in ('kim', 'oskar', 'kim2', 'oskar2'):
             c.apply(self.s, self.plan('member_create', name, guest=True))
         with self.assertRaisesRegex(ValueError, 'household.members'):
             self.plan('member_create', 'ben2', guest=True)
 
     def test_promote_demote_restore_rows_and_labels(self):
-        c.apply(self.s, self.plan('member_create', 'marko', guest=True, own_row=True))
+        c.apply(self.s, self.plan('member_create', 'oskar', guest=True, own_row=True))
         before = c.config(self.s)
-        c.apply(self.s, self.plan('member_update', 'marko', guest=False))
+        c.apply(self.s, self.plan('member_update', 'oskar', guest=False))
         self.assertEqual(c.config(self.s)['household']['labels']['pair'], 'everyone')
         c.undo(self.s, ['ana'])
         self.assertEqual(c.config(self.s), before)
@@ -95,20 +95,20 @@ class People(Household):
         self.assertEqual(c.config(self.s), cfg)
 
     def test_guest_taste_does_not_change_household(self):
-        c.apply(self.s, self.plan('member_create', 'marko', guest=True))
-        p = {'entries': [dict(key='tmdb:990001', kind='movie', title='Invented Heist', weight=3, by=['marko'], genres=['Comedy'])]}
+        c.apply(self.s, self.plan('member_create', 'oskar', guest=True))
+        p = {'entries': [dict(key='tmdb:990001', kind='movie', title='Invented Heist', weight=3, by=['oskar'], genres=['Comedy'])]}
         self.assertEqual(self.s.adult_people(), ('ana', 'ben'))
         self.assertEqual(self.s.adult_profile(p)['entries'], [])
-        self.assertEqual(self.s.maturity({'nexp': {'marko': 100}}, 'marko')['state'], 'guest')
+        self.assertEqual(self.s.maturity({'nexp': {'oskar': 100}}, 'oskar')['state'], 'guest')
         with patch.object(self.s, '_profiles', {'household': p}), self.s.addon_scope('together'):
             self.assertEqual(self.s.search_profile()['seen'], set())
 
     def test_shared_shelf_uses_two_people_filters(self):
-        c.apply(self.s, self.plan('member_create', 'marko', guest=True))
-        answer = dict(op='shelf_add', values=['invented heists', 'always'], with_person='marko')
+        c.apply(self.s, self.plan('member_create', 'oskar', guest=True))
+        answer = dict(op='shelf_add', values=['invented heists', 'always'], with_person='oskar')
         c.apply(self.s, c.preview(self.s, 'x', 'ana', answer=answer))
         wish = shelves.read(self.s)['wishes'][-1]
-        self.assertEqual((wish['scope'], wish['with_person']), ('ana', 'marko'))
+        self.assertEqual((wish['scope'], wish['with_person']), ('ana', 'oskar'))
         self.assertIn(self.s.rid('shelf_ana_1'), [r[0] for r in shelves.slots(self.s, 'ana')])
         self.assertNotIn(self.s.rid('shelf_ana_1'), [r[0] for r in shelves.slots(self.s, 'ben')])
         metas = [dict(id='tmdb:990001', type='movie'), dict(id='tmdb:990002', type='movie'), dict(id='tmdb:990003', type='movie')]
@@ -116,8 +116,8 @@ class People(Household):
         self.s._feeds[key] = dict(wish=wish['id'], window='always', candidates=metas, status='pinned')
         def profile():
             who = getattr(self.s._scoping, 'scope', None)
-            return {'seen': {'tmdb:990001'} if who == 'marko' else set(), 'negative': {'tmdb:990002'} if who == 'ana' else set()}
-        with patch.object(self.s, 'search_profile', side_effect=profile), patch.object(self.s, 'preference_ok', side_effect=lambda x, cid, who: who != 'marko' or x['id'] != 'tmdb:990003'):
+            return {'seen': {'tmdb:990001'} if who == 'oskar' else set(), 'negative': {'tmdb:990002'} if who == 'ana' else set()}
+        with patch.object(self.s, 'search_profile', side_effect=profile), patch.object(self.s, 'preference_ok', side_effect=lambda x, cid, who: who != 'oskar' or x['id'] != 'tmdb:990003'):
             self.assertEqual(shelves.fill(self.s, self.s.LANG, build=False)[self.s.rid('shelf_ana_1')]['tv'], [])
         c.undo(self.s, ['ana'])
         self.assertEqual(shelves.read(self.s)['wishes'], [])
@@ -127,14 +127,14 @@ class People(Household):
             out = io.StringIO()
             self.assertEqual(main(['members', *args, '--json'], out=out), 0, out.getvalue())
             return json.loads(out.getvalue())
-        preview = run('add', 'marko', '--guest', '--age', '30', '--person', 'ana')
-        self.assertNotIn('marko', c.config(self.s)['household']['members'])
-        run('add', 'marko', '--guest', '--age', '30', '--person', 'ana', '--plan', preview['plan'])
+        preview = run('add', 'oskar', '--guest', '--age', '30', '--person', 'ana')
+        self.assertNotIn('oskar', c.config(self.s)['household']['members'])
+        run('add', 'oskar', '--guest', '--age', '30', '--person', 'ana', '--plan', preview['plan'])
         rows = run('list')['people']
-        self.assertEqual(rows[-1], dict(id='marko', name='Marko', age=30, guest=True, own_row=False, shelves=0))
-        run('remove', 'marko', '--person', 'ana', '--yes')
+        self.assertEqual(rows[-1], dict(id='oskar', name='Oskar', age=30, guest=True, own_row=False, shelves=0))
+        run('remove', 'oskar', '--person', 'ana', '--yes')
         run('--undo', '--person', 'ana')
-        self.assertIn('marko', c.config(self.s)['household']['members'])
+        self.assertIn('oskar', c.config(self.s)['household']['members'])
 
     def test_retired_row_ids_return_empty_after_reload(self):
         c.apply(self.s, self.plan('member_remove', 'ben'))
@@ -146,29 +146,29 @@ class People(Household):
                 self.assertFalse(s.row_enabled(cid))
 
     def test_guest_feedback_masks_and_hashes_are_isolated(self):
-        c.apply(self.s, self.plan('member_create', 'marko', guest=True))
+        c.apply(self.s, self.plan('member_create', 'oskar', guest=True))
         s = self.s
         before = s.taste_hash('household', [])
-        with patch.object(s, 'attribute', return_value=('marko', ['marko'], {})):
+        with patch.object(s, 'attribute', return_value=('oskar', ['oskar'], {})):
             self.assertEqual(s.taste_hash('household', [dict(id='tmdb:990003', type='movie', played=True)]), before)
-        s.write_feedback(dict(who='marko', key='tmdb:990001', kind='movie', title='Invented Heist', action='not_for_us'))
+        s.write_feedback(dict(who='oskar', key='tmdb:990001', kind='movie', title='Invented Heist', action='not_for_us'))
         with s.addon_scope('ana'):
             self.assertNotIn('tmdb:990001', s.remote_masks()[0])
-        with s.addon_scope('marko'):
+        with s.addon_scope('oskar'):
             self.assertIn('tmdb:990001', s.remote_masks()[0])
         self.assertEqual(s.taste_hash('household', []), before)
         p = s.build_profile([], [], remote=True)
         self.assertNotIn('tmdb:990001', p['seen'])
         self.assertNotIn('tmdb:990001', p['negative'])
         both = dict(id='a'*32, t=1, who='both', key='tmdb:990002', action='love')
-        self.assertNotIn(('tmdb:990002', 'marko'), s.fold_feedback([both])[0])
+        self.assertNotIn(('tmdb:990002', 'oskar'), s.fold_feedback([both])[0])
 
     def test_llm_decides_guest_shared_scope_pronouns_and_undo(self):
         s = self.s
         cases = [
-            ('Add my best friend Marko as a guest', dict(op='member_create', person='marko', label='Marko', guest=True)),
-            ('Add a catalog for Marko and me with invented heists', dict(op='shelf_add', values=['invented heists', 'always'], with_person='marko')),
-            ('Make him a full member', dict(op='member_update', person='marko', guest=False)),
+            ('Add my best friend Oskar as a guest', dict(op='member_create', person='oskar', label='Oskar', guest=True)),
+            ('Add a catalog for Oskar and me with invented heists', dict(op='shelf_add', values=['invented heists', 'always'], with_person='oskar')),
+            ('Make him a full member', dict(op='member_update', person='oskar', guest=False)),
             ('Undo that', dict(op='undo')),
         ]
         with ReplayLLM(s) as llm:
@@ -178,7 +178,7 @@ class People(Household):
                 self.assertIsNotNone(plan)
                 c.apply(s, plan)
             self.assertEqual(llm.calls, 4)
-        self.assertIn('marko', c.config(s)['household']['guests'])
+        self.assertIn('oskar', c.config(s)['household']['guests'])
 
     def test_remove_self_is_refused(self):
         before = c.config(self.s)
@@ -219,38 +219,38 @@ class People(Household):
         self.assertEqual(c.config(self.s), cfg)
 
     def test_shared_shelf_keeps_the_guest_child_filter(self):
-        c.apply(self.s, self.plan('member_create', 'marko', guest=True, age=12))
-        c.apply(self.s, c.preview(self.s, 'x', 'ana', answer=dict(op='shelf_add', values=['invented heists', 'always'], with_person='marko')))
+        c.apply(self.s, self.plan('member_create', 'oskar', guest=True, age=12))
+        c.apply(self.s, c.preview(self.s, 'x', 'ana', answer=dict(op='shelf_add', values=['invented heists', 'always'], with_person='oskar')))
         wish = shelves.read(self.s)['wishes'][-1]
         self.s._feeds[self.s.rid('shelfraw_ana_1'), self.s.LANG] = dict(wish=wish['id'], window='always', status='pinned', candidates=[dict(id='tmdb:990001', type='movie')])
         with patch.object(self.s, 'search_profile', return_value={}), patch.object(self.s, 'preference_ok', side_effect=lambda x, cid, who: self.s.kids_age(self.s.safety_subject(who)) is None):
             self.assertEqual(shelves.fill(self.s, self.s.LANG, build=False)[self.s.rid('shelf_ana_1')]['tv'], [])
 
     def test_remove_shared_shelf_retires_owner_id_and_refuses_stale_shelves(self):
-        c.apply(self.s, self.plan('member_create', 'marko', guest=True))
-        c.apply(self.s, c.preview(self.s, 'x', 'ana', answer=dict(op='shelf_add', values=['invented heists', 'always'], with_person='marko')))
-        plan = self.plan('member_remove', 'marko')
+        c.apply(self.s, self.plan('member_create', 'oskar', guest=True))
+        c.apply(self.s, c.preview(self.s, 'x', 'ana', answer=dict(op='shelf_add', values=['invented heists', 'always'], with_person='oskar')))
+        plan = self.plan('member_remove', 'oskar')
         self.assertIn(self.s.rid('shelf_ana_1'), plan['description'])
-        c.apply(self.s, c.preview(self.s, 'add a shelf with invented rivers', 'marko', answer=dict(op='shelf_add', values=['invented rivers', 'always'])))
+        c.apply(self.s, c.preview(self.s, 'add a shelf with invented rivers', 'oskar', answer=dict(op='shelf_add', values=['invented rivers', 'always'])))
         before = c.config(self.s)
         with self.assertRaisesRegex(ValueError, 'Shelves changed'):
             c.apply(self.s, plan)
         self.assertEqual(c.config(self.s), before)
-        c.apply(self.s, self.plan('member_remove', 'marko'))
+        c.apply(self.s, self.plan('member_remove', 'oskar'))
         self.assertIn(self.s.rid('shelf_ana_1'), c.config(self.s)['household']['retired_rows'])
 
     def test_guest_filters_stay_personal_and_refresh_without_taste_changes(self):
-        c.apply(self.s, self.plan('member_create', 'marko', guest=True))
-        c.apply(self.s, c.preview(self.s, 'hide anime', 'marko', answer=dict(op='hide', values=['anime'])))
+        c.apply(self.s, self.plan('member_create', 'oskar', guest=True))
+        c.apply(self.s, c.preview(self.s, 'hide anime', 'oskar', answer=dict(op='hide', values=['anime'])))
         self.assertNotIn({'hide': ['anime']}, self.s.row_preferences(self.s.rid('foryou'), 'both')[1])
         s = self.s
         with patch.object(s, 'read_history', return_value=[]), patch.object(s, 'read_trakt', return_value=[]), patch.object(s, 'learn_from_plays'), patch.object(s, 'log_play_context'):
             s.refresh_profiles()
             before = s._profiles['household']['hash']
-            s.write_feedback(dict(who='marko', key='tmdb:990001', kind='movie', title='Invented Heist', action='seen'))
+            s.write_feedback(dict(who='oskar', key='tmdb:990001', kind='movie', title='Invented Heist', action='seen'))
             s.refresh_profiles()
             self.assertEqual(s._profiles['household']['hash'], before)
-            with s.addon_scope('marko'):
+            with s.addon_scope('oskar'):
                 self.assertIn('tmdb:990001', s.search_profile()['seen'])
 
     def test_guest_reactions_leave_scores_reach_and_calibration_unchanged(self):
@@ -261,8 +261,8 @@ class People(Household):
         with patch.object(s, 'ensure_facets'), patch.object(s, 'ensure_emb'):
             before = s.build_profile([], [], remote=True)
             model = s.build_model(before, enrich=False)
-            c.apply(s, self.plan('member_create', 'marko', guest=True))
-            s.write_feedback(dict(who='marko', key='tmdb:990002', kind='movie', title='Invented River', action='not_for_us'))
+            c.apply(s, self.plan('member_create', 'oskar', guest=True))
+            s.write_feedback(dict(who='oskar', key='tmdb:990002', kind='movie', title='Invented River', action='not_for_us'))
             after = s.build_profile([], [], remote=True)
             changed = s.build_model(after, enrich=False)
         for field in ('aff', 'x', 'bg', 'cal', 'cal_reference', 'taste_line'):

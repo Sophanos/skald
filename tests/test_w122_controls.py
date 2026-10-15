@@ -16,11 +16,11 @@ class Controls(SettingsFixture):
     def setUp(self):
         super().setUp()
         cfg = c.config(self.s)
-        cfg['household']['members'] += ['kim', 'marko']
-        cfg['household']['labels'].update(kim='Kim', marko='Marko')
-        cfg['household']['guests'] = ['marko']
+        cfg['household']['members'] += ['kim', 'oskar']
+        cfg['household']['labels'].update(kim='Kim', oskar='Oskar')
+        cfg['household']['guests'] = ['oskar']
         cfg['household']['ages'] = {'kim': 9}
-        cfg['taste']['people'].update(kim={'prefs': {'kids_age': 9}}, marko={})
+        cfg['taste']['people'].update(kim={'prefs': {'kids_age': 9}}, oskar={})
         setup.publish(self.data, cfg, replace=True)
         self.s.refresh_preferences()
         self.enterContext(patch.dict(os.environ, {'DATA_DIR': str(self.data)}))
@@ -84,7 +84,7 @@ class Controls(SettingsFixture):
         self.assertEqual(s.ai_monthly_usd(), 10)
 
     def test_budget_roles_and_stale_plan_write_nothing(self):
-        for actor in ('kim', 'marko', 'guest'):
+        for actor in ('kim', 'oskar', 'guest'):
             before = self.stored()
             with self.subTest(actor=actor), self.assertRaisesRegex(PermissionError, 'Ask a household member'):
                 self.plan('ai_budget', [0], actor)
@@ -128,12 +128,12 @@ class Controls(SettingsFixture):
         self.assertEqual(saved, before)
 
     def test_actors_and_viewer_filtering_since_and_old_entries(self):
-        for actor in ('ana', 'kim', 'marko'):
+        for actor in ('ana', 'kim', 'oskar'):
             self.change('shelf_count', [2], actor)
         all_rows = c.changes(self.s)['changes']
-        self.assertEqual({r['by'] for r in all_rows}, {'ana', 'kim', 'marko'})
+        self.assertEqual({r['by'] for r in all_rows}, {'ana', 'kim', 'oskar'})
         self.assertEqual(c.changes(self.s, 'ben')['changes'], all_rows)
-        for actor in ('kim', 'marko'):
+        for actor in ('kim', 'oskar'):
             rows = c.changes(self.s, actor)['changes']
             self.assertEqual([r['scope'] for r in rows], [actor])
         entries = c.journal(self.s)
@@ -147,15 +147,15 @@ class Controls(SettingsFixture):
         self.assertEqual(plan['changes'], c.changes(self.s, 'ana', '7d')['changes'])
 
     def test_adult_targeted_guest_undo_and_kid_refusal(self):
-        guest = self.change('shelf_count', [2], 'marko')
+        guest = self.change('shelf_count', [2], 'oskar')
         adult = self.change('ai_budget', [5])
         before = self.stored()
         plan = self.plan('undo', [guest['id']])
         self.assertEqual(self.stored(), before)
         c.apply(self.s, plan)
-        self.assertEqual(shelves.slot_count(self.s, 'marko'), 4)
+        self.assertEqual(shelves.slot_count(self.s, 'oskar'), 4)
         before = self.stored()
-        for actor in ('kim', 'marko'):
+        for actor in ('kim', 'oskar'):
             with self.subTest(actor=actor), self.assertRaises(PermissionError):
                 self.plan('undo', [adult['id']], actor)
             self.assertEqual(self.stored(), before)
@@ -177,7 +177,7 @@ class Controls(SettingsFixture):
 
     def test_independent_targeted_row_undo_by_name_and_id(self):
         first = self.change('row_rename', ['foryou', 'Invented picks'])
-        self.change('shelf_count', [2], 'marko')
+        self.change('shelf_count', [2], 'oskar')
         plan = self.plan('undo', ['row rename'], 'ben')
         self.assertEqual(plan['target']['id'], first['id'])
         c.apply(self.s, plan)
@@ -230,16 +230,16 @@ class Controls(SettingsFixture):
         self.assertNotEqual(first['id'], latest['id'])
 
     def test_commander_confirmed_cross_scope_undo_and_guest_list(self):
-        self.change('shelf_count', [2], 'marko')
-        with patch.object(self.s, 'decide', return_value={'answer': dict(op='undo', kind=None, values=['shelf count'], person='marko')}), \
+        self.change('shelf_count', [2], 'oskar')
+        with patch.object(self.s, 'decide', return_value={'answer': dict(op='undo', kind=None, values=['shelf count'], person='oskar')}), \
                 patch.object(c, 'context', return_value=('ben', 'ben', 'ben')):
             c.special(self.s, 'synthetic undo request', 'movie', routed=True)
             plan = c.get_pending(self.s, 'ben')
             self.assertIsNotNone(plan)
             c.special(self.s, 'yes '+c.confirm_code(plan), 'movie')
-        self.assertEqual(shelves.slot_count(self.s, 'marko'), 4)
-        plan = self.plan('history', actor='marko', since='7d', person='household')
-        self.assertEqual({r['scope'] for r in plan['changes']}, {'marko'})
+        self.assertEqual(shelves.slot_count(self.s, 'oskar'), 4)
+        plan = self.plan('history', actor='oskar', since='7d', person='household')
+        self.assertEqual({r['scope'] for r in plan['changes']}, {'oskar'})
 
     def test_shared_link_confirms_targeted_undo_as_adult_viewer(self):
         entry = self.change('ai_budget', [5])
@@ -275,7 +275,7 @@ class Controls(SettingsFixture):
         self.assertEqual(c.changes(self.s)['changes'][-1]['id'], first['id'])
 
     def test_shared_link_uses_the_adult_viewer_and_children_undo_own_entries(self):
-        for actor in ('kim', 'marko'):
+        for actor in ('kim', 'oskar'):
             entry = self.change('shelf_count', [2], actor)
             c.apply(self.s, self.plan('undo', [entry['id']], actor))
             self.assertEqual(shelves.slot_count(self.s, actor), 4)

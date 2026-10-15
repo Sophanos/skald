@@ -60,12 +60,12 @@ class RoundOne(Household):
         self.removal_roundtrip('ben')
 
     def test_retired_shared_state_survives_restart_save_and_undo(self):
-        self.removal_roundtrip('marko')
+        self.removal_roundtrip('oskar')
 
     def removal_roundtrip(self, person):
         self.s.shelf_change('ben', 'add', text='genre:comedy', name='Invented Ben', apply=True)
-        c.apply(self.s, self.plan('member_create', 'marko', guest=True))
-        c.apply(self.s, c.preview(self.s, '', 'ana', answer=dict(op='shelf_add', values=['invented rivers', 'always'], with_person='marko')))
+        c.apply(self.s, self.plan('member_create', 'oskar', guest=True))
+        c.apply(self.s, c.preview(self.s, '', 'ana', answer=dict(op='shelf_add', values=['invented rivers', 'always'], with_person='oskar')))
         for wish in shelves.read(self.s)['wishes']:
             for stem in ('shelf', 'shelfraw'):
                 self.s._feeds[self.s.rid(f"{stem}_{wish['scope']}_{wish['slot']}"), self.s.LANG] = dict(
@@ -103,12 +103,12 @@ class RoundOne(Household):
                 self.assertEqual(after[name], raw, name)
 
     def test_catalog_modifications_for_retired_shared_shelf_stay_exact(self):
-        c.apply(self.s, self.plan('member_create', 'marko', guest=True))
-        c.apply(self.s, c.preview(self.s, '', 'ana', answer=dict(op='shelf_add', values=['invented rivers', 'always'], with_person='marko')))
+        c.apply(self.s, self.plan('member_create', 'oskar', guest=True))
+        c.apply(self.s, c.preview(self.s, '', 'ana', answer=dict(op='shelf_add', values=['invented rivers', 'always'], with_person='oskar')))
         cid = 'synthetic.'+self.s.rid('shelf_ana_1')
         cfg = {'catalogModifications': [dict(id=cid, type='tv', enabled=False, name='Invented private label')]}
         manifest = {'catalogs': [dict(id='synthetic.'+self.s.rid('search'))]}
-        c.apply(self.s, self.plan('member_remove', 'marko'))
+        c.apply(self.s, self.plan('member_remove', 'oskar'))
         setup.keep_catalog_places(self.s, cfg, manifest, 'ana')
         self.assertIn(dict(id=cid, type='tv', enabled=False, name='Invented private label'), cfg['catalogModifications'])
 
@@ -203,9 +203,9 @@ class RoundOne(Household):
 
     def test_apply_rechecks_guest_actor(self):
         c.apply(self.s, self.plan('member_create', 'kim'))
-        c.apply(self.s, self.plan('member_create', 'marko'))
+        c.apply(self.s, self.plan('member_create', 'oskar'))
         plan = self.plan('member_remove', 'ben')
-        c.apply(self.s, self.plan('member_update', 'ana', actor='marko', guest=True))
+        c.apply(self.s, self.plan('member_update', 'ana', actor='oskar', guest=True))
         before = c.config(self.s)
         with self.assertRaises(PermissionError):
             c.apply(self.s, plan)
@@ -221,12 +221,12 @@ class RoundOne(Household):
         self.assertEqual(c.config(self.s), before)
         with patch.object(self.s, 'MEMBER_COUNTS', (1, 2, 3)):
             with self.assertRaisesRegex(ValueError, 'household.members'):
-                self.plan('member_create', 'marko', actor='kim')
+                self.plan('member_create', 'oskar', actor='kim')
 
     def test_apply_rechecks_limit_after_a_concurrent_addition(self):
         with patch.object(self.s, 'MEMBER_COUNTS', (1, 2, 3)):
             plan = self.plan('member_create', 'kim')
-            c.apply(self.s, self.plan('member_create', 'marko'))
+            c.apply(self.s, self.plan('member_create', 'oskar'))
             before = c.config(self.s)
             with self.assertRaisesRegex(ValueError, 'household.members'):
                 c.apply(self.s, plan)
@@ -280,16 +280,16 @@ class RoundOne(Household):
 
     def test_unresolved_people_ask_with_candidates_without_writes(self):
         self.add_guest()
-        c.apply(self.s, self.plan('member_create', 'marko', guest=True))
+        c.apply(self.s, self.plan('member_create', 'oskar', guest=True))
         for op, person, fields in [('member_create', 'her', {'guest': True}), ('member_create', None, {'label': 'Kim'}), ('member_remove', 'her', {}), ('member_rows', 'her', {'own_row': False}), ('member_update', 'unknown', {'label': 'Kim'})]:
             with self.subTest(op=op, person=person):
                 before = {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file() and p.name not in ('usage.json', 'decisions.jsonl')}
                 with ReplayLLM(self.s) as llm:
                     llm.arm({'choices': [{'message': {'content': json.dumps(dict(op=op, person=person, **fields))}}]})
-                    plan = c.preview(self.s, 'synthetic ambiguous '+op+' '+str(person), 'ana', prior={'text': 'Kim and Marko', 'member': {'name': 'kim'}})
+                    plan = c.preview(self.s, 'synthetic ambiguous '+op+' '+str(person), 'ana', prior={'text': 'Kim and Oskar', 'member': {'name': 'kim'}})
                 self.assertTrue(plan.get('read_only'), plan)
                 self.assertIn('Kim', plan['name'])
-                self.assertIn('Marko', plan['name'])
+                self.assertIn('Oskar', plan['name'])
                 self.assertTrue(plan['name'].endswith('?'))
                 c.apply(self.s, plan)
                 for path, raw in before.items():
@@ -297,11 +297,11 @@ class RoundOne(Household):
 
     def test_model_person_question_lists_current_candidates(self):
         self.add_guest()
-        c.apply(self.s, self.plan('member_create', 'marko', guest=True))
+        c.apply(self.s, self.plan('member_create', 'oskar', guest=True))
         plan = c.preview(self.s, '', 'ana', answer=dict(op='ask', slot='person', question='Which person do you mean?'))
         self.assertTrue(plan['read_only'])
         self.assertIn('Kim', plan['name'])
-        self.assertIn('Marko', plan['name'])
+        self.assertIn('Oskar', plan['name'])
 
     def test_local_api_creation_keeps_the_explicit_new_name(self):
         result = c.api_preview(self.s, dict(body={'in': {'query': 'Add a household member named Kim, age 12'}, 'no_llm': True}, viewer='ana', client={'name': 'ana'}))

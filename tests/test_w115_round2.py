@@ -290,12 +290,12 @@ class RoundTwo(Household):
         c.apply(self.s, self.plan('member_create', 'kim'))
         c.apply(self.s, self.plan('member_remove', 'ben'))
         with patch.object(self.s, 'MEMBER_COUNTS', (1, 2, 3)), patch.object(members, 'MEMBER_COUNTS', (1, 2, 3)):
-            c.apply(self.s, self.plan('member_create', 'marko', actor='kim'))
+            c.apply(self.s, self.plan('member_create', 'oskar', actor='kim'))
             before = self.files()
             with self.assertRaisesRegex(ValueError, 'limit.*3|3.*limit'):
                 c.undo(self.s, ['ana'])
             self.assertEqual(self.files(), before)
-        self.assertEqual(self.s.PEOPLE, ('ana', 'kim', 'marko'))
+        self.assertEqual(self.s.PEOPLE, ('ana', 'kim', 'oskar'))
 
     def test_labeled_unresolved_creation_asks_for_name_without_writes(self):
         before = self.files()

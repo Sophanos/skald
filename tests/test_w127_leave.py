@@ -779,21 +779,21 @@ class Leave(Household):
     def test_forget_summary_shared_and_other_people_files_unchanged(self):
         from skald import history
         cfg = c.config(self.s)
-        cfg['household']['members'].append('vesna')
-        cfg['household']['labels']['vesna'] = 'Vesna'
-        cfg['taste']['people']['vesna'] = {}
+        cfg['household']['members'].append('eva')
+        cfg['household']['labels']['eva'] = 'Eva'
+        cfg['taste']['people']['eva'] = {}
         setup.publish(self.root, cfg, replace=True)
         self.s.refresh_preferences()
         rows = [dict(origin='history.json', key='tmdb:'+str(n), kind='movie', who=by[0], by=by, month='2026-01', src='tv')
-                for n, by in ((990031, ['ben']), (990032, ['ana']), (990033, ['together']), (990034, ['ben', 'vesna']))]
+                for n, by in ((990031, ['ben']), (990032, ['ana']), (990033, ['together']), (990034, ['ben', 'eva']))]
         self.save(history.SUMMARY, {'v': 1, 'items': rows})
-        self.save('trakt-vesna.history.json', {'items': []})
-        raw = (self.root / 'trakt-vesna.history.json').read_bytes()
+        self.save('trakt-eva.history.json', {'items': []})
+        raw = (self.root / 'trakt-eva.history.json').read_bytes()
         plan = self.plan('member_forget')
-        self.assertEqual(plan['forget']['counts']['shared'], {'ana': 1, 'vesna': 2})
+        self.assertEqual(plan['forget']['counts']['shared'], {'ana': 1, 'eva': 2})
         c.apply(self.s, plan)
         self.assertEqual(history.read(self.root), [rows[1]])
-        self.assertEqual((self.root / 'trakt-vesna.history.json').read_bytes(), raw)
+        self.assertEqual((self.root / 'trakt-eva.history.json').read_bytes(), raw)
         self.assertTrue({'tmdb:990033', 'tmdb:990034'} <= history.seen_keys(self.root))
 
     def test_forget_unlinks_only_player_and_pending_shelf(self):
@@ -822,7 +822,7 @@ class Leave(Household):
 
     def test_away_cap_and_named_guest_refusals(self):
         c.apply(self.s, self.plan('member_away'))
-        for person in ('lena', 'vesna', 'ana2', 'ben2'):
+        for person in ('lena', 'eva', 'ana2', 'ben2'):
             c.apply(self.s, c.preview(self.s, 'x', 'ana', answer=dict(op='member_create', person=person, label=person.title(), guest=True)))
         with self.assertRaisesRegex(ValueError, 'household.members'):
             c.preview(self.s, 'x', 'ana', answer=dict(op='member_create', person='lena2', label='Lena', guest=True))
