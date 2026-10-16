@@ -241,7 +241,7 @@ class AwayUntil(Household):
         self.assertIn('2026-10-15', llm.bodies[0]['messages'][1]['content'])
         c.apply(self.s, plan)
         self.assertEqual(c.config(self.s)['household']['away_until']['ben'], '2026-10-16')
-        self.assertEqual(self.s.DECISIONS['parse_command']['ver'], 19)
+        self.assertEqual(self.s.DECISIONS['parse_command']['ver'], 20)
 
     def test_149_validator_preserves_away_and_ignores_return_date(self):
         c.apply(self.s, self.plan(days=3))

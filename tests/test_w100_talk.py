@@ -321,7 +321,7 @@ class ResultCommands(unittest.TestCase):
         code = c.confirm_code(c.get_pending(self.s, 'w93'))
         self.confirm()
         self.assertEqual({e['title'] for e in self.feedback().values()}, {'Dune', 'Arrival'})
-        self.assertTrue(all(e['action'] == 'love' and e['who'] == 'ana' for e in self.feedback().values()))
+        self.assertTrue(all(e['action'] == 'like' and e['who'] == 'ana' for e in self.feedback().values()))
         before = self.s.read_feedback()
         self.say('yes '+code)
         self.assertEqual(self.s.read_feedback(), before)

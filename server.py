@@ -59,7 +59,7 @@ from types import SimpleNamespace
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -879,7 +879,7 @@ ROUTE_Q = {
             "title": "The whole text is a name: one movie, series, person or franchise they want to find, possibly misspelled, partial or translated. If any part of the text is not part of that name (a content type, a mood, a comparison, a year, a wish, a verb, a reference to the user), it is not a title. A lone word is a name, even if it could also describe a mood.",
             "request": "The text asks to be shown titles now by describing them rather than naming one: a mood, theme, subject, feeling, genre with a feeling, similarity to something, a ranking, or the user's own viewing history (titles they have or have not watched, or want to watch again). A descriptive word together with a content type, in any language, is a request unless the whole text is itself a known title. It changes nothing saved.",
             "discover": "The text is only a genre and/or a year or decade, with no mood, theme or other wish.",
-            "command": "The text asks the app to change or remember something for later: the user's taste, filters, settings, members, or their rows, shelves and catalogs; or it tells the app how they felt about a specific title or that they already saw it; or it asks what the app has learned about a person, when a named household guest's stay ends, or how much AI credit or spending remains. Questions about a named child's watched titles, likes, watching days, usual watching weekdays or when the child is around are commands that read facts. Title names like When Kim Is Around stay title searches. Questions about preparing for a coming saga film or season by watching earlier parts or catching up read the saved get-ready rows and are commands. A title called Get Ready is a title search. Asking to be shown titles from their own history is a request, not a command.",
+            "command": "The text asks the app to change or remember something for later: the user's taste, filters, settings, members, or their rows, shelves and catalogs; or it tells the app how they felt about a specific title or that they already saw it; or it asks what the app has learned about a person, when a named household guest's stay ends, or how much AI credit or spending remains. Requests to recheck or retag a title's experience tags, or all stale experience tags, are commands. A film named Tag Again stays a title search. Questions about a named child's watched titles, likes, watching days, usual watching weekdays or when the child is around are commands that read facts. Title names like When Kim Is Around stay title searches. Questions about preparing for a coming saga film or season by watching earlier parts or catching up read the saved get-ready rows and are commands. A title called Get Ready is a title search. Asking to be shown titles from their own history is a request, not a command.",
         }},
     "watched": {"type": "choice",
         "instructions": "Does the user limit results by their own viewing history? Only count wording about the user's (or their household's) own watching. Words that belong to a title name or describe a plot do not count.",
@@ -1841,7 +1841,7 @@ def route_parse(resp, batch):
               **({"previous": answers.get("previous", {}).get("choice") or "new"} if "last" in batch[0] else {})}, a.get("confidence") or 0)]
 
 
-decision("route_query", ver=9, lane="search", cap=None, ttl=30 * DAY,
+decision("route_query", ver=10, lane="search", cap=None, ttl=30 * DAY,
     inp={"query": str, "last": (str, None), "shown": (str, [str, 30], None), "context_key": (str, None)}, out={"choice": ("title", "discover", "request", "command", None), "confidence": (float, None),
                            "watched": ("unseen", "seen", "any", None), "list": ("best", "taste", None), "previous": ("new", "refine", "act", None)},
     norm=route_norm, rule=None, params={},
@@ -1932,7 +1932,7 @@ def search_profile():
         return p
     people = member_people() if scope is None or SCOPES[scope] == "both" else (SCOPES[scope],)
     entries = [e for person in people for e in person_entries(p, person)] if p else []
-    return {"entries": entries, "seen": {e["key"] for e in entries} | history_seen(DATA),
+    return {"entries": entries, "seen": {e["key"] for e in entries if _abandon_seen(e)} | history_seen(DATA),
             "negative": {e["key"] for e in entries if e["weight"] < 0}}
 
 
@@ -3545,9 +3545,12 @@ def tmdb_details(item):
 def classify(item, now):
     age = (now - (item.get("at") or 0) / 1000) / DAY if item.get("at") else 999
     rating, likes = item.get("rating"), item.get("likes")
-    if item.get("dropped") or (rating is not None and rating <= 4):
+    if item.get("dropped"):
         return "disliked", age
-    if item.get("favorite") or (rating is not None and rating >= 7) or (likes or 0) > 0:
+    if rating is not None:
+        from skald.ingest import rating_signal
+        return IMPORT_SIGNALS[rating_signal(rating)][0], age
+    if item.get("favorite") or (likes or 0) > 0:
         return "loved", age
     prog = item.get("progress") or 0
     if item["type"] == "movie":
@@ -3597,7 +3600,7 @@ def _taste_rank(value):
     completion = it.get("completion") or 0
     if it.get("type") == "movie":
         completion = completion or it.get("progress") or 1
-    return (it.get("rating") is not None, bool(it.get("played")),
+    return (it.get("rating") is not None, bool(value.get("deliberate") or it.get("dropped")), bool(it.get("played")),
             completion if it.get("played") else 0,
             it.get("episodes_played") or 0,
             bool(it.get("dropped") or value.get("signal") == "abandoned"), weight)
@@ -4862,7 +4865,7 @@ def _pmdb_items(watched, resume, dropped, watchlist, now, *, readonly=False):
             state = {k: v for k, v in state.items() if k != "at"}
         it.update(src="sync:pmdb", **state)
         if state.get("dropped"):
-            it.update(signal="abandoned", weight=-1.5)
+            it.update(signal="abandoned", weight=-1.5, deliberate=True)
         elif not it["played"]:
             it.update(signal="interest", weight=1)
     return doc, recent, latest
@@ -5102,7 +5105,7 @@ def _stremio_login(email, password):
     return key
 
 
-STREMIO_RULES = 4  # bump when _stremio_item rules change so cached rows are mapped again
+STREMIO_RULES = 6  # bump when _stremio_item rules change so cached rows are mapped again
 STREMIO_LINK = "https://link.stremio.com/api/v2/"
 
 
@@ -5164,6 +5167,9 @@ def _stremio_item(row, now):
     it.update(type=kind, played=watched, plays=max(1, state.get("timesWatched") or 0) if watched else 0,
               signal=it["signal"] if at is not None else signal,
               weight=it["weight"] if at is not None else 2 if watched else SIGNAL_WEIGHT[signal])
+    duration_min = round(duration / 60000)
+    if duration_min > 0:
+        it["duration_min"] = duration_min
     if position:
         it["progress"] = round(position, 3)
         if signal == "abandoned" and last:
@@ -5207,6 +5213,9 @@ def _connector_stremio(c, now, budget=None, *, readonly=False):
         if it and _stremio_stronger(it, items.get((it["type"], it["id"]))):
             items[(it["type"], it["id"])] = dict(it)
     likes, cached = {}, old.get("likes", {})
+    if old.get("version") != STREMIO_RULES:
+        cached = {key: {**it, "rating": 7, "signal": "liked", "weight": IMPORT_SIGNALS["like"][1]}
+                  if it.get("rating") == 8 else it for key, it in cached.items()}
     library_items, likes_available = items.copy(), True
     from skald.ingest import rating_signal
     try:
@@ -5220,7 +5229,7 @@ def _connector_stremio(c, now, budget=None, *, readonly=False):
             addon_key = addon_key.get('key')
         if not isinstance(addon_key, str) or not addon_key.strip():
             raise SchemaMismatch()
-        for level, rating in (("liked", 8), ("loved", 10)):
+        for level, rating in (("liked", 7), ("loved", 10)):
             for kind in ("movie", "series"):
                 url = "https://likes.stremio.com/addons/" + level + "/movies-shows/user=" + urllib.parse.quote(addon_key, safe="") + "/catalog/" + kind + "/stremio-" + level + "-" + kind + ".json"
                 metas = _stremio_http(url, budget=budget).get("metas")
@@ -5627,7 +5636,8 @@ def trakt_entry(it, now):
     return {"key": it["id"], "id": tid, "kind": kind, "stype": "movie" if kind == "movie" else "series",
             "title": it.get("title") or "", "year": str(it.get("year") or ""), "signal": it.get("signal") or "watched",
             "weight": float(it.get("weight") or 0), "age": age, "item": it, "who": "owner", "by": [person],
-            "flags": it.get("flags") or [], "genres": genre_names(it.get("genres") or [])}
+            "flags": it.get("flags") or [], "genres": genre_names(it.get("genres") or []),
+            "deliberate": bool(it.get("dropped"))}
 
 
 # --- events ---
@@ -5681,6 +5691,9 @@ def event_weight(ev, now):
             weight *= trust(src)
         return ev["ctx"]["signal"], weight, age
     signal, weight = ACTION_W[(family, ev["action"])]
+    if family == "tv" and (ev["ctx"].get("item") or {}).get("rating") is not None and not ev["ctx"]["item"].get("dropped"):
+        from skald.ingest import rating_signal
+        signal, weight = IMPORT_SIGNALS[rating_signal(ev["ctx"]["item"]["rating"])]
     if family == "import":
         age = max(0, int((now - ev["t"]) / DAY)) if ev["t"] is not None else 999
         decay = 1 - age / 120 if signal == "interest" else 1.0 if age <= 30 else .5 if age <= 120 else .25
@@ -5854,10 +5867,15 @@ def _import_event_entries(now, evts):
         if signal == "interest":
             for person in people:
                 interests[person] = interests.get(person, 0) + 1
+        # Old Trakt status imports could exceed .5 confidence; inferred progress never did.
+        # shortcut: legacy Trakt choices at <=.5 keep inferred readings; re-import to recover explicit status.
+        deliberate = ev["action"] == "not_for_us" or ev["action"] == "abandon" and (
+            ev["ctx"]["src"] not in ("netflix", "trakt") or ev["ctx"]["src"] == "trakt" and ev["conf"] > .5)
         yield {"key": ev["key"], "id": int(ev["key"][5:]), "kind": ev["kind"],
                "stype": "movie" if ev["kind"] == "movie" else "series", "title": ev["title"], "year": ev["year"],
                "signal": signal, "weight": weight, "age": age, "who": "import", "by": people,
                "flags": ["import", ev["ctx"]["src"]], "genres": [],
+               "deliberate": deliberate,
                "item": {"episodes_played": ev["n"] if ev["kind"] == "tv" and ev["action"] == "seen" else 0}, "n": ev["n"]}
 
 
@@ -5917,6 +5935,7 @@ def _claim_rank(e, now, person=None, newest=False):
             day = math.floor(item["at"] / 1000 / DAY) if item.get("at") else -math.inf
     explicit = src not in ("trakt", "sync:pmdb") and (action in EXPLICIT if record or "action" in e else
                action in EXPLICIT if src in ("remote", "interview") else signal in ("loved", "liked", "disliked"))
+    explicit = explicit or value.get("deliberate", False)
     if not IMPORT_COMPLETION_FIRST and signal in ("watched", "abandoned"): explicit = True
     inferred = {"opened": 0, "interest": 1, "abandoned": 2, "watched": 3, "loved": 4}.get(signal, 0)
     tie = (-trust(src), -({"remote": 2, "interview": 2, "tv": 1, "trakt": 1}.get(src, 0)),
@@ -5972,7 +5991,7 @@ def _merge_import_events(entries, by_key, now, evts):
                 won = set()
                 for person in sorted(overlap):
                     value = (old.get("opinions") or {}).get(person) or old.get("shared") or old
-                    if value["signal"] == imported["signal"]:
+                    if value["signal"] == imported["signal"] and value.get("deliberate", False) == imported["deliberate"]:
                         if value.get("wsrc") == "import":
                             _claim_records.entries[id(value)] = (value, (*_claim_record(imported), imported))
                         continue
@@ -5987,10 +6006,11 @@ def _merge_import_events(entries, by_key, now, evts):
                     remaining -= won
                     if won and IMPORT_SHARED_OPINIONS:
                         if "together" in old["by"]:
-                            old.setdefault("shared", {**{k: old[k] for k in ("signal", "weight", "item", "flags")}, "wsrc": old.get("wsrc")})
+                            old.setdefault("shared", {**{k: old[k] for k in ("signal", "weight", "item", "flags")},
+                                **{k: old[k] for k in STOP_FIELDS if k in old}, "wsrc": old.get("wsrc")})
                         for person in sorted(won):
                             value = {"signal": imported["signal"], "weight": imported["weight"], "item": {},
-                                     "flags": imported["flags"], "wsrc": "import"}
+                                     "flags": imported["flags"], "wsrc": "import", "deliberate": imported["deliberate"]}
                             old.setdefault("opinions", {})[person] = value
                             _claim_records.entries[id(value)] = (value, (*_claim_record(imported), imported))
                     continue
@@ -6090,7 +6110,8 @@ def _merge_feedback_events(entries, by_key, now, evts):
         if play:
             by = _expand_together(play["by"])
             if by - reactors or play.get("opinions"):
-                play.setdefault("shared", {**{k: play[k] for k in ("signal", "weight", "item", "flags")}, "wsrc": play.get("wsrc")})
+                play.setdefault("shared", {**{k: play[k] for k in ("signal", "weight", "item", "flags")},
+                    **{k: play[k] for k in STOP_FIELDS if k in play}, "wsrc": play.get("wsrc")})
                 for person in sorted(reactors):
                     play.setdefault("opinions", {})[person] = {"signal": e["signal"], "weight": e["weight"],
                         "item": {}, "flags": ["remote"], "wsrc": "remote"}
@@ -6101,6 +6122,10 @@ def _merge_feedback_events(entries, by_key, now, evts):
             at = at if at is not None else -math.inf
             if id(play) not in updated or at >= updated[id(play)]:
                 play.update(signal=e["signal"], weight=e["weight"])
+                for field in STOP_FIELDS:
+                    if field != "deliberate":
+                        play.pop(field, None)
+                play["deliberate"] = e["signal"] == "disliked"
                 updated[id(play)] = at
             by_key[key] = play
         else:
@@ -6154,7 +6179,8 @@ def _fold_events(stages, now):
                     kind, key, ctx = ev["kind"], ev["key"], ev["ctx"]
                     e = {"key": key, "id": int(key[5:]), "kind": kind, "stype": "movie" if kind == "movie" else "series",
                          "title": ev["title"], "year": ev["year"], "signal": signal, "weight": weight, "age": age,
-                         "item": ctx["item"], "who": "tv", "by": ev["by"], "flags": ctx["flags"], "genres": ctx["genres"]}
+                         "item": ctx["item"], "who": "tv", "by": ev["by"], "flags": ctx["flags"], "genres": ctx["genres"],
+                         "deliberate": bool(ctx["item"].get("dropped"))}
                     by_key[key] = e
                     entries.append(e)
             elif stage == "trakt":
@@ -6174,7 +6200,7 @@ def _fold_events(stages, now):
                         old = (e.get("opinions") or {}).get(person) or e.get("shared") or e
                         if _taste_rank(old) >= _taste_rank(t):
                             continue
-                    watch_fields = ("age", "genres", "title", "year") if _taste_accounts() else ()
+                    watch_fields = ("deliberate",) + (("age", "genres", "title", "year") if _taste_accounts() else ())
                     if _taste_accounts() and e["who"] not in ("tv", "both"):
                         old = {k: e[k] for k in ("signal", "weight", "item", "flags") + watch_fields}
                         old["wsrc"] = e.get("wsrc")
@@ -6196,7 +6222,7 @@ def _fold_events(stages, now):
                     if t["signal"] == "loved" or (e["signal"] != "loved" and t["weight"] > e["weight"]):
                         if t["weight"] >= e["weight"]:
                             e["wsrc"] = ev["src"]
-                        e.update(signal=t["signal"], weight=max(e["weight"], t["weight"]))
+                        e.update(signal=t["signal"], weight=max(e["weight"], t["weight"]), deliberate=t["deliberate"])
                     e["age"] = min(e["age"], t["age"])
                     if t["item"].get("last_episode") and tuple(t["item"]["last_episode"]) > tuple(e["item"].get("last_episode") or ()):
                         e["item"] = {**e["item"], "last_episode": t["item"]["last_episode"]}
@@ -6218,16 +6244,14 @@ def build_profile(items, searches, trakt=(), remote=True):
         for g in e["genres"]:
             genre_w[g] = genre_w.get(g, 0) + e["weight"]
     shared = [e for e in entries if set(e.get('by', ())) & set(member_people()) or 'together' in e.get('by', ())]
-    return {"entries": entries, "genres": genre_w, "searches": searches, "likes": "",
-            "seen": {e["key"] for e in shared} | extra_seen | history_seen(DATA), "negative": {e["key"] for e in shared if e["weight"] < 0}}
+    return {"LEARN_RULES": LEARN_RULES, "entries": entries, "genres": genre_w, "searches": searches, "likes": "",
+            "seen": {e["key"] for e in shared if _abandon_seen(e)} | extra_seen | history_seen(DATA),
+            "negative": {e["key"] for e in shared if e["weight"] < 0 and _abandon_seen(e)}}
 
 
-# Skald's reading of a title someone started and stopped (from history, never a pressed "abandon"): tied to
-# something they watched or loved (same director or saga, or a lead actor of two watched titles or one loved
-# title) means they went back to it; about what
-# they like means unsure, asked in the interview row; anything else is a mild "not this". Ties and taste come
-# only from their watched and loved titles, so stopped titles never vouch for each other.
-ABANDON_READ = {"related": ("interest", .5), "unsure": ("abandoned", 0.0)}
+# Only inferred stops are read. Ties never supply positive feedback, and missing evidence stays pending.
+ABANDON_READ = {reading: ("abandoned", 0.0) for reading in ("early", "related", "unsure", "pending")}
+STOP_FIELDS = ("deliberate", "abandon", "abandon_reason", "abandon_weight", "abandon_inputs", "abandon_members")
 ABANDON_FAR = 1 / 3       # share of the stop's weight that stays as a mild "not this"
 ABANDON_CLOSE = .5        # share of a watched title's typical topic overlap that makes a stop unsure
 ABANDON_ABOUT = ("k:", "g:", "t:", "s:", "x:")  # what a title is about; people count as ties instead
@@ -6241,8 +6265,22 @@ def _abandon_ties(rec, lead):
 def _stopped(e):
     """A stop never explains a pick: true when every owner's own reading of the title is a given up one."""
     opinions = e.get("opinions") or {}
-    values = [opinions.get(p) or e.get("shared") or e for p in _expand_together(e.get("by") or ())] or [e]
+    shared = e.get("shared") or e
+    values = [opinions.get(p) or (shared.get("abandon_members") or {}).get(p) or shared
+              for p in _expand_together(e.get("by") or ())] or [e]
     return all(v.get("abandon") for v in values)
+
+
+def _abandon_seen(e):
+    """An early film stop keeps it out only until release, or never for a broken stream."""
+    opinions = e.get("opinions") or {}
+    shared = e.get("shared") or e
+    values = ([e] if "explicit" in e else
+              [opinions.get(p) or (shared.get("abandon_members") or {}).get(p) or shared
+               for p in _expand_together(e.get("by") or ())] or [e])
+    return any(v.get("abandon") != "early" or v.get("abandon_reason") != "stream" and
+               (date_or_none(frec(e["key"], e["kind"]).get("dr")) or datetime.date.min) > local_now().date()
+               for v in values)
 
 
 def _abandon_tied(stop, watched):
@@ -6259,8 +6297,11 @@ def _abandon_tied(stop, watched):
     return any(n >= 2 for n in actors.values())
 
 
+LEARN_RULES = 1  # Bump whenever reading or learning rules change; cached profiles are not raw evidence.
+
+
 def read_abandoned(entries):
-    """Reads each inferred abandon per member, in place: see ABANDON_READ."""
+    """Read inferred stops per member; reuse a reading only while its inputs stay the same."""
     with _facets_lock:
         store = dict(_facets)
     df = {}
@@ -6270,19 +6311,41 @@ def read_abandoned(entries):
                 df[fid] = df.get(fid, 0) + 1
     n_all = len(store) + 2
     idf = {fid: math.log(n_all / (n + 1)) / math.log(n_all) for fid, n in df.items()}
-    loved, stops = {}, {}
+    facets_stamp = hashlib.sha1(json.dumps(store, sort_keys=True).encode()).hexdigest()
+    loved, stops, changed = {}, {}, False
     for e in entries:
         opinions, owners = e.get("opinions") or {}, _expand_together(e.get("by") or ())
         for person in owners:
             value = opinions.get(person) or e.get("shared") or e
-            if value["signal"] in ("loved", "liked", "watched") and value["weight"] > 0:
+            r = frec(e["key"], e["kind"])
+            if not value.get("abandon") and value["signal"] in ("loved", "liked", "watched") and value["weight"] > 0 and facet_pairs(r):
                 loved.setdefault(person, {})[(e["key"], e["kind"])] = (frec(e["key"], e["kind"]), value["signal"])
         for value, people in ((e, owners), (e.get("shared"), owners), *((v, {p}) for p, v in opinions.items())):
-            if not value or value.get("signal") != "abandoned" or value is not e and value.get("wsrc") in ("remote", "interview"):
+            if not value or value.get("deliberate") or value.get("wsrc") in ("remote", "interview"):
+                continue
+            item = value.get("item") or {}
+            if value.get("abandon") and item.get("dropped") and item.get("src") == "sync:pmdb":
+                # FORMAT 5 profiles retain the chosen status and unscaled source weight.
+                for field in STOP_FIELDS:
+                    value.pop(field, None)
+                value.update(signal="abandoned", weight=float(item["weight"]) * trust(item["src"]), deliberate=True)
+                changed = True
+                continue
+            if value.get("abandon") and "abandon_weight" not in value or not value.get("abandon") and value.get("signal") != "abandoned":
                 continue
             if value is e and e.get("who") in ("remote", "told"):
                 continue
-            stops.setdefault(id(value), (value, e, set()))[2].update(people)
+            if len(people) > 1:
+                readings = value.setdefault("abandon_members", {})
+                for person in sorted(people):
+                    local = readings.setdefault(person, {k: value[k] for k in STOP_FIELDS + ("signal", "weight")
+                                                        if k in value and k != "abandon_members"})
+                    stops[id(local)] = (local, e, {person}, value)
+                for person in set(readings) - people:
+                    readings.pop(person)
+            else:
+                value.pop("abandon_members", None)
+                stops[id(value)] = (value, e, people, value)
     taste = {}
     for person, recs in loved.items():
         about = [{fid for fid, _ in facet_pairs(r) if fid.startswith(ABANDON_ABOUT)} for r, _ in recs.values()]
@@ -6293,9 +6356,31 @@ def read_abandoned(entries):
         n = len(about)
         overlap = sorted(sum((count[f] - 1) / (n - 1) * idf.get(f, 0) for f in fids) for fids in about) if n > 1 else []
         taste[person] = (list(recs.values()), count, n, overlap[len(overlap) // 2] if overlap else 0)
-    for value, e, people in stops.values():
+    for value, e, people, source in stops.values():
         r = frec(e["key"], e["kind"])
-        reading = "far"
+        item = source.get("item") or {}
+        inputs = hashlib.sha1(json.dumps([facets_stamp, e["kind"], item, sorted(people),
+            [(p, sorted((key, kind, sig) for (key, kind), (_, sig) in loved.get(p, {}).items()))
+             for p in sorted(people)]], sort_keys=True).encode()).hexdigest()
+        if value.get("abandon_inputs") == inputs:
+            continue
+        changed = True
+        value.setdefault("abandon_weight", value["weight"])
+        value["abandon_inputs"] = inputs
+        value.pop("abandon_reason", None)
+        dr = date_or_none(r.get("dr"))
+        at = item.get("at")
+        if "_summary" in item:
+            # A UTC month proves early only if its latest possible local date is before release.
+            month = date_or_none(((item.get("_summary") or {}).get("month") or "") + "-01")
+            end = (month + datetime.timedelta(days=32)).replace(day=1) if month else None
+            at = datetime.datetime.combine(end, datetime.time(), datetime.timezone.utc).timestamp() * 1000 - 1 if end else None
+        broken = 0 < (item.get("duration_min") or 0) < .2 * (r.get("runtime") or 0)
+        before = dr and (at or 0) > 0 and local_now(at / 1000).date() < dr
+        if e["kind"] == "movie" and (broken or before):
+            value.update(signal="abandoned", weight=0.0, abandon="early", abandon_reason="stream" if broken else "release")
+            continue
+        reading = "pending" if not facet_pairs(r) or not any(p in taste for p in people) else "far"
         for person in people:
             watched, count, n, bar = taste.get(person, ([], {}, 0, 0))
             if r and _abandon_tied(r, watched):
@@ -6305,8 +6390,21 @@ def read_abandoned(entries):
                         if fid.startswith(ABANDON_ABOUT)) if n else 0
             if score > 0 and bar > 0 and score >= ABANDON_CLOSE * bar:
                 reading = "unsure"
-        signal, weight = ABANDON_READ.get(reading, ("abandoned", value["weight"] * ABANDON_FAR))
+        signal, weight = ABANDON_READ.get(reading, ("abandoned", value["abandon_weight"] * ABANDON_FAR))
         value.update(signal=signal, weight=weight, abandon=reading)
+    for e in entries:
+        for value in (e, e.get("shared") or {}):
+            readings = list((value.get("abandon_members") or {}).values())
+            if readings:
+                same = len({v["abandon"] for v in readings}) == 1
+                value.update(signal="abandoned", weight=max(v["weight"] for v in readings),
+                             abandon=readings[0]["abandon"] if same else "pending")
+                value.setdefault("abandon_weight", readings[0]["abandon_weight"])
+                value.pop("abandon_reason", None)
+                if same and readings[0].get("abandon_reason"):
+                    value["abandon_reason"] = readings[0]["abandon_reason"]
+    if changed:
+        _interview_cache.clear()
 
 
 SEED_WEIGHT = 2.0  # a title someone told us they love: timeless, so no recency
@@ -6337,6 +6435,7 @@ def add_person_loves(entries, by_key, evts=None):
         e = by_key.get(key)
         if e:
             old = dict(signal=e["signal"], weight=e["weight"], item=e.get("item") or {}, flags=e.get("flags") or [])
+            old.update({k: e[k] for k in STOP_FIELDS if k in e})
             if "together" in e["by"]:
                 e.setdefault("shared", {**old, "wsrc": e.get("wsrc")})
             opinions = e.setdefault("opinions", {})
@@ -6367,7 +6466,9 @@ def add_person_loves(entries, by_key, evts=None):
 
 def profile_text(p, you="they"):
     def names(signals, who=None, n=10, entries=None):
-        hits = [e for e in (p["entries"] if entries is None else entries) if e["signal"] in signals and (who is None or e.get("who") in who)][:n]
+        hits = [e for e in (p["entries"] if entries is None else entries) if e["signal"] in signals
+                and (e["signal"] != "abandoned" or e["weight"] < 0)
+                and e.get("abandon") != "early" and (who is None or e.get("who") in who)][:n]
         return "; ".join(f"{e['title']} ({e['year']}, {'movie' if e['kind'] == 'movie' else 'series'}"
                          f"{', ' + '/'.join(f for f in e.get('flags') or [] if f in ('binge', 'comfort', 'anime')) if set(e.get('flags') or []) & {'binge', 'comfort', 'anime'} else ''})"
                          for e in hits)
@@ -6394,8 +6495,11 @@ def profile_text(p, you="they"):
             lines.append("  Longest runs (episodes watched): " + "; ".join(
                 f"{e['title']} ({e['item'].get('episodes_played')}{', anime' if 'anime' in e['flags'] else ''})" for e in runs))
     for person, cfg in (read_taste().get("people") or {}).items():
-        told = [e["title"] for e in p["entries"] if person in (e.get("by") or []) and "told" in (e.get("flags") or [])
-                or (person in (e.get("by") or []) and e.get("who") in ("tv", "both") and person != TRAKT_PERSON)]
+        told = [e["title"] for e in p["entries"] if person in (e.get("by") or [])
+                and ("told" in (e.get("flags") or []) or e.get("who") in ("tv", "both") and person != TRAKT_PERSON)
+                and ((e.get("opinions") or {}).get(person) or e.get("shared") or e).get("signal") in ("loved", "liked", "watched")
+                and ((e.get("opinions") or {}).get(person) or e.get("shared") or e).get("weight", 0) > 0
+                and ((e.get("opinions") or {}).get(person) or e.get("shared") or e).get("abandon") != "early"]
         if told:
             lines.append(f"{LABELS[person]} loves: " + "; ".join(told[:12]))
     tv = [e for e in p["entries"] if e.get("who") in ("tv", "both")]
@@ -6443,13 +6547,27 @@ def taste_hash(name, items):
         else:
             signal.append(sorted((it["id"], it.get("signal")) for it in read_trakt() if TRAKT_PERSON in member_people()))
         if any(p in member_people() for p in CONFIG['connectors'].get('stremio', {}).get('accounts', {})):
-            signal.append(sorted((person, it["id"], it.get("at"), it.get("episodes_played"), it.get("last_episode"))
+            signal.append(sorted((person, it["id"], it.get("at"), it.get("episodes_played"), it.get("last_episode"), it.get("duration_min"))
                 for person in CONFIG["connectors"]["stremio"]["accounts"] if person in member_people() for it in _drop_read("stremio-" + person)))
         if any(p in member_people() for p in CONFIG['connectors'].get('pmdb', {}).get('accounts', {})):
             signal.append(sorted((person, it["type"], it["id"], it.get("at"), it.get("episodes_played"),
                                   it.get("last_episode"), it.get("resume_episode"), it.get("progress"))
                 for person in CONFIG["connectors"]["pmdb"]["accounts"] if person in member_people() for it in _drop_read("pmdb-" + person)))
     signal.append(read_taste().get(name))
+    # Facets, reference metadata and watch corrections can change a stop without a new signal.
+    if any(v.get("abandon") for e in (_profiles.get(name) or {}).get("entries", [])
+           for v in (e, e.get("shared") or {}, *(e.get("opinions") or {}).values())):
+        with _facets_lock:
+            signal.append(hashlib.sha1(json.dumps(_facets, sort_keys=True).encode()).hexdigest())
+        signal.append([(it["id"], it.get("duration_min"), it.get("at")) for it in items])
+    # Release day also changes whether an early stop is seen.
+    for e in (_profiles.get(name) or {}).get("entries", []):
+        values = [e, e.get("shared") or {}, *(e.get("opinions") or {}).values()]
+        r = frec(e["key"], e["kind"])
+        if e["kind"] == "movie" and any(v.get("abandon") for v in values) and (r.get("dr") or
+                r.get("runtime") and any((v.get("item") or {}).get("duration_min") for v in values)):
+            signal.append((e["key"], r.get("dr"), r.get("runtime"),
+                           (date_or_none(r.get("dr")) or datetime.date.min) > local_now().date()))
     if name == "household":
         signal.append({p: v for p, v in (read_taste().get('people') or {}).items() if p in member_people()})
         if feedback := feedback_hash(now):  # taste remote: only folded taste weights invalidate stamps.
@@ -7434,7 +7552,7 @@ FACET_W = {"k": 1.0, "d": 1.3, "a": 0.8, "n": 0.9, "c": 0.6, "g": 0.25, "t": 0.8
 FACET_SUPPORT = {"k": 2, "d": 2, "a": 3, "n": 2, "c": 3, "g": 3, "t": 2, "s": 3, "x": 2}
 X_PRIOR = 20
 # Experiences: what it feels like to watch a title, not what it is about. One batched LLM call tags 25 titles
-# (once per title, kept in facets.json as "x"); they then count like any other facet. id: (reason, row title).
+# (kept in facets.json as "x"); they then count like any other facet. id: (reason, row title).
 # Tagging vocabulary stays English; row titles use the interface language.
 EXPERIENCES = {
     "cozy_case": (_translate("experience.cozy_case", lang="en"), "row.experience.cozy_case"),
@@ -7485,8 +7603,11 @@ TAG_SYS = ("You tag what it FEELS like to watch movies and TV series (the experi
            "Allowed tags (id: meaning):\n{vocab}\n"
            "For each numbered title reply with exactly one line: N|id:strength,id:strength,... using 2 to 5 allowed ids, "
            "strength 3 = defines the title, 2 = clearly there, 1 = a touch. Judge the whole title as you know it; "
-           "if you don't know it, judge from the description. No other text.")
+           "if you don't know it, judge from the description. If neither is enough, reply N|untaggable. No other text.")
 TAG_BATCH = 25
+TAG_SCHEMA = 1  # Bump when the vocabulary or tagging prompt changes.
+TAG_ATTEMPTS = 3
+TAG_COOLDOWN = 6 * 3600
 KW_STOP = {"duringcreditsstinger", "aftercreditsstinger", "woman director", "sequel", "prequel", "anime", "3d",
            "live action and animation", "based on novel or book", "remake", "duringcreditsstinger ", "short film",
            "adult animation", "shounen", "seinen", "aftercreditsstinger "}
@@ -7527,7 +7648,14 @@ def fkey(key, kind):
 
 
 def frec(key, kind):
-    return _facets.get(fkey(key, kind)) or {}
+    return checked_tag_record(_facets.get(fkey(key, kind)) or {})
+
+
+def model_record(m, key, kind, rec=None):
+    rec = frec(key, kind) if rec is None else rec
+    if rec and 'tag_snapshot' in m:
+        return {**rec, 'x': m['tag_snapshot'].get(fkey(key, kind), {})}
+    return rec
 
 
 def femb(key, kind):
@@ -7659,6 +7787,53 @@ def backfill_runtime():
         clear_seed_cache()
 
 
+def film_digital_release(det):
+    dates = [day.isoformat() for country in (det.get("release_dates") or {}).get("results") or []
+             if country.get("iso_3166_1") in (rating_country(), "US")
+             for release in country.get("release_dates") or [] if release.get("type") in (4, 5)
+             if (day := date_or_none((release.get("release_date") or "")[:10]))]
+    return min(dates, default=None)
+
+
+_abandon_retry = {}
+
+
+def backfill_abandoned():
+    """Worker only: fill at most 200 stopped films, with a day between retries."""
+    global _abandon_retry
+    now = time.time()
+    stopped = {fkey(e["key"], "movie") for e in (_profiles.get("household") or {}).get("entries", [])
+               if e["kind"] == "movie" and any(v.get("abandon") for v in
+                   [e, e.get("shared") or {}, *(e.get("opinions") or {}).values()])}
+    with _facets_lock:
+        todo = [key for key, rec in _facets.items() if key in stopped and key.startswith("tmdb:")
+                and rec.get("kind") == "movie" and (not rec.get("dr") or not rec.get("runtime"))]
+    _abandon_retry = {key: until for key, until in _abandon_retry.items() if key in stopped}
+    todo = sorted((key for key in todo if _abandon_retry.get(key, 0) <= now),
+                  key=lambda key: _abandon_retry.get(key, 0))[:200]
+    changed = False
+    for key in todo:
+        _abandon_retry[key] = now + DAY
+        try:
+            det = tmdb(f"movie/{key[5:].split('@')[0]}", language="en-US", append_to_response="release_dates")
+            dr = film_digital_release(det)
+        except Exception:
+            continue
+        with _facets_lock:
+            if key in _facets and _facets[key].get("kind") == "movie":
+                facts = {}
+                if dr and dr != _facets[key].get("dr"):
+                    facts["dr"] = dr
+                if not _facets[key].get("runtime") and det.get("runtime"):
+                    facts["runtime"] = det["runtime"]
+                if facts:
+                    _facets[key].update(facts)
+                    _facets_dirty.set()
+                    changed = True
+    if changed:
+        clear_seed_cache()
+
+
 def facet_record(kind, tid, det=None):
     if det is None:
         det = tmdb(f"{kind}/{tid}", language="en-US", append_to_response="keywords,credits,release_dates" if kind == "movie" else "keywords,credits,content_ratings")
@@ -7668,7 +7843,8 @@ def facet_record(kind, tid, det=None):
         makers = [c for c in credits.get("crew") or [] if c.get("job") == "Director"][:2]
     else:
         makers = (det.get("created_by") or [])[:3]
-    return {**week_release_facts(det, kind), "k": [[k["id"], k["name"]] for k in (kw.get("keywords") or kw.get("results") or [])
+    dr = film_digital_release(det) if kind == "movie" else None
+    return {**({"dr": dr} if dr else {}), **week_release_facts(det, kind), "k": [[k["id"], k["name"]] for k in (kw.get("keywords") or kw.get("results") or [])
                   if k["name"] not in KW_STOP][:20],
             "d": [[c["id"], c["name"]] for c in makers],
             "a": [[c["id"], c["name"]] for c in (credits.get("cast") or [])[:3]],
@@ -7736,22 +7912,99 @@ def ensure_facets(pairs):
 
 
 _tagging = set()
+_tag_version = 0
+
+
+def tag_input(rec):
+    """The exact title fields sent to the experience prompt, without its batch number."""
+    kws = ", ".join(n for _, n in (rec.get("k") or [])[:8])
+    extra = f"; tags: {', '.join(rec['t'][:5])}" if rec.get("t") else ""
+    return (f"{rec.get('title')} ({rec.get('y') or '?'}, {'movie' if rec.get('kind') == 'movie' else 'series'}; "
+            f"{'/'.join(rec.get('g') or [])}) keywords: {kws}{extra} | {rec.get('o') or ''}")
+
+
+def tag_fingerprint(rec):
+    return hashlib.sha256(tag_input(rec).encode()).hexdigest()
+
+
+def checked_tag_record(rec):
+    """Drop malformed strengths and unknown ids, retaining the invalid marker after cleanup."""
+    if "x" not in rec:
+        return rec
+    raw = rec['x']
+    tags = {k: v for k, v in raw.items() if k in EXPERIENCES and type(v) is int and 1 <= v <= 3} if isinstance(raw, dict) else {}
+    if isinstance(raw, dict) and tags == raw:
+        return rec
+    state = dict(rec.get('x_state') or {})
+    if state.get('status') != 'manual':
+        state['status'] = 'invalid'
+    return {**rec, 'x': tags, 'x_state': state}
+
+
+def tag_state(rec):
+    clean = checked_tag_record(rec)
+    state = dict(clean.get('x_state') or {})
+    status = state.get('status')
+    if status not in ('manual', 'invalid', 'untaggable'):
+        status = ('missing' if 'x' not in clean else 'invalid' if not clean['x'] else
+                  'partial' if len(clean['x']) < 2 else 'ok')
+    stale = status != 'manual' and 'x' in clean and (
+        state.get('schema') != TAG_SCHEMA or state.get('fingerprint') != tag_fingerprint(clean))
+    attempts = state.get('attempts', 1 if status == 'partial' else 0)
+    # Changed inputs or schema get a fresh bounded round; legacy partials get one retry.
+    if stale and state.get('fingerprint'):
+        attempts = 0
+    return {**state, 'status': status, 'stale': stale, 'attempts': attempts}
+
+
+def tag_due(rec, now, request=None):
+    state = tag_state(rec)
+    if state['status'] == 'manual' or now - state.get('last_attempt', 0) < TAG_COOLDOWN:
+        return False
+    if request and request != state.get('request'):
+        return True
+    if not state['stale'] and state['status'] in ('ok', 'untaggable'):
+        return False
+    if not state['stale'] and state.get('partial_retried'):
+        return False
+    if state['status'] == 'partial':
+        return True
+    return state['attempts'] < TAG_ATTEMPTS
 
 
 def tag_experiences(pairs, max_batches=4, fetch_facets=True):
-    """Experience tags for known titles without tags, TAG_BATCH per LLM call. Worker only (seconds per call),
-    never on a search. pairs: [(key, kind)] in priority order; returns how many titles got tags."""
+    """Worker-only, budgeted tagging of missing, stale and retryable records, plus explicit requests."""
+    global _tag_version
     if not OR_KEY or _defer_enrichment:
         return 0
+    from skald import tags as tag_queue
+    try:
+        requests = tag_queue.pending(command_context())
+    except (OSError, ValueError) as e:
+        print(f"tags: {type(e).__name__}: {e}", flush=True)
+        return 0
+    with _facets_lock:
+        finished = {k: token for k, token in requests.items() if k not in _facets or
+                    tag_state(_facets[k])['status'] == 'manual' or
+                    (tag_state(_facets[k]).get('request') == token and
+                     not tag_due(_facets[k], time.time() + TAG_COOLDOWN, token))}
+    if not _facets_dirty.is_set() or save_facets():
+        tag_queue.finished(command_context(), finished)
+    requests = {k: token for k, token in requests.items() if k not in finished}
+    pairs = list(pairs)
     if fetch_facets:
         ensure_facets([(k, kind) for k, kind in pairs if fkey(k, kind) != k and not frec(k, kind)])
     with _facets_lock:
-        todo = [(fkey(k, kind), kind) for k, kind in dict.fromkeys(pairs) if frec(k, kind) and "x" not in frec(k, kind)
-                and fkey(k, kind) not in _tagging][:TAG_BATCH * max_batches]
+        queued = [(k.partition('@')[0], _facets[k].get('kind')) for k in requests if k in _facets]
+        todo = [(fkey(k, kind), kind) for k, kind in dict.fromkeys(queued + pairs)
+                if kind in ('movie', 'tv') and frec(k, kind) and
+                tag_due(frec(k, kind), time.time(), requests.get(fkey(k, kind))) and fkey(k, kind) not in _tagging]
+        todo.sort(key=lambda pair: tag_state(_facets[pair[0]]).get('last_attempt', 0))
+        todo = todo[:TAG_BATCH * max(0, max_batches)]
         _tagging.update(k for k, _ in todo)
     done = 0
     try:
-        old = [(k, kind) for k, kind in todo if "o" not in _facets[k]]  # records from before overviews were kept
+        old = [(k, kind) for k, kind in todo if "o" not in _facets[k]]
         jobs = [(k, kind, _pool.submit(tmdb, f"{kind}/{k[5:].split('@')[0]}", language="en-US")) for k, kind in old]
         for k, kind, job in jobs:
             try:
@@ -7760,39 +8013,68 @@ def tag_experiences(pairs, max_batches=4, fetch_facets=True):
                 det = {}
             with _facets_lock:
                 if _facets[k].get("kind") in (None, kind):
-                    _facets[k].update({"o": (det.get("overview") or "")[:280], "kind": kind,
-                                       "y": (det.get("release_date") or det.get("first_air_date") or "")[:4]})
+                    _facets[k] = {**_facets[k], "o": (det.get("overview") or "")[:280], "kind": kind,
+                                  "y": (det.get("release_date") or det.get("first_air_date") or "")[:4]}
             clear_seed_cache()
         vocab = "\n".join(f"{x}: {d[0]}" for x, d in EXPERIENCES.items())
         for i in range(0, len(todo), TAG_BATCH):
-            batch = [k for k, _ in todo[i:i + TAG_BATCH]]
-            lines = []
-            for j, k in enumerate(batch, 1):
-                rec = _facets[k]
-                kws = ", ".join(n for _, n in (rec.get("k") or [])[:8])
-                extra = f"; tags: {', '.join(rec['t'][:5])}" if rec.get("t") else ""
-                lines.append(f"{j}. {rec.get('title')} ({rec.get('y') or '?'}, {'movie' if rec.get('kind') == 'movie' else 'series'}; "
-                             f"{'/'.join(rec.get('g') or [])}) keywords: {kws}{extra} | {rec.get('o') or ''}")
-            text = llm_text(TAG_SYS.format(vocab=vocab), "\n".join(lines), 60 * len(batch) + 100, 90, "tags", "experience")
+            with _facets_lock:
+                batch = {k: copy.deepcopy(checked_tag_record(_facets[k])) for k, _ in todo[i:i + TAG_BATCH]
+                         if tag_state(_facets[k])['status'] != 'manual'}
+            if not batch:
+                continue
+            lines = [f"{j}. {tag_input(rec)}" for j, rec in enumerate(batch.values(), 1)]
+            try:
+                text = llm_text(TAG_SYS.format(vocab=vocab), "\n".join(lines), 60 * len(batch) + 100, 90, "tags", "experience")
+            except BudgetExceeded:
+                raise
+            except Exception as e:
+                print(f"tags: {type(e).__name__}: {e}", flush=True)
+                text = ''
             got = {}
             for line in text.splitlines():
                 mm = re.match(r"\s*(\d+)\s*[|.:)]\s*(.*)", line)
                 if not mm or not 1 <= int(mm[1]) <= len(batch):
                     continue
-                tags = {}
-                for part in mm[2].split(","):
-                    xs = [x.strip() for x in part.split(":")]
-                    if len(xs) == 2 and xs[0] in EXPERIENCES and xs[1][:1] in ("1", "2", "3"):
-                        tags[xs[0]] = int(xs[1][:1])
-                if tags:
-                    got[batch[int(mm[1]) - 1]] = tags
+                tags, invalid = {}, False
+                declined = mm[2].strip() == 'untaggable'
+                if not declined:
+                    for part in mm[2].split(","):
+                        xs = [x.strip() for x in part.split(":")]
+                        if len(xs) == 2 and xs[0] in EXPERIENCES and xs[1] in ('1', '2', '3'):
+                            tags[xs[0]] = int(xs[1])
+                        else:
+                            invalid = True
+                status = 'untaggable' if declined else 'invalid' if invalid or not tags else 'partial' if len(tags) < 2 else 'ok'
+                got[list(batch)[int(mm[1]) - 1]] = tags, status
+            finished, tagged = {}, 0
             with _facets_lock:
-                for k, tags in got.items():  # a title the reply skipped is retried next time
-                    _facets[k]["x"] = tags
+                for k, rec in batch.items():
+                    current = _facets.get(k)
+                    if not current or tag_state(current)['status'] == 'manual' or tag_fingerprint(current) != tag_fingerprint(rec):
+                        continue
+                    tags, status = got.get(k, ({}, 'invalid'))
+                    state = tag_state(rec)
+                    new_request = requests.get(k) and requests[k] != state.get('request')
+                    attempts = 0 if new_request else state['attempts']
+                    partial_retried = not new_request and ((state['status'] == 'partial' and
+                        (not state['stale'] or not state.get('fingerprint'))) or
+                        (not state['stale'] and state.get('partial_retried', False)))
+                    updated = {**current, 'x': tags or rec.get('x') or {}, 'x_state': {
+                        'schema': TAG_SCHEMA, 'fingerprint': tag_fingerprint(rec), 'status': status,
+                        'attempts': attempts + 1, 'partial_retried': partial_retried,
+                        'last_attempt': time.time(), 'request': requests.get(k)}}
+                    _facets[k] = checked_tag_record(updated)  # Replace, so an in-progress model keeps its snapshot.
+                    _tag_version += 1
+                    tagged += bool(tags)
+                    if k in requests and not tag_due(updated, time.time() + TAG_COOLDOWN, requests[k]):
+                        finished[k] = requests[k]
             _facets_dirty.set()
             clear_seed_cache()
-            done += len(got)
-            print(f"tags: {len(got)}/{len(batch)} titles tagged", flush=True)
+            if save_facets():
+                tag_queue.finished(command_context(), finished)
+            done += tagged
+            print(f"tags: {tagged}/{len(batch)} titles tagged", flush=True)
     except BudgetExceeded as e:
         print(f"tags: {e}", flush=True)
     except Exception as e:
@@ -7810,7 +8092,7 @@ def facet_pairs(rec):
     out += [(f"t:{t}", t) for t in rec.get("t") or []]
     if rec.get("s"):
         out.append((f"s:{rec['s']}", rec["s"].replace("_", " ").lower()))
-    out += [(f"x:{x}", EXPERIENCES[x][0]) for x, st in (rec.get("x") or {}).items() if x in EXPERIENCES and st >= 2]
+    out += [(f"x:{x}", EXPERIENCES[x][0]) for x, st in (checked_tag_record(rec).get("x") or {}).items() if x in EXPERIENCES and st >= 2]
     return out
 
 
@@ -7827,8 +8109,10 @@ def save_facets():
             with open(os.path.join(DATA, "facets.json.tmp"), "w") as fh:
                 fh.write(snap)
             os.replace(os.path.join(DATA, "facets.json.tmp"), os.path.join(DATA, "facets.json"))
+            return True
     except OSError:
-        pass
+        _facets_dirty.set()
+        return False
 
 
 def mixed_keys(data, facets):
@@ -7865,6 +8149,11 @@ def load_facets():
     try:
         with open(os.path.join(DATA, "facets.json")) as fh:
             _facets.update(json.load(fh).get("items") or {})
+        for k, rec in list(_facets.items()):
+            clean = checked_tag_record(rec)
+            if clean is not rec:
+                _facets[k] = clean
+                _facets_dirty.set()
         mixed = mixed_keys(DATA, _facets)
         for rec in mixed:
             k = rec["key"]
@@ -7920,7 +8209,9 @@ def person_entries(p, person):
         opinions = e.get("opinions") or {}
         own = opinions.get(person) or (opinions.get(mover) if mover else None)
         explicit = person in by or bool(own) or seed or bool(mover)
-        value = own or e.get("shared") or {"signal": e["signal"], "weight": e["weight"]}
+        shared = e.get("shared") or e
+        local = (shared.get("abandon_members") or {}).get(person)
+        value = own or ({**shared, **local} if local else shared)
         if person == "together" and _taste_accounts():
             value = {**value, **{k: e[k] for k in ("age", "genres", "title", "year")}}
         if seed and e.get("who") != "remote":
@@ -7930,6 +8221,10 @@ def person_entries(p, person):
         # Shared passive plays are weaker than an opinion explicitly attributed to this person.
         out.append({**e, **value, "weight": value["weight"] * (1 if explicit or person == "together" else .35),
                     "explicit": explicit})
+        if own or e.get("shared"):
+            for field in STOP_FIELDS:
+                if field not in value:
+                    out[-1].pop(field, None)
     return out
 
 
@@ -7967,7 +8262,7 @@ def facet_value(fid, p_, n_, npos, xtot, df, n_x, n_all, loose=False, person=Fal
                                - 0.5 * n_ / (p_ + n_ + 1.0))
     idf = math.log(n_all / (df + 1)) / math.log(n_all)
     value = (p_ - n_) / (p_ + n_ + 1.0) * math.log1p(max(1, npos)) * max(idf, 0.05) * FACET_W[fid[0]]
-    return value * min(1, npos / (2 * FACET_SUPPORT[fid[0]])) if person and not loose else value
+    return value * min(1, npos / (2 * FACET_SUPPORT[fid[0]])) if value > 0 and person and not loose else value
 
 
 def affinities(entries, store, df, n_all, hits, loose=False, person=False):
@@ -8004,11 +8299,11 @@ REASON_FACETS = {"too dark": ("dark", "grim", "bleak", "dread", "dystopia", "ant
                 "too silly": ("silly", "slapstick", "absurd", "feel_good")}
 
 
-def experience_profile(entries):
+def experience_profile(entries, store):
     out = {}
     for e in entries:
         w = entry_weight(e) * (.5 if e["weight"] < 0 else 1)
-        for tag, strength in (frec(e["key"], e["kind"]).get("x") or {}).items():
+        for tag, strength in (checked_tag_record(store.get(fkey(e["key"], e["kind"])) or {}).get("x") or {}).items():
             out[tag] = out.get(tag, 0) + w * strength
     return out
 
@@ -8044,11 +8339,12 @@ def build_model(p, enrich=True):
         print(f"facets: {type(e).__name__}: {e}", flush=True)
     if enrich:
         # Facets were fetched above within this build's cap, including kind aliases.
-        tag_experiences(enrichment_pairs({"entries": pos_entries}, adult_people()), max_batches=16, fetch_facets=False)
+        tag_experiences(enrichment_pairs(house, adult_people()), max_batches=16, fetch_facets=False)
     vec = taste_vector(house) if enrich else None
     hits = {h["key"] for h in learning_records('hits')} if HIT_TASTE else set()
     with _facets_lock:
         store = dict(_facets)
+        tag_version = _tag_version
     df, names = {}, {}
     for rec in store.values():
         for fid, name in facet_pairs(rec):
@@ -8067,17 +8363,27 @@ def build_model(p, enrich=True):
     holders = {fid: sorted(((w, fkey(key, kind)) for (key, kind), w in hs.items()), reverse=True)[:40]
                for fid, hs in holders.items() if fid in aff}
     m = {"vec": vec, "aff": aff, "names": names, "npos": npos, "bscale": 1.0, "cal": None, "cal_reference": None, "vbase": 0.0, "bg": [],
+         "tag_version": tag_version,
+         "tag_snapshot": {k: dict(checked_tag_record(rec).get('x') or {}) for k, rec in store.items()},
          "kinds": {fkey(e["key"], e["kind"]): e["kind"] for e in p["entries"]}, "holders": holders,
          "ent": {fkey(e["key"], e["kind"]): (e["title"], tuple(e.get("by") or ())) for e in pos_entries},
-         "paff": {}, "pvec": {}, "px": {}, "pbscale": {}, "pbg": {}, "nexp": {}, "x": experience_profile(house["entries"])}
+         "paff": {}, "pvec": {}, "px": {}, "pbscale": {}, "pbg": {}, "nexp": {}, "x": experience_profile(house["entries"], store)}
     active = active_feedback()
     for person in PEOPLE:
         mine = person_entries(p, person) if person not in guest_people(CONFIG) else []
-        if _taste_accounts():
-            m.setdefault("panchors", {})[person] = {fkey(e["key"], e["kind"]) for e in mine if e["weight"] > 0}
+        m.setdefault("panchors", {})[person] = {fkey(e["key"], e["kind"]) for e in mine if e["weight"] > 0 and not e.get("abandon")}
         m["nexp"][person] = sum(bool(e.get("explicit")) and e["weight"] > 0 for e in mine)
-        m["paff"][person] = affinities(mine, store, df, n_all, hits, loose=m["nexp"][person] < 40, person=True)[0]
-        m["px"][person] = experience_profile(mine)
+        loose = m["nexp"][person] < 40
+        aff = affinities(mine, store, df, n_all, hits, loose=loose, person=True)[0]
+        # The old 40-title boundary is the midpoint; small histories still cannot imply dislike from absence.
+        blend = max(0, min(1, (m["nexp"][person]-30)/20))
+        other = affinities(mine, store, df, n_all, hits, loose=not loose, person=True)[0] if 0 < blend < 1 else {}
+        light, strict = (aff, other) if loose else (other, aff)
+        for fid in light.keys() | strict.keys():
+            if fid.startswith("x:"):
+                aff[fid] = (1-blend)*light.get(fid, 0) + blend*strict.get(fid, 0)
+        m["paff"][person] = aff
+        m["px"][person] = experience_profile(mine, store)
         reason_aff, reason_x = {}, {}
         for e in mine:
             if e["weight"] >= 0:
@@ -8216,8 +8522,12 @@ def maturity(m, person=None):
 
 
 def person_score(m, key, person=None, kind=None):
+    m = person_model(m, person)
     raw, fids = score_key(m, key, person, kind)
-    if not HOUSEHOLD_PRIOR or person not in PEOPLE or _taste_accounts():
+    anchors = (m or {}).get("panchors", {})
+    if not HOUSEHOLD_PRIOR or person not in PEOPLE or person in anchors and not anchors[person] \
+            or (m or {}).get("pvec", {}).get(person) or any(
+            any((m or {}).get(name, {}).get(person, {}).values()) for name in ("paff", "px")):
         return raw, fids
     lam = min(1, (m or {}).get("nexp", {}).get(person, 0)/PRIOR_FULL)
     if lam == 1:
@@ -8260,7 +8570,7 @@ def score_key(m, key, person=None, kind=None, *, rec=None):
     if not m:
         return None, []
     supplied = {'rec': rec} if rec is not None else {}
-    rec = frec(key, kind) if rec is None else rec
+    rec = model_record(m, key, kind, rec)
     if not rec:
         return None, []
     if person == "together":
@@ -8276,7 +8586,7 @@ def score_key(m, key, person=None, kind=None, *, rec=None):
             lam = min(1, m["nexp"].get(pp, 0)/40)
             values.append(lam * (s if s is not None else house) + (1-lam)*house)
         fids = [fid for fid in scores[0][1] if all(fid in fs for _, fs in scores[1:])]
-        return sum(values)/len(values) - .25*(max(values)-min(values)), fids or house_fids
+        return sum(values)/len(values) - min(.25, 1/len(adults))*(max(values)-min(values)), fids or house_fids
     if person: m = person_model(m, person)
     vec = (m.get("pvec") or {}).get(person) if person else m["vec"]
     v = fit(vec, key, kind)
@@ -8344,24 +8654,33 @@ def who_label(by):
     return " (" + LABELS[mine[0]] + ")" if len(mine) == 1 and mine[0] != TRAKT_PERSON and "together" not in by else ""
 
 
+def eligible_holders(m, key, fid, person=None, kind=None):
+    """Positive, non-stop holders that belong to the viewer and can explain the candidate."""
+    v = femb(key, kind)
+    for w, hk in m["holders"].get(fid, []):
+        if hk not in m["ent"] or hk.partition("@")[0] == key and (kind is None or m.get("kinds", {}).get(hk) == kind):
+            continue
+        by = m["ent"][hk][1]
+        if person and person not in by and "together" not in by:
+            continue
+        if person in PEOPLE and "panchors" in m and hk not in m["panchors"].get(person, ()):
+            continue
+        raw = fit(v, hk, m.get("kinds", {}).get(hk))
+        if fid[0] not in "xdn" and raw is not None and raw < 0.4:
+            continue  # a shared keyword alone ('dragon') makes a silly comparison
+        yield w, hk, raw
+
+
 def anchor(m, key, fid, used=(), person=None, kind=None):
     """The loved title behind a facet that is closest to this one by fingerprint: (key, title, by) or None.
     For one person, their own titles first."""
     if kids_age(safety_subject(person)) is not None:
         return None
     best = None
-    v = femb(key, kind)
-    for w, hk in m["holders"].get(fid, []):
-        if hk == fkey(key, kind) or hk in used or hk not in m["ent"]:
+    for w, hk, raw in eligible_holders(m, key, fid, person, kind):
+        if hk in used:
             continue
         by = m["ent"][hk][1]
-        if person and person not in by and "together" not in by:
-            continue
-        if person in PEOPLE and _taste_accounts() and hk not in m.get("panchors", {}).get(person, ()):
-            continue
-        raw = fit(v, hk, m.get("kinds", {}).get(hk))
-        if fid[0] not in "xdn" and raw is not None and raw < 0.4:
-            continue  # a shared keyword alone ('dragon') makes a silly comparison
         sim = (raw or 0.0) + 0.03 * min(w, 4) + (0.3 if person and person in by else 0)
         if best is None or sim > best[0]:
             best = (sim, hk)
@@ -8392,27 +8711,49 @@ def reasons(m, key, fids, n=2, person=None, kind=None):
     return [text for text, _ in reason_details(m, key, fids, n, person, kind)]
 
 
-def confidence(m, key, s, fids, person=None):
+def confidence(m, key, s, fids, person=None, kind=None):
     """'Strong fit' when the match is high and two loved titles share its main reason, 'Good fit', else 'Wildcard'."""
     m = person_model(m, person)
     pct = match_pct(m, s, person)
     if pct is None:
         return None, None
-    support = len(m["holders"].get(fids[0], [])) if fids else 0
+    support = len(list(eligible_holders(m, key, fids[0], person, kind))) if fids else 0
+    if person == "together" and fids:
+        counts = [sum(1 for _ in eligible_holders(m, key, fids[0], pp, kind)) for pp in adult_people()]
+        if pct >= 88 and counts and min(counts) >= 2:
+            return t("match.shared"), pct
+        if pct >= 70 and sum(n > 0 for n in counts) == 1:
+            return t("match.one"), pct
+        support = 0
     if pct >= 88 and support >= 2:
         return t("match.strong"), pct
     return (t("match.good"), pct) if pct >= 70 else (t("match.wildcard"), pct)
 
 
+def match_labels():
+    return tuple(t("match." + key) for key in ("strong", "good", "wildcard", "shared", "one"))
+
+
 def explain(key, kind=None, person=None):
     """Everything behind one title's note, for /why/<key>.json."""
     top = rowplan.title(SimpleNamespace(**globals()), key, kind, person)
+    readings = {}
+    for e in (_profiles.get("household") or {}).get("entries", []):
+        if person not in PEOPLE or e["key"] != key or kind is not None and e["kind"] != kind:
+            continue
+        origin = watch_owners(e).get(person)
+        if origin is None and ("together" not in e.get("by", ()) or person in guest_people(CONFIG)):
+            continue
+        opinions = e.get("opinions") or {}
+        value = opinions.get(person) or opinions.get(origin) or e.get("shared") or e
+        if value.get("abandon"):
+            readings[person] = {k: value[k] for k in ("abandon", "abandon_reason") if k in value}
     m = _model["m"]
     if not m:
-        return {"key": key, "model": None, **top}
+        return {"key": key, "model": None, **({"per_person": readings} if readings else {}), **top}
     s, fids = score_key(m, key, kind=kind)
-    conf, pct = confidence(m, key, s, fids)
-    rec = frec(key, kind)  # /why has no type; internal callers can supply one.
+    conf, pct = confidence(m, key, s, fids, kind=kind)
+    rec = model_record(m, key, kind)  # /why has no type; internal callers can supply one.
     held, now, memory = {fid for fid, _ in facet_pairs(rec)}, time.time(), memory_load()
     def facts(pp, kind):
         return [{"id": f["id"], "kind": f["kind"], "src": f["src"], "strength": memory_strength(f, now)}
@@ -8431,9 +8772,9 @@ def explain(key, kind=None, person=None):
             "feeling_catalog_rows": catalog_rows,
             "fit": fit(m["vec"], key, kind), "reasons": reasons(m, key, fids, 3, kind=kind),
             "experiences": rec.get("x"),
-            "per_person": {pp: {"score": person_score(m, key, pp, kind)[0], "n_explicit": m["nexp"].get(pp, 0),
+            "per_person": {pp: {**readings.get(pp, {}), "score": person_score(m, key, pp, kind)[0], "n_explicit": m["nexp"].get(pp, 0),
                                 "maturity": maturity(m, pp), **home[pp],
-                                "percentile": confidence(m, key, *person_score(m, key, pp, kind), pp)[1],
+                                "percentile": confidence(m, key, *person_score(m, key, pp, kind), pp, kind)[1],
                                 "memory": {"likes": facts(pp, "like"), "avoids": facts(pp, "avoid"),
                                            "vetoed": bool(held & veto_abouts(pp, now, memory))}}
                            for pp in PEOPLE},
@@ -8459,7 +8800,7 @@ def match_note(key, why=True, floor=65, person=None, kind=None):
     """Human reasons for a card; confidence belongs in /why, not on every poster."""
     m = _model["m"]
     s, fids = person_score(m, key, person, kind)
-    conf, pct = confidence(m, key, s, fids, person)
+    conf, pct = confidence(m, key, s, fids, person, kind)
     if pct is None or pct < floor:
         return []
     return reasons(m, key, fids, person=person, kind=kind) if why else []
@@ -8497,12 +8838,13 @@ def get_model(build=True):
             sig += (len(calibration_pairs(p, _facets)) >= CALIBRATION_MIN,)
         if len(adult_people()) != len(PEOPLE):
             sig += (adult_people(),)
+        sig += (_tag_version,)
         if _model["sig"] != sig or _model["m"] is None:
             m = build_model(p, enrich=False) if _defer_enrichment else build_model(p)
             with _home_lock:
                 if generation != _erasure_generation:
                     return None
-                _model.update(m=m, sig=sig)
+                _model.update(m=m, sig=(*sig[:-1], m.get('tag_version', _tag_version)))
                 print(f"taste model: {len(m['aff'])} facets, cal {m['cal']}, {m['taste_line'][:160]}", flush=True)
                 taste_ring_note(m, time.time())
         return _model["m"]
@@ -8520,7 +8862,7 @@ def rank_by_taste(m, items, enrich=True):
             pass
         except Exception as e:
             embedding_failure(e)
-        tag_experiences(pairs[:50], max_batches=2)
+        tag_experiences(pairs, max_batches=2)
     scored = [(score_key(m, k, kind=kind), i, k, kind, x) for i, (k, kind, x) in enumerate(items)]
     scored.sort(key=lambda t: (t[0][0] is None, -(t[0][0] or 0), t[1]))
     return [(sw[0], sw[1], k, kind, x) for sw, _, k, kind, x in scored]
@@ -8879,7 +9221,18 @@ def _memory_curate(evts, m, now, store, stamp, facets):
             facets = dict(_facets)
     names = m["names"]
     candidates, support, reasons, contrary, taint = {}, {}, {}, {}, {}
+    profile = _profiles.get("household") or {}
+    titles = {(e["key"], e["kind"]) for e in profile.get("entries", ())}
+    moves = title_moves()
+    readings = {(person, e["key"], e["kind"]): entry_weight(e)
+                for person in PEOPLE for e in person_entries(profile, person)} if profile.get("entries") else {}
+    invalid = {person: set() for person in PEOPLE}
     live = {(f["person"], f["about"], f["kind"]): f for f in store["facts"] if _memory_live(f)}
+    evidence_people = {}
+    for f in live.values():
+        if f["kind"] == "avoid" and f["src"] != "told" and f["confirmed"] is None:
+            for eid in f["evidence"]:
+                evidence_people.setdefault(eid, set()).add(f["person"])
     for person in PEOPLE:
         ranked = sorted(((fid, a) for fid, a in m.get("paff0", m["paff"]).get(person, {}).items()
                          if fid[0] in MEMORY_TYPES and fid in names and speaks(fid, names[fid]) and a),
@@ -8913,8 +9266,10 @@ def _memory_curate(evts, m, now, store, stamp, facets):
             continue
         if ev["action"] not in MEMORY_POS | MEMORY_NEG:
             continue
-        people = [p for p in PEOPLE if p in ev["by"] and
-                  (p not in store["forgotten"] or ev["t"] is not None and ev["t"] > store["forgotten"][p])]
+        owners = watch_owners(ev, moves)
+        people = [p for p in PEOPLE
+                  if (p in ev["by"] or p in owners or p in evidence_people.get(ev["id"], ()))
+                  and (p not in store["forgotten"] or ev["t"] is not None and ev["t"] > store["forgotten"][p])]
         if not people:
             continue
         stats["used"] += 1
@@ -8925,6 +9280,13 @@ def _memory_curate(evts, m, now, store, stamp, facets):
         stretch = kind == "avoid" and (ev.get("ctx") or {}).get("row") == rid('newtoyou')
         family, week = memory_family(src), memory_week(ev["t"]) if ev["t"] is not None else None
         for person in people:
+            weight = readings.get((person, ev["key"], ev["kind"]))
+            if weight is None:
+                weight = (0 if (ev["key"], ev["kind"]) in titles or person not in owners or ev["action"] == "abandon"
+                          else ev["conf"] * (1 if kind == "like" else -1))
+            if not weight or (weight > 0) != (kind == "like"):
+                invalid[person].add(ev["id"])
+                continue
             for fid in held:
                 if not stretch and fid in candidates[person] and candidates[person][fid][0] == kind:
                     collect(support, (person, fid, kind), ev, family, week)
@@ -8957,6 +9319,7 @@ def _memory_curate(evts, m, now, store, stamp, facets):
         if slot not in offers or offers[slot]["src"] == "implicit" or n > offers[slot]["n"]:
             offers[slot] = offer
     ops = []
+    retracted = set()
     for (person, fid, kind), offer in sorted(offers.items()):
         f = live.get((person, fid, kind))
         if f:
@@ -8981,7 +9344,11 @@ def _memory_curate(evts, m, now, store, stamp, facets):
             continue
         ts = sorted(contrary.get(f["id"], {}).values())
         count, days = MEMORY_CONTRARY
-        if any(ts[i+count-1]-t <= days*DAY for i, t in enumerate(ts[:len(ts)-count+1])):
+        if f["kind"] == "avoid" and f["src"] != "told" and f["confirmed"] is None and set(f["evidence"]) & invalid[f["person"]] \
+                and (f["person"], f["about"], f["kind"]) not in offers:
+            retracted.add(f["id"])
+            _memory_end(store, ops, "supersede", f, now, "superseded")
+        elif any(ts[i+count-1]-t <= days*DAY for i, t in enumerate(ts[:len(ts)-count+1])):
             _memory_end(store, ops, "supersede", f, now, "superseded")
         elif memory_strength(f, now) < MEMORY_FLOOR:
             _memory_end(store, ops, "decay", f, now, "decayed")
@@ -9015,7 +9382,8 @@ def _memory_curate(evts, m, now, store, stamp, facets):
     for person in PEOPLE:
         active = {f["id"] for f in prior["facts"] if f["person"] == person and f["status"] == "active"}
         surviving = {f["id"] for f in store["facts"] if f["status"] == "active"}
-        ending = len(active-surviving)
+        # Verified neutral evidence cannot justify keeping an unconfirmed avoid fact.
+        ending = len(active-surviving-retracted)
         if ending > max(1, int((1-MEMORY_KEEP)*len(active))):
             refused.append({"person": person, "active_before": len(active), "ending": ending})
         elif sum(f["person"] == person and _memory_live(f) for f in store["facts"]) > MEMORY_CAP:
@@ -9930,7 +10298,7 @@ def soon_for_taste(p, lang, today, have):
         if pct is None or pct < (65 if m.get("cal_reference") == "known" else 80):
             continue
         original, original_overview = card_parts(meta)
-        original = [x for x in original if x not in (t("match.strong"), t("match.good"), t("match.wildcard"))]
+        original = [x for x in original if x not in match_labels()]
         what = (t("note.out", date=day_text(d)) if kind == "movie" else t("note.premieres", date=day_text(d))) if d else \
             (original[0] if original else t("note.soon"))
         note = " · ".join([what] + reasons(m, key, why, kind=kind))
@@ -10051,7 +10419,7 @@ def catchup_feed(lang):
     if not p:
         return {"tv": []}
     if len(adult_people()) != len(PEOPLE):
-        p = {**p, "seen": {e["key"] for e in p["entries"]}}
+        p = {**p, "seen": {e["key"] for e in p["entries"] if _abandon_seen(e)}}
     today = local_now().date()
     shows = [e for e in p["entries"] if e["stype"] == "series" and e["signal"] in ("loved", "liked", "watched") and e["weight"] > 0
              and e["item"].get("last_episode") and e["age"] > 60][:120]
@@ -11330,7 +11698,9 @@ def week_digital(lang):
                 det = tmdb(f"movie/{it['id']}", language=lang, append_to_response='keywords,credits,release_dates')
                 rec = facet_record('movie', it['id'], det)
                 with _facets_lock:
-                    _facets[fkey(key, 'movie')] = rec
+                    slot = fkey(key, 'movie')
+                    rec.update({field: _facets[slot][field] for field in ('x', 'x_state') if field in _facets.get(slot, {})})
+                    _facets[slot] = rec
                     _facets_dirty.set()
                 it = {**it, **det}
             meta = row_meta(it, 'movie', 'movie', TMDB_GENRES['movie'], it, lang=lang)
@@ -11607,7 +11977,7 @@ def weekpicks_feed(lang):
                           if f.startswith('x') and a > 0][:5]
             scopes[person] = {'loved': [{'i': i, 'title': title} for i, title in enumerate(mine)],
                               'enjoys': affinities, 'type_hint': taste.get(person, {}).get('type')}
-        prompt = {'scopes': scopes, 'seen': [e['title'] for e in p['entries'][:60]]}
+        prompt = {'scopes': scopes, 'seen': [e['title'] for e in p['entries'] if _abandon_seen(e)][:60]}
         if attempt and OR_KEY and adult_people():
             try:
                 answer = search_commands.parse_json(llm_text(WEEKPICKS_SYS,
@@ -12030,7 +12400,7 @@ def candidate_pool(p, n=40, metas=False, trending_only=None, report=None, catalo
             known = [(key, kind) for _, _, key, kind, _ in ranked if frec(key, kind).get('title')]
             if known and _emb_model == EMB_MODEL:  # The feed worker starts global embedding migrations separately.
                 ensure_emb(known)
-            taggable = [(key, kind) for key, kind in known if 'o' in frec(key, kind)][:50]
+            taggable = [(key, kind) for key, kind in known if 'o' in frec(key, kind)]
             if taggable:
                 tag_experiences(taggable, max_batches=2, fetch_facets=False)
         except BudgetExceeded:
@@ -13361,7 +13731,10 @@ def feed_pass(d, retry):
     except Exception as e:
         print(f"profiles failed: {type(e).__name__}: {e}", flush=True)
         hashes = {}
+    tag_experiences([], max_batches=2, fetch_facets=False)
     build_feeds(d, hashes, retry)
+    if not _defer_enrichment and (_model['m'] or {}).get('tag_version', _tag_version) != _tag_version:
+        get_model()  # Publish affinities and calibration together after worker enrichment.
 
 
 def build_feeds(d, hashes, retry, only=None, *, force=False):
@@ -13518,6 +13891,7 @@ def feed_worker():
             backfill_countries()
             backfill_ratings()
             backfill_runtime()
+            backfill_abandoned()
             if _emb_model != EMB_MODEL:
                 ensure_emb([])
         except Exception as e:
@@ -13733,7 +14107,7 @@ def human_cards(metas, person=None):
             if notes:
                 break
             part = part.strip()
-            if part in (t("match.strong"), t("match.good"), t("match.wildcard")) or not part:
+            if part in match_labels() or not part:
                 continue
             if not reason_ok(part, meta["id"], kind="movie" if meta["type"] == "movie" else "tv"):
                 continue
@@ -14085,7 +14459,7 @@ def profile_kinds(p):
         for e in p.get("entries", []):
             seen, negative = keys.setdefault(e["key"], (set(), set()))
             kind = e.get("kind") or ("movie" if e.get("stype") == "movie" else "tv" if e.get("stype") == "series" else None)
-            if kind:
+            if kind and _abandon_seen(e):
                 seen.add(kind)
                 if e.get("weight", 0) < 0:
                     negative.add(kind)
@@ -14710,7 +15084,7 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
                 entries = person_entries(p, who)
                 known = {e['key'] for e in p['entries']}
                 p = {**p, 'entries': entries,
-                     'seen': set(p.get('seen', ())) - known | {e['key'] for e in entries},
+                     'seen': set(p.get('seen', ())) - known | {e['key'] for e in entries if _abandon_seen(e)},
                      'negative': set(p.get('negative', ())) - known | {e['key'] for e in entries if e['weight'] < 0}}
             blocked = masks[0] | (masks[2] if len(masks) > 2 else set())
             corrected = [x for x in raw if x['id'] not in blocked
@@ -14778,7 +15152,7 @@ def served_row(cid, typ, lang, p, above, masks, who=None):
                     x = {**x, "name": x["name"] + (t("item.movie") if x["type"] == "movie" else t("item.series"))}
             if row_member(x, p, "seen") and cid in (rid('airing'), rid('nextseason'), rid('upcoming')):
                 notes, overview = card_parts(x)
-                note = next((n for n in notes if n not in (t("match.strong"), t("match.good"), t("match.wildcard"))), "")
+                note = next((n for n in notes if n not in match_labels()), "")
                 x = {**x, "description": " · ".join(s for s in (t("note.season.new") + note, overview) if s)}
             if cid in (rid('catchup'), rid('episodes')):
                 counts = (x.get("_row") or {}).get("counts") or {}
@@ -15792,10 +16166,10 @@ def interview_next(person):
     answered = {(key, e["kind"]) for (key, who), e in active.items() if who == person}
     answered |= {(e["key"], e["kind"]) for e in interview_skips() if e["who"] == person}
     rated = {(e["key"], e["kind"]) for e in mine} | answered
-    # Titles they stopped that Skald cannot read come first, even after the interview is done.
+    # Unsure stops come first, then related ones, even after the interview is done.
     stops = []
-    for e in person_entries({"entries": entries}, person):
-        if e.get("abandon") == "unsure" and (e["key"], e["kind"]) not in answered and len(stops) < 3:
+    for e in sorted(person_entries({"entries": entries}, person), key=lambda e: e.get("abandon") == "related"):
+        if e.get("abandon") in ("unsure", "related") and (e["key"], e["kind"]) not in answered and len(stops) < 3:
             view = title_view(e["key"], e["kind"], person)
             if view is not None:
                 stops.append({"key": e["key"], "kind": e["kind"], "title": view["title"],
@@ -16282,7 +16656,7 @@ def title_view(key, kind, person=None):
             # Together's household fallback may name a facet belonging to only one person.
             if person == "together":
                 fids = [f for f in fids if f in m.get("paff", {}).get(person, {})]
-            conf, pct = confidence(m, key, s, fids, person)
+            conf, pct = confidence(m, key, s, fids, person, kind)
             why = reason_details(m, key, fids, 3, person, kind)
             if len(notes) >= 1000:
                 notes.clear()

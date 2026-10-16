@@ -41,7 +41,7 @@ def report(snapshot, network_idle=False):
         due = (time.perf_counter() - start) * 1000
     p95 = sorted(times)[94]
     assert p95 < 1, f'warm idle p95 {p95:.3f} ms exceeds 1 ms'
-    return {'seeds': dict(sorted(seeds.items())), 'manual_seeds': seeds['manual_export'],
+    return {**engine.provenance(), 'seeds': dict(sorted(seeds.items())), 'manual_seeds': seeds['manual_export'],
             'warm_idle_ms': round(statistics.median(times), 3), 'warm_idle_p95_ms': round(p95, 3),
             'due_file_drop_ms': round(due, 3)}
 

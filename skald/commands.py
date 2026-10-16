@@ -22,7 +22,7 @@ REGISTRY = {
     'exclude_genre': _op('prefs', 'No more', 'include_genre'), 'include_genre': _op('prefs', 'More', 'exclude_genre', removes=True),
     'focus': _op('prefs', 'More', 'unfocus'), 'unfocus': _op('prefs', 'Less', 'focus', removes=True),
     'discovery': _op('prefs', 'Discovery:'), 'years': _op('prefs'),
-    'like': _op('feedback', feedback='love'), 'dislike': _op('feedback', feedback='not_for_us'), 'seen': _op('feedback', feedback='seen'),
+    'like': _op('feedback', feedback='like'), 'dislike': _op('feedback', feedback='not_for_us'), 'seen': _op('feedback', feedback='seen'),
     'less': _op('prefs'), 'more': _op('prefs'), 'runtime': _op('prefs'), 'kids_age': _op('actor'),
     'settings': _op('read', kids=True), 'history': _op('read', kids=True), 'undo': _op('history', kids=True),
     'redo': _op('history', kids=True), 'reset': _op('reset', kids=True), 'shelf_list': _op('read', kids=True),
@@ -49,7 +49,7 @@ REGISTRY = {
     'ignore_learning': _op('title', hint='ignore_learning stops one watched title shaping this person\'s taste; history stays: values [title]: "Lerne nichts aus meinem Abspielen von Dune".'),
     'reattribute': _op('title', scope='household', hint='reattribute moves a watch to the member who really watched it: values [title], person that member: "Arrival je gledao Ben, ne ja" person ben.'),
     'explain': _op('title', kids=True, scope='read', hint='explain is a why question about one title in the picks and changes nothing: "Why is Dune here?" values [Dune].'),
-    'like_results': _op('results', feedback='love', hint='like_results saves every shown result as the actor\'s taste: "I like these, save them as my taste". Use only with shown results context; kind null values [] person null.'),
+    'like_results': _op('results', feedback='like', hint='like_results saves every shown result as the actor\'s taste: "I like these, save them as my taste". Use only with shown results context; kind null values [] person null.'),
     'shelf_from_results': _op('results', kids=True, hint='shelf_from_results saves the shown results as a row or shelf named from the last search: "save this as a row". Use only with shown results context; kind null values [] person null.'),
     'taste_drivers': _op('read', kids=True, hint='taste_drivers reads what shapes this person\'s picks, with drivers and correction previews; changes nothing: kind null values [], person the named child or null for the viewer, language the speaker\'s BCP 47 language code (en, de, sr-latn or sr-cyrl). Adults may read a child\'s taste, without correction previews. "What does Kim like?" person kim. '
                         '"what shapes my picks?", "warum empfiehlst du mir so viele Krimis?", "zašto mi stalno nudiš anime?" are taste_drivers. A why question about one named title is explain; asking for titles now is a search.'),
@@ -102,6 +102,10 @@ REGISTRY.update({
 })
 REGISTRY['household_erase'] = _op('erase', scope='household', hint='household_erase previews erasing every person and all household data, including Skald backups and saved logins. Read only; only the server CLI can erase with two confirmations. kind null values [] person null. "erase everything", "delete all our data", "Lösche alle unsere Daten", "Obriši sve naše podatke". Infer meaning in any language, including typos and indirect wording. Forgetting one named person is member_forget, removing a shelf is shelf_stop, clearing settings is reset. A film called Erase Everything is a title search, never an erase request.')
 REGISTRY['plays_around'] = _op('plays', scope='read', hint='plays_around reads a named child\'s watching days, last watching day, usual weekdays, stretches and gaps; changes nothing. kind null values [] person the child id, language en, de, sr-latn or sr-cyrl. "When is Kim around?", "Wann schaut Kim?", "Kada Kim obično gleda?" ask for these facts. Infer meaning in any language, including typos and indirect wording. Never infer holidays or where the child is staying. A title called When Kim Is Around is a title search, not this op. Questions about watched titles in the past week use plays_recent.')
+REGISTRY['tags_retag'] = _op('tags', scope='household', hint='tags_retag queues shared title experience tags for the budgeted worker, never changes manual tags. '
+    'kind title values [exact title] for a named title; kind null values [] for all stale cached tags; person null. '
+    '"retag Cloud Lantern", "Bitte die Erlebnis-Tags für Cloud Lantern neu prüfen", "Ponovo označi Cloud Lantern". '
+    'Indirect requests and typos count. A title called Tag Again or a search for films about tags is a title search, never this op.')
 OPS = tuple(REGISTRY)
 BASE = ('op', 'kind', 'values', 'person')
 STEP = {'op': (*OPS, None), 'kind': ('movie', 'tv', 'series', 'genre', 'people', 'languages', 'countries', 'similar', 'mood', 'title', None),
@@ -787,7 +791,7 @@ def register(s):
         body = request(batch[0], fallback_model, fallback_effort)
         body['max_tokens'] = 1200
         return body
-    s.decision('parse_command', ver=19, lane='search', cap=None, ttl=30*s.DAY,
+    s.decision('parse_command', ver=20, lane='search', cap=None, ttl=30*s.DAY,
         inp={'query': str, 'last': (str, None), 'shown': (str, [str, 30], None), 'rows': ([{'id': str, 'label': str}, 100], None),
              'people': ([{'id': str, 'label': str}, 100], None), 'today': (str, None), 'last_row_action': ({'id': str, 'action': str, 'at': float}, None)}, out=OUT,
         norm=lambda inp: {**s.route_norm(inp), **{k: inp[k] for k in ('rows', 'people', 'today', 'last_row_action') if inp.get(k) is not None}}, rule=rule, params={},
@@ -994,6 +998,20 @@ def _preview(s, text, viewer=None, bound=None, answer=None, scope=None, prior=No
         if change['kind'] is not None or change['values'] or change['person'] is not None:
             raise ValueError('Household erase needs no person or title')
         return erase_preview(s)
+    if change['op'] == 'tags_retag':
+        from . import tags
+        actor = bound if bound in s.PEOPLE else viewer
+        lang = change['language'] or s.LANG
+        if actor not in s.adult_people():
+            raise PermissionError(s.t('tags.adult', lang=lang))
+        if change['person'] is not None or not (change['kind'] is None and not change['values'] or
+                change['kind'] == 'title' and len(change['values']) == 1 and isinstance(change['values'][0], str)):
+            raise ValueError(s.t('tags.arguments', lang=lang))
+        title = change['values'][0] if change['values'] else None
+        result = tags.queue(s, title, stale=title is None, apply=False)
+        return seal(dict(people=[actor], actor=actor, change=change, tags=True,
+                         name=s.t('tags.preview', lang=lang, count=result['queued']),
+                         description=s.t('tags.detail', lang=lang), text=text[:200], source='search'))
     if change['op'] == 'ai_budget':
         s.refresh_preferences()
         actor = bound if bound in s.PEOPLE else viewer
@@ -1692,6 +1710,10 @@ def explain_text(s, item, who, info=None):
     if info.get('reasons'):
         lines.append('Because: '+'; '.join(str(r) for r in info['reasons']))
     mine = (info.get('per_person') or {}).get(who) or {}
+    if mine.get('abandon') == 'early':
+        lines.append(s.t('abandon.early.' + mine['abandon_reason']))
+    elif mine.get('abandon') in ('related', 'pending'):
+        lines.append(s.t('abandon.' + mine['abandon']))
     pct = mine.get('percentile', info.get('percentile'))
     if pct is not None:
         lines.append('Match for '+label+': '+str(pct)+' of 100')
@@ -2399,6 +2421,14 @@ def apply(s, plan, *, cfg=None):
             history_scope(s, plan['actor'], scope, entry)
             check_history_order(entries, scope, entry)
         ensure(s.DATA)
+        if plan.get('tags'):
+            from . import tags
+            lang = plan['change'].get('language') or s.LANG
+            if plan['actor'] not in s.adult_people():
+                raise PermissionError(s.t('tags.adult', lang=lang))
+            values = plan['change']['values']
+            result = tags.queue(s, values[0] if values else None, stale=not values)
+            return {'name': s.t('tags.queued', lang=lang, count=result['queued']), 'tags': result}
         if plan.get('forget'):
             from .leave import apply as forget_person
             return forget_person(s, plan)

@@ -162,7 +162,7 @@ class DepthParserTests(unittest.TestCase):
         self.assertEqual(len(rows), 13)
         for n, signal, conf in [(1, 'meh', 1.), (2, 'love', 1.), (3, 'meh', .7), (4, 'seen', 1.),
                                 (5, 'interest', 1.), (6, 'like', .7), (7, 'like', .7), (8, 'abandon', .5),
-                                (9, 'abandon', .4), (10, 'seen', 1.), (11, 'abandon', .8), (12, 'abandon', .8), (13, 'abandon', .8)]:
+                                (9, 'abandon', .4), (10, 'seen', 1.), (11, 'not_for_us', 1.), (12, 'not_for_us', 1.), (13, 'not_for_us', 1.)]:
             self.assertEqual((rows[n].signal, rows[n].conf), (signal, conf), n)
         self.assertEqual(rows[8].n, 3)
         self.assertEqual(rows[6].n, 2)

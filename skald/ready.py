@@ -108,7 +108,10 @@ def choices(s, lang, who, masks):
         people = {person: member(s, release, profile['entries'], explicit) for person, profile in profiles.items()} if 'meta' in release else \
                  {person: dict(info) for person, info in release['people'].items() if person in profiles}
         def allowed(x, subject, profile, hidden):
-            return x['id'] not in hidden and not s.row_member(x, profile, 'negative') and s.preference_ok(x, s.rid('ready1'), subject)
+            held = subject in profiles and any(e['key'] == x['id'] and e['kind'] == ('movie' if x['type'] == 'movie' else 'tv')
+                                               and e.get('abandon') == 'early' and s._abandon_seen(e)
+                                               for e in profile['entries'])
+            return not held and x['id'] not in hidden and not s.row_member(x, profile, 'negative') and s.preference_ok(x, s.rid('ready1'), subject)
         own_cards = {}
         for person, info in people.items():
             if not in_window:

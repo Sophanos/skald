@@ -17,6 +17,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from skald.members import rid
+from skald.engine import Engine, heldout
+from eval.stop_report import explicit_negative
 snapshot = os.environ.get('SKALD_SNAPSHOT')
 SNAPSHOT = snapshot if snapshot and snapshot.strip() else None
 FILES = ('feeds.json', 'shown.json', 'profile.json', 'emb.json', 'facets.json', 'learn.json', 'taste.json', 'nzb.json')
@@ -229,19 +231,78 @@ def print_rows(server, rows, first):
     return metrics
 
 
-def main():
+def quality_report(snapshot, person, k=10):
+    """Count final slots and leave-one-love-out discovery recovery using production serving."""
+    if k < 1:
+        raise ValueError('k must be positive')
+    with redirect_stdout(io.StringIO()), Engine(snapshot) as engine:
+        s = engine._server
+        engine._person(person)
+        entries = s.person_entries(engine._profile, person)
+        feedback = s.active_feedback()
+        negatives = {(e['key'], e['kind']) for e in entries
+                     if explicit_negative(e, feedback.get((e['key'], person)))}
+        loves = sorted({(e['key'], e['kind']) for e in entries if e['signal'] == 'loved' and not e.get('abandon')})
+        def final_rows():
+            # Empty requested rows still count against fill.
+            with s.addon_scope(person), patch.object(s, 'get_model', return_value=engine._model):
+                requests = [(cid, typ) for cid, types, _ in s.feed_rows(s.LANG, who=person)
+                            for typ in (('tv',) if 'tv' in types else types)]
+                return [(cid, s.row_metas(cid, typ, s.LANG, who=person)[:k]) for cid, typ in requests]
+        rows = final_rows()
+        returned = sum(len(row) for _, row in rows)
+        leaked = sum((meta['id'], 'movie' if meta['type'] == 'movie' else 'tv') in negatives for _, row in rows for meta in row)
+        recovered = 0
+        nondiscovery = {s.rid(name) for name in ('episodes', 'catchup', 'upcoming', 'nextseason', 'rewatch')}
+        for key, kind in loves:
+            with heldout(engine, {key}):
+                recovered += any(meta['id'] == key and ('movie' if meta['type'] == 'movie' else 'tv') == kind
+                                 for cid, row in final_rows() if cid not in nondiscovery for meta in row)
+        return {**engine.provenance(), 'person': person, 'k': k, 'curation': 'fixed-candidate-pools',
+                'rows': len(rows), 'fill': {'returned': returned, 'requested': len(rows)*k},
+                'negative_leakage': {'slots': leaked, 'returned': returned, 'known_negatives': len(negatives)},
+                'heldout': {'n': len(loves), 'recovered': recovered, 'recall_at_k': recovered/len(loves) if loves else None}}
+
+
+def quality_targets(report):
+    return [{'target': 'raw evidence for current rules', 'value': report['evidence'], 'pass': report['evidence'] == 'raw-evidence'},
+            {'target': 'every requested slot filled', 'value': report['fill'],
+             'pass': report['fill']['requested'] > 0 and report['fill']['returned'] == report['fill']['requested']},
+            {'target': 'no known negative leakage', 'value': report['negative_leakage'],
+             'pass': report['negative_leakage']['known_negatives'] > 0 and report['negative_leakage']['slots'] == 0},
+            {'target': 'held-out love recovered', 'value': report['heldout'],
+             'pass': report['heldout']['n'] > 0 and report['heldout']['recovered'] > 0}]
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--snapshot', default=SNAPSHOT)
     parser.add_argument('--order', type=Path, help='player order file; otherwise SKALD_ROW_ORDER or the server display order')
     parser.add_argument('--before', type=Path)
     parser.add_argument('--day', default='2026-10-11')
     parser.add_argument('--first', type=int, default=8)
-    parser.add_argument('--json', type=Path, help='optional report artifact')
+    parser.add_argument('--json', nargs='?', const=Path('-'), type=Path, help='optional report artifact, or stdout without a path')
+    parser.add_argument('--quality', action='store_true', help='count final rows and held-out discovery recovery')
+    parser.add_argument('--person')
+    parser.add_argument('--k', type=int, default=10)
+    parser.add_argument('--check-targets', action='store_true')
     parser.add_argument('--stub-tmdb', action='store_true', help='also replay synthetic refill fixtures')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not args.snapshot:
         parser.error('--snapshot is required')
-    report = {}
+    if args.quality:
+        if not args.person or args.k < 1:
+            parser.error('--quality needs --person and positive --k')
+        report = quality_report(args.snapshot, args.person, args.k)
+        report['targets'] = quality_targets(report) if args.check_targets else []
+        text = json.dumps(report, ensure_ascii=False)
+        if args.json and str(args.json) != '-':
+            args.json.write_text(text + '\n')
+        else:
+            print(text if args.json else '\n'.join(f'{key}: {value}' for key, value in report.items()))
+        return int(args.check_targets and not all(t['pass'] for t in report['targets']))
+    report = {'evidence': 'cached-profile'}
+    print('Evidence: cached-profile')
     for label, source in ([('before', args.before)] if args.before else []) + [('after', ROOT / 'server.py')]:
         with home_server(args.snapshot, source, args.day) as server:
             rows = display_rows(server, order=args.order)
@@ -271,9 +332,12 @@ def main():
         dropped = report['because_dropped'] = [x['name'] for x in before['metas'] if not passes.get(x['id'], False)]
         print('Because anchor drops from the old row: ' + '; '.join(dropped))
     if args.json:
-        args.json.parent.mkdir(parents=True, exist_ok=True)
-        args.json.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
+        if str(args.json) == '-':
+            print(json.dumps(report, ensure_ascii=False))
+        else:
+            args.json.parent.mkdir(parents=True, exist_ok=True)
+            args.json.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

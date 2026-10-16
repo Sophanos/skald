@@ -102,6 +102,9 @@ class PrecedenceTests(unittest.TestCase):
         for strong, weak in (('seen', 'abandon'), ('abandon', 'interest'), ('like', 'abandon')):
             for ages in ((400, 10), (10, 400)):
                 evts = [event(s, strong, ages[0]), event(s, weak, ages[1], src='import:imdb')]
+                for ev in evts:
+                    if ev['action'] == 'abandon':
+                        ev.update(src='import:netflix', conf=.4, ctx={'src': 'netflix'})
                 for rev in (False, True):
                     self.assertEqual(signals(s, fold_case(s, evts, rev))['ana'], [s.IMPORT_SIGNALS[strong][0]])
 

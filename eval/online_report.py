@@ -73,7 +73,7 @@ def online_report(snapshot, now, days=21):
                 s._searches = [(r["t"], r["q"]) for r in map(json.loads, path.read_text().splitlines())]
             s.note_tv(read("profile", {"entries": []}), now=at)
             state = s.online_state()
-            return {"legacy": {"shown": sum(r["shown"] for r in learn["rows"].values()),
+            return {"evidence": "cached-profile", "legacy": {"shown": sum(r["shown"] for r in learn["rows"].values()),
                                "learn_ids": len(learn["rows"]), "titles": len(learn["served"]),
                                "hits": len(learn["hits"]), "ctx": len(learn["ctx"])},
                     "replay": {"observations": len(state["tv"]),

@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from eval import replay, variants
+from eval import matched
 from eval.matched import Matched, paired_bootstrap
 from eval import cold_start, seed_probes
 
@@ -240,6 +241,86 @@ class ReplayTest(unittest.TestCase):
             paired_bootstrap(rows, after[:2])
         with self.assertRaises(ValueError):
             paired_bootstrap(rows, [dict(r, matched_n=3) for r in after])
+
+    def test_coverage_overlay_freezes_matching_and_restores_facets(self):
+        with self.server() as server:
+            for rec in server._facets.values():
+                rec.pop('x', None)
+                rec['kind'] = 'movie'
+            original = copy.deepcopy(server._facets)
+            overlay = {key: {'kind': 'movie', 'x': {'epic_quest': 3}}
+                       for key in original if int(key[5:]) <= 6}
+            profile = replay.profile_with(self.profile, self.profile['entries'])
+            report = matched.coverage_report(server, profile, overlay)
+            self.assertEqual(server._facets, original)
+            self.assertEqual(report['overlay_n'], 6)
+            self.assertEqual(report['arms']['original']['all']['n'], 6)
+            self.assertEqual(report['paired']['all']['n'], 6)
+            self.assertEqual(report['paired']['all']['delta'],
+                             report['arms']['expanded']['all']['mauc']-report['arms']['original']['all']['mauc'])
+            self.assertTrue(report['matching_frozen'])
+            with variants.experience_overlay(server, overlay):
+                self.assertTrue(all('x' in server._facets[k] for k in overlay))
+                with self.assertRaises(ValueError):
+                    with variants.experience_overlay(server, overlay):
+                        pass
+            self.assertEqual(server._facets, original)
+            for invalid in ({'tmdb:999': {'kind': 'movie', 'x': {'epic_quest': 3}}},
+                            {'tmdb:1': {'kind': 'tv', 'x': {'epic_quest': 3}}},
+                            {'tmdb:1': {'kind': 'movie', 'x': {'invented': 3}}},
+                            {'tmdb:1': {'kind': 'movie', 'x': {'epic_quest': 4}}}):
+                with self.assertRaises(ValueError):
+                    with variants.experience_overlay(server, invalid):
+                        pass
+
+    def test_coverage_gate_fails_regression_and_changed_distractor_identities(self):
+        before = [dict(key=str(i), split='test' if i % 2 else 'tune', matched_n=4,
+                       matched_sha256='frozen', mauc=.5, hard=True, signal='loved') for i in range(40)]
+        after = [dict(r, mauc=.6) for r in before]
+        result = matched.coverage_gate(before, after)
+        self.assertTrue(result['pass'])
+        self.assertEqual(result['paired']['hard']['n'], 40)
+        self.assertEqual(result['paired']['loved']['n'], 40)
+        regressed = [dict(r, mauc=.4) for r in before]
+        self.assertFalse(matched.coverage_gate(before, regressed)['pass'])
+        # Same distractor count, different identities must fail pairing.
+        after[0]['matched_sha256'] = 'changed'
+        with self.assertRaises(ValueError):
+            paired_bootstrap(before, after)
+        # Aggregate improvement cannot hide a supported loved-bucket regression.
+        mixed = before + [dict(r, key='watched'+r['key'], signal='watched', hard=False) for r in before]
+        changed = [dict(r, mauc=.4 if r['signal'] == 'loved' else .8) for r in mixed]
+        result = matched.coverage_gate(mixed, changed)
+        self.assertGreater(result['paired']['all']['delta'], 0)
+        self.assertFalse(result['pass'])
+        with patch.object(matched, 'snapshot_coverage', return_value={'pass': False}), \
+                patch('sys.stdout'):
+            self.assertEqual(matched.main(['--snapshot', str(self.snapshot), '--overlay', 'fixture.json', '--json']), 1)
+
+    def test_duplicate_target_keys_cannot_turn_e1_regression_into_a_pass(self):
+        before = [dict(key=key, target_id=i, split='test', matched_n=4, matched_sha256='frozen',
+                       mauc=.5, rank=1, hard=True, signal='loved') for i, key in enumerate(('a', 'a', 'b'))]
+        after = [dict(row, mauc=value) for row, value in zip(before, (.4, .6, .45))]
+        # Counting all three gives -1/60; keeping the last row per key gives +.025.
+        self.assertAlmostEqual(replay.metrics(after)['mauc']-replay.metrics(before)['mauc'], -1/60)
+        result = matched.coverage_gate(before, after)
+        self.assertFalse(result['pass'])
+        self.assertEqual(result, matched.coverage_gate(before, list(reversed(after))))
+        self.assertEqual(result['paired']['all']['n'], 3)
+        self.assertAlmostEqual(result['paired']['all']['delta'], -1/60)
+        for actual, expected in zip(result['paired']['all']['ci95'], (-.1, .1)):
+            self.assertAlmostEqual(actual, expected)
+        legacy = [{k: v for k, v in row.items() if k != 'target_id'} for row in before]
+        for check in (paired_bootstrap, matched.coverage_gate):
+            for a, b in ((legacy, legacy), (before, [after[0], after[0], after[2]])):
+                with self.subTest(check=check.__name__, before_n=len(a)), \
+                        self.assertRaisesRegex(ValueError, 'duplicate.*target'):
+                    check(a, b)
+        with self.server() as server:
+            profile = replay.profile_with(self.profile, self.profile['entries'] + [self.profile['entries'][0]])
+            report = matched.coverage_report(server, profile, {})
+            self.assertEqual(report['arms']['original']['all']['n'], 7)
+            self.assertEqual(report['paired']['all']['n'], 7)
 
     def test_seed_probes_validate_identity_and_sign_pairs(self):
         fixture = self.snapshot / 'probes.json'

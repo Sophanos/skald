@@ -292,32 +292,32 @@ class CommandEval(unittest.TestCase):
             self.assertEqual(ev.main(['--fixture', '--json', str(dest)], out=out), 0)
             reports = json.loads(dest.read_text())
             report = reports[0]
-            # Merged fixture totals include weekly recall, forget backups, renamed rows and title look-alikes.
-            self.assertEqual(report['count'], 997)
-            self.assertEqual(len(report['results']), 997)
+            # Merged fixture totals include experience retagging.
+            self.assertEqual(report['count'], 1011)
+            self.assertEqual(len(report['results']), 1011)
             self.assertEqual(report['no_answer'], 147)
-            self.assertEqual(sum(r['op_ok'] for r in report['results']), 845)
-            self.assertEqual(sum(r['full_ok'] for r in report['results']), 844)
-            self.assertEqual(report['now_count'], 997)
-            self.assertEqual(report['now_op_accuracy'], 845 / 997)
-            self.assertEqual(report['now_full_accuracy'], 844 / 997)
+            self.assertEqual(sum(r['op_ok'] for r in report['results']), 859)
+            self.assertEqual(sum(r['full_ok'] for r in report['results']), 858)
+            self.assertEqual(report['now_count'], 1011)
+            self.assertEqual(report['now_op_accuracy'], 859 / 1011)
+            self.assertEqual(report['now_full_accuracy'], 858 / 1011)
             self.assertEqual((report['next_count'], report['next_op_accuracy'], report['next_full_accuracy']), (0, 0, 0))
             self.assertEqual(report['by_tier'], {
                 'followup': {'now_count': 45, 'op_accuracy': 1, 'full_accuracy': 1},
-                'base': {'now_count': 412, 'op_accuracy': 352 / 412, 'full_accuracy': 352 / 412},
+                'base': {'now_count': 426, 'op_accuracy': 366 / 426, 'full_accuracy': 366 / 426},
                 'hard': {'now_count': 540, 'op_accuracy': 448 / 540, 'full_accuracy': 447 / 540},
             })
             self.assertEqual([r['tier'] for r in report['results']],
                              [c.get('tier', 'base') for c in ev.load_cases()])
             self.assertIn('by-tier now accuracy:', out.getvalue())
-            self.assertIn('base 412 cases op 85.44% full 85.44%', out.getvalue())
+            self.assertIn('base 426 cases op 85.92% full 85.92%', out.getvalue())
             self.assertIn('hard 540 cases op 82.96% full 82.78%', out.getvalue())
             self.assertEqual([r['contract'] for r in report['results']],
                              [c['contract'] for c in ev.load_cases()])
             self.assertIn('all op accuracy', out.getvalue())
             self.assertIn('now op accuracy', out.getvalue())
             self.assertIn('now full accuracy', out.getvalue())
-            self.assertIn('997', out.getvalue())
+            self.assertIn('1011', out.getvalue())
             self.assertEqual(ev.evaluate(ev.load_cases()), reports)
 
     def test_live_metrics_request_and_secret_safe_output(self):

@@ -67,6 +67,37 @@ class StremioTests(unittest.TestCase):
         self.assertEqual(it['type'], 'series' if it['id'] == 'tt3' else 'movie')
         return ('movie' if it['type'] == 'movie' else 'tv', {'id': int(it['id'][2:])})
 
+    def test_stream_duration_is_kept_and_old_rules_remap_cached_rows(self):
+        self.assertEqual(self.s.STREMIO_RULES, 6)
+        row = item(21, state={'duration': 149000, 'timeWatched': 10000, 'lastWatched': '2026-10-05T12:00:00Z'})
+        self.rows = [row]
+        with patch.object(self.s, 'tmdb_details', side_effect=self.resolve):
+            for duration, expected in ((149000, 2), (151000, 3), (1000, None), (0, None), (-1000, None)):
+                mapped = self.s._stremio_item(item(21, state={**row['state'], 'duration': duration}), NOW)
+                self.assertEqual(mapped.get('duration_min'), expected)
+            stale = self.s._stremio_item(row, NOW)
+            stale.pop('duration_min', None)
+            self.s._connector_write('stremio-'+self.person+'.history', {'version': 4,
+                'library': {row['_id']: {'state': row, 'item': stale}}, 'likes': {}, 'items': [stale]})
+            with patch.object(self.s, '_http_get', side_effect=self.fake):
+                self.s._connector_stremio(self.c, NOW)
+        mapped = next(it for it in self.s.read_trakt() if it['id'] == 'tmdb:21')
+        self.assertEqual(mapped['duration_min'], 2)
+
+    def test_forget_and_erase_remove_saved_stream_duration(self):
+        from skald import erase, leave
+        name = 'stremio-'+self.person+'.history.json'
+        state = item(21, state={'duration': 120000})
+        mapped = {'id': 'tmdb:21', 'type': 'movie', 'duration_min': 2, 'at': 1000}
+        self.s._connector_write(name[:-5], {'version': 5, 'items': [mapped],
+            'library': {state['_id']: {'state': state, 'item': mapped}}, 'likes': {}})
+        changes, _ = leave.prepare(self.s, copy.deepcopy(self.s.CONFIG), self.person, '2099-12-31')
+        self.assertIn(name, changes)
+        self.assertNotIn('duration_min', changes[name] or '')
+        plan = {**erase.preview(self.s), 'source': 'cli', 'confirm': 'ERASE'}
+        erase.apply(self.s, plan)
+        self.assertFalse((self.data/name).exists())
+
     def test_addon_key_forms_url_sequence_and_library_body(self):
         auth = KEY + '/+ &?'
         for raw in (json.dumps({'key': ADDON_KEY}).encode(), json.dumps(ADDON_KEY).encode(), ADDON_KEY.encode()):
@@ -177,9 +208,9 @@ class StremioTests(unittest.TestCase):
                 self.assertTrue(items['tmdb:' + str(n)]['played'])
             self.assertEqual(items['tmdb:3']['last_episode'], [1, 2])
             self.assertEqual(items['tmdb:1']['at'], self.s._connector_time(STAMP) * 1000)
-            self.assertEqual(items['tmdb:4']['signal'], 'loved')
+            self.assertEqual(items['tmdb:4']['signal'], 'liked')
             self.assertEqual(items['tmdb:11']['signal'], 'loved')
-            self.assertEqual(items['tmdb:4']['rating'], 8)
+            self.assertEqual(items['tmdb:4']['rating'], 7)
             self.assertEqual(items['tmdb:11']['rating'], 10)
             library_only = self.s._stremio_item(item(12), NOW)
             self.assertEqual(library_only['signal'], 'interest')
@@ -252,7 +283,7 @@ class StremioTests(unittest.TestCase):
 
     def test_stremio_rating_merges_into_unrated_watch(self):
         for source in ('trakt', 'mdblist'):
-            for tid, rating in ((4, 8), (11, 10)):
+            for tid, rating in ((4, 7), (11, 10)):
                 with self.subTest(source=source, rating=rating):
                     self.s.CONFIG['connectors'].pop('trakt_api', None)
                     self.s.CONFIG['connectors'].pop('mdblist', None)
@@ -265,8 +296,8 @@ class StremioTests(unittest.TestCase):
                         self.s._connector_stremio(self.c, NOW)
                     merged = next(i for i in self.s.read_trakt() if i['id'] == watched['id'])
                     self.assertEqual(merged.get('rating'), rating)
-                    self.assertEqual(merged['signal'], 'loved')
-                    self.assertGreater(merged['weight'], watched['weight'])
+                    self.assertEqual(merged['signal'], 'liked' if tid == 4 else 'loved')
+                    self.assertGreaterEqual(merged['weight'], watched['weight'])
                     for field in ('played', 'plays', 'at'):
                         self.assertEqual(merged[field], watched[field])
 

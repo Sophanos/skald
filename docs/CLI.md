@@ -8,6 +8,21 @@ The copy is read-only. Imports are saved separately in `$XDG_DATA_HOME/skald`,
 or `~/.local/share/skald`. Change that with `--state-dir PATH`.
 `--json` prints machine results. Use `skald COMMAND --help` for flags.
 
+`skald tags --retag "Cloud Lantern" --json` queues one cached title for another
+experience-tag check. Use the exact title or its id. `skald tags --stale --json`
+queues tags whose schema or prompt inputs are outdated, including legacy tags
+with no provenance. JSON reports the queued count and counts by status: missing,
+ok, partial, invalid, untaggable, manual and stale. Stale takes precedence over
+the stored status in these counts. These commands run on local `DATA_DIR`.
+The existing worker processes the queue within the AI budgets, with a six-hour
+cooldown and at most three attempts per schema and input. Partial tags stay and
+get one retry, including one final attempt if the third result is partial. A
+round has at most four attempts. Manual tags stay. A new explicit request starts another bounded
+round after the cooldown. Without OpenRouter the queue waits.
+In Commander, a current adult can ask “retag Cloud Lantern” or “recheck all stale
+experience tags”, then use the displayed confirmation code. German and Serbian
+requests work too. This queues work without changing ratings or watch history.
+
 `skald ai budget --json` reads the household monthly budget in USD, its ceiling
 and whether the ceiling comes from the environment or the default. Preview a
 change with `skald ai budget 5 --person ana --json`, then repeat with `--yes` or

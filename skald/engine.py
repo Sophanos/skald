@@ -1,9 +1,11 @@
 """A copied snapshot and existing server functions, behind plain JSON dictionaries."""
 from collections import Counter
-from contextlib import redirect_stdout, redirect_stderr
+from contextlib import ExitStack, contextmanager, redirect_stdout, redirect_stderr
+import bisect
 import copy
 import importlib.util
 import io
+import hashlib
 import json
 import math
 import os
@@ -132,10 +134,36 @@ class Engine:
             profile_path = self._work / "profile.json"
             self._base = json.loads(profile_path.read_text(encoding="utf-8")) if profile_path.exists() else {"entries": []}
             self._index = self._title_index()
-            if not profile_path.exists():
-                with redirect_stdout(io.StringIO()):
-                    self._base = s.build_profile(s.read_history(), [], s.read_trakt())
-                self._base["built_at"] = time.time()
+            self._evidence_mode = "cached-profile"
+            raw_files = ("history.json", "history-summary.json", "trakt.json", "imports.jsonl", "feedback.jsonl", *member_files)
+            if not profile_path.exists() or any((self._work / name).exists() for name in raw_files):
+                stages = None
+                with redirect_stdout(io.StringIO()), ExitStack() as stack:
+                    history, trakt = s.read_history(), s.read_trakt()
+                    if hasattr(s, 'event_stages'):
+                        stages = [(stage, list(events)) for stage, events in s.event_stages(time.time(), history, trakt)]
+                        stack.enter_context(patch.object(s, 'event_stages', return_value=stages))
+                    rebuilt = s.build_profile(history, [], trakt)
+                # A partial export must not silently discard cache-only household evidence.
+                def evidence_claims(profile):
+                    claims = set()
+                    for person in s.PEOPLE:
+                        for e in s.person_entries(profile, person):
+                            sources = set(e.get('flags', ())) & {'remote', 'import', 'told'}
+                            source = e.get('wsrc') or e.get('who')
+                            sources.add('remote' if source == 'interview' else
+                                        'trakt' if source in ('trakt', 'sync:pmdb', 'owner', *s.PEOPLE) else
+                                        source if source in ('remote', 'import', 'told') else 'tv')
+                            claims.update((e['key'], e['kind'], person, src) for src in sources)
+                    return claims
+                old = evidence_claims(self._base)
+                available = ({(e['key'], e['kind'], person, stage) for stage, events in stages for e in events
+                              for person in s._expand_together(e['by'])} if stages is not None else evidence_claims(rebuilt))
+                if not profile_path.exists() or old <= available:
+                    self._base = rebuilt
+                    self._evidence_mode = "raw-evidence"
+                    self._base["built_at"] = time.time()
+            if self._evidence_mode == "raw-evidence":
                 profile_path.write_text(json.dumps(plain(self._base)), encoding="utf-8")
                 self._index = self._title_index()
             self._refresh()
@@ -150,10 +178,14 @@ class Engine:
         self.close()
 
     def close(self):
+        if getattr(self, '_closed', False):
+            return
+        self._closed = True
         if hasattr(self, "_server"):
             if hasattr(self._server, "_decide_queue"):
                 self._server.flush_decisions()
                 self._server._decide_queue.put(False)
+                self._server._decide_queue.join()
             for name in ("_pool", "_outer", "_search_pool", "_nzb_pool", "_connector_pool"):
                 pool = getattr(self._server, name, None)
                 if pool:
@@ -239,10 +271,14 @@ class Engine:
 
     def _profile_with(self, source):
         p = copy.deepcopy(source)
+        if hasattr(self._server, 'read_abandoned'):
+            self._server.read_abandoned(p['entries'])
         p.setdefault("searches", [])
         p.setdefault("likes", "")
-        p["seen"] = set(p.get("seen", [])) | {e["key"] for e in p["entries"]}
-        p["negative"] = {e["key"] for e in p["entries"] if e["weight"] < 0}
+        is_seen = getattr(self._server, "_abandon_seen", lambda e: True)
+        known = {e["key"] for e in p["entries"]}
+        p["seen"] = set(p.get("seen", [])) - known | {e["key"] for e in p["entries"] if is_seen(e)}
+        p["negative"] = {e["key"] for e in p["entries"] if e["weight"] < 0 and is_seen(e)}
         genres = Counter()
         for e in p["entries"]:
             for g in e.get("genres", []):
@@ -267,6 +303,8 @@ class Engine:
                 if "opinions" in e and not e["opinions"]:
                     del e["opinions"]
                     e.update({k: v for k, v in e.pop("shared", {}).items() if v is not None})
+        if hasattr(s, 'read_abandoned'):
+            s.read_abandoned(p['entries'])
         by_key = {e["key"]: e for e in p["entries"]}
         records = s.merge_imports(p["entries"], by_key, time.time())
         s.merge_feedback(p["entries"], by_key, time.time(), records=records)
@@ -280,6 +318,11 @@ class Engine:
     def _person(self, person):
         if person is not None and person not in self._server.PEOPLE:
             raise ValueError("unknown person")
+
+    def provenance(self):
+        return {"evidence": getattr(self, '_evidence_mode', 'cached-profile'),
+                "learn_rules": getattr(self._server, "LEARN_RULES", None),
+                "profile_learn_rules": getattr(self, '_base', {}).get("LEARN_RULES")}
 
     def _facets(self, model, person=None, types="xktd", n=10, keys=None):
         return facet_view(model, person, types, n, keys)
@@ -300,7 +343,7 @@ class Engine:
             sources[src] += 1
             counts = source_signals.setdefault(src, Counter())
             counts[e["signal"]] += 1
-        return plain({"person": person, "maturity": s.maturity(self._model, person), "titles": len(entries), "entries": clean, "sources": dict(sources),
+        return plain({**self.provenance(), "person": person, "maturity": s.maturity(self._model, person), "titles": len(entries), "entries": clean, "sources": dict(sources),
                 "source_signals": source_signals,
                 "signals": dict(Counter(e["signal"] for e in entries)),
                 **{name: self._facets(self._model, person, types) for name, types in
@@ -311,10 +354,10 @@ class Engine:
         s = self._server
         kind = self._index.get(key, {}).get("kind")
         value, fids = s.person_score(self._model, key, person, kind)
-        confidence, percentile = s.confidence(self._model, key, value, fids, person)
+        confidence, percentile = s.confidence(self._model, key, value, fids, person, kind)
         present = {fid for fid, _ in s.facet_pairs(s.frec(key, kind))}
         facets = self._facets(self._model, person, "xktdangcs", 12, present)
-        return {"key": key, "title": self._index.get(key, {}).get("title"), "person": person, "score": value,
+        return {**self.provenance(), "key": key, "title": self._index.get(key, {}).get("title"), "person": person, "score": value,
                 "percentile": percentile, "confidence": confidence, "maturity": s.maturity(self._model, person),
                 "reasons": s.reasons(self._model, key, fids, 3, person, kind),
                 "facets": facets,
@@ -347,11 +390,11 @@ class Engine:
                         bands[f"{pct//10*10}-{pct//10*10+9}"] += 1
                 row = cid if typ == "tv" else cid + ":" + typ
                 rows[row] = {"person": who, "bands": bands, "unknown": unknown}
-        return {"person": person, "reference": {"kind": m.get("cal_reference"), "size": len(bg)},
+        return {**Engine.provenance(self), "person": person, "reference": {"kind": m.get("cal_reference"), "size": len(bg)},
                 "scores": scores, "rows": rows}
 
     def explain(self, key, person=None):
-        return plain(self._server.explain(key, self._index.get(key, {}).get("kind"), person=person))
+        return {**plain(self._server.explain(key, self._index.get(key, {}).get("kind"), person=person)), **self.provenance()}
 
     def interview(self, person, answer=None):
         self._person(person)
@@ -410,7 +453,14 @@ class Engine:
         evidence = self._evidence([ev for _, evts in stages for ev in evts], top, person, now, 5)
         view = s.title_view(key, kind, person)
         explanation = self.explain(key, person)
-        return {**explanation, **self.score(key, person), "parts": parts, "events": evidence,
+        scored = self.score(key, person)
+        bg = m.get("pbg", {}).get(person, []) if person else m["bg"]
+        value = scored["score"]
+        rank = (bisect.bisect_left(bg, value) + bisect.bisect_right(bg, value))/(2*len(bg)) if bg and value is not None else None
+        version = hashlib.sha256(json.dumps([m.get("cal_reference"), person, bg], separators=(',', ':')).encode()).hexdigest()
+        return {**explanation, **scored, "parts": parts, "events": evidence,
+                "bonus": bonus if rec else None, "rank": rank, "match": scored["percentile"],
+                "background": {"version": version, "count": len(bg), "reference": m.get("cal_reference")},
                 "rung": (view or {}).get("rung"),
                 "bg_n": len(m.get("pbg", {}).get(person, []) if person else m["bg"]),
                 **({"memory": explanation["memory"]} if "memory" in explanation else {})}
@@ -456,13 +506,10 @@ class Engine:
             selected = random.Random(7).sample(loved, min(20, len(loved)))
             held = []
             for key in selected:
-                p = copy.deepcopy(self._profile)
-                p["entries"] = [e for e in p["entries"] if e["key"] != key]
-                p["seen"] = set(p["seen"]) - {key}
-                model = self._build(self._profile_with(p))
-                value, fids = s.person_score(model, key, person, self._index[key]["kind"])
-                label, _ = s.confidence(model, key, value, fids, person)
-                held.append({"key": key, "label": label})
+                with heldout(self, {key}):
+                    value, fids = s.person_score(self._model, key, person, self._index[key]["kind"])
+                    label, _ = s.confidence(self._model, key, value, fids, person, self._index[key]["kind"])
+                    held.append({"key": key, "label": label})
         finally:
             s._seed_stats = seed_stats
             s.clear_seed_cache()
@@ -501,7 +548,7 @@ class Engine:
         for adult in s.adult_people():
             titles = {(e["key"], e["kind"]) for e in s.person_entries(self._profile, adult) if e["weight"] > 0}
             coverage[adult] = {"learned": sum(bool(s.frec(k, kind)) for k, kind in titles), "total": len(titles)}
-        return plain({"person": person, "maturity": s.maturity(m, person), "axes": s.taste_axes(m, person),
+        return plain({**self.provenance(), "person": person, "maturity": s.maturity(m, person), "axes": s.taste_axes(m, person),
             "coverage": coverage,
             "movers": {"window": {"since": since, "cutoff": cutoff, "events": len(window),
                                   "undated": sum(ev["t"] is None for ev in events),
@@ -532,7 +579,7 @@ class Engine:
             report['selection_matches_build'] = True
         cards = feed.get('metas', {}).get('tv') or []
         report['unique_foryou_titles'] = len({(x['id'], x['type']) for x in cards})
-        return report
+        return {**report, **self.provenance()}
 
     def lab(self):
         from .lab import view
@@ -559,11 +606,11 @@ class Engine:
             rows.append({"id": cid, "name": name, "titles": [{"key": m["id"], "title": m.get("name", ""),
                          "kind": "movie" if m.get("type") == "movie" else "tv", "why": self.score(m["id"])["reasons"] or
                          [m.get("description", "").split(" · ")[0]]} for m in metas]})
-        return {"lang": lang, "rows": rows}
+        return {**Engine.provenance(self), "lang": lang, "rows": rows}
 
     def reach(self, person=None, top=20):
         from .reach import view
-        return view(self._server, person, top)
+        return {**view(self._server, person, top), **self.provenance()}
 
     def _rank(self, model, keys, person=None, display=False):
         score = self._server.person_score if display else self._server.score_key
@@ -650,7 +697,7 @@ class Engine:
                 deltas += [{"id": f, "name": model["names"].get(f, f), "before": old_aff.get(f, 0),
                             "after": aff.get(f, 0), "delta": aff.get(f, 0) - old_aff.get(f, 0),
                             **({"person": pp} if len(scopes) > 1 else {})} for f in set(old_aff) | set(aff)]
-            return plain({"person": person, "rows": rows, "top50": self._moves(before, after),
+            return plain({**self.provenance(), "person": person, "rows": rows, "top50": self._moves(before, after),
                           "facets": sorted([d for d in deltas if abs(d["delta"]) > 1e-6], key=lambda d: -abs(d["delta"])),
                           "vetoed": vetoed, "notes": notes,
                           "memory": s.memory_view() if facts else [],
@@ -686,8 +733,8 @@ class Engine:
         s = self._server
         r = s.memory_daily(time.time() if now is None else now, m=self._model, dry_run=True)
         if explain:
-            return {"fact": s.memory_explain(explain, store=r["store"])}
-        return {"dry_run": True, "ops": r["ops"], "refused": r["refused"],
+            return {**self.provenance(), "fact": s.memory_explain(explain, store=r["store"])}
+        return {**self.provenance(), "dry_run": True, "ops": r["ops"], "refused": r["refused"],
                 "facts": s.memory_view(person, now=now, store=r["store"])}
 
     def learn(self):
@@ -699,7 +746,63 @@ class Engine:
         stats["moodpicks"] = {day: {k: v for k, v in pick.items() if k != "at"} for day, pick in stats["moodpicks"].items()}
         stats["tired_titles"] = [{"key": k, "title": title} for k, title in sorted(s.tired_keys().items())]
         stats["credited"] = {k: time.strftime("%Y-%m-%d", time.gmtime(at)) for k, at in s._learn["credited"].items()}
-        return plain(stats)
+        return {**plain(stats), **self.provenance()}
+
+
+@contextmanager
+def heldout(engine, keys):
+    """Rebuild without these titles' evidence or derived memory; restore the copied engine afterwards."""
+    s, keys = engine._server, set(keys)
+    p = copy.deepcopy(engine._profile)
+    removed = [e for e in p['entries'] if e['key'] in keys]
+    raw_ids = keys | {(v.get('item') or {}).get('id') for e in removed
+                      for v in (e, e.get('shared') or {}, *(e.get('opinions') or {}).values())}
+    titles = {(e['title'].casefold(), e['kind']) for e in removed}
+    p['entries'] = [e for e in p['entries'] if e['key'] not in keys]
+    p['seen'] = set(p['seen']) - keys
+    memory = s.memory_load()
+    # Learned evidence lists are capped, so absence of a held-out id cannot prove independence.
+    memory['facts'] = [f for f in memory['facts'] if f['src'] == 'told']
+    def clean(value):
+        if isinstance(value, list):
+            return [clean(v) for v in value]
+        if isinstance(value, dict):
+            return {k: clean(v) for k, v in value.items() if k not in
+                    ('description', '_memory', 'why', 'reasons', 'ready_note', 'weekpick_note')}
+        return value
+    feeds = clean(copy.deepcopy(s._feeds))
+    feeds = {k: v for k, v in feeds.items() if not any(json.dumps(key) in json.dumps(v.get('names', {})) for key in keys)}
+    feedback = [e for e in s.read_feedback() if e['key'] not in keys]
+    active, tonight = s.fold_feedback(feedback)
+    imports = [e for e in s.active_imports() if e['key'] not in keys]
+    loves = [value for value in s.person_loves() if (value[1].casefold(), value[3]) not in titles]
+    with ExitStack() as stack:
+        for name, value in (('read_feedback', feedback), ('read_history', [e for e in s.read_history() if e['id'] not in raw_ids]),
+                            ('read_trakt', [e for e in s.read_trakt() if e['id'] not in raw_ids]), ('person_loves', loves)):
+            stack.enter_context(patch.object(s, name, return_value=value))
+        stack.enter_context(patch.object(s, 'active_imports', return_value=imports))
+        stack.enter_context(patch.object(s, 'feedback_state', return_value={
+            'active': active, 'tonight': tonight, 'blocked': {key for (key, _), e in active.items() if e['action'] == 'not_for_us'}}))
+        for name, value in (('_memory', memory), ('_memory_index', {}), ('_memory_veto', {}), ('_person_models', {}),
+                            ('_home_cache', {}), ('_person_scores', {}), ('_row_kinds', {'profile': None, 'keys': {}}),
+                            ('_title_notes', {'model': None, 'notes': {}}),
+                            ('_feeds', feeds), ('_shown', {}), ('_shown_scoped', {}),
+                            ('_learn', {k: [] if isinstance(v, list) else {} for k, v in s._learn.items()}),
+                            ('_seed_stats', s._seed_stats), ('_profiles', dict(s._profiles)), ('_model', {'m': None})):
+            stack.enter_context(patch.object(s, name, value))
+        p = (s.build_profile(s.read_history(), [], s.read_trakt()) if engine.provenance()['evidence'] == 'raw-evidence'
+             else engine._profile_with(p))
+        p['seen'] -= keys
+        p['negative'] -= keys
+        stack.enter_context(patch.object(engine, '_profile', p))
+        stack.enter_context(patch.object(engine, '_base', p))
+        model = engine._build(p)
+        stack.enter_context(patch.object(engine, '_model', model))
+        s._profiles['household'], s._model['m'] = p, model
+        try:
+            yield
+        finally:
+            s.clear_seed_cache()
 
 
 def suggestions(data, person, config, dismiss=None):

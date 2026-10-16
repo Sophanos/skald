@@ -27,7 +27,7 @@ def main():
             m = s.build_model(profile_with(p, p['entries']))
         assert s._emb and all(len(v) == s.EMB_DIM for v in s._emb.values()) and m['aff']
         gc.collect()
-        out = {'vectors': len(s._emb), 'storage': type(next(iter(s._emb.values()))).__name__,
+        out = {'evidence': 'cached-profile', 'vectors': len(s._emb), 'storage': type(next(iter(s._emb.values()))).__name__,
                'peak_rss_mib': resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (2**20 if sys.platform == 'darwin' else 1024),
                'vector_bytes': sum(sys.getsizeof(v) + (sum(map(sys.getsizeof, v)) if isinstance(v, list) else 0)
                                    for v in s._emb.values())}

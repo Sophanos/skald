@@ -265,18 +265,21 @@ def rank_targets(server, train, targets, universe, selected, seed, person=None, 
                          'candidates': len(candidates), 'nearest_cosine': near,
                          'same_franchise': franchise,
                          'mauc': mauc, 'matched_n': matched_n,
+                         'matched_sha256': matching.identity(e['key'], candidates),
                          'hard': not franchise and (near is None or near < .8)})
         result[variant.name] = rows
     return result
 
 
-def loo(server, profile, targets, universe, selected, seed, person=None):
+def loo(server, profile, targets, universe, selected, seed, person=None, matching=None):
     result = {v.name: [] for v in selected}
-    matching = Matched(server, universe)
+    matching = matching or Matched(server, universe)
     for i, entry in enumerate(targets):
         train = leave_out(profile, [entry['key']])
         rows = rank_targets(server, train, [entry], universe, selected, seed, person, matching)
         for name in result:
+            for row in rows[name]:
+                row['target_id'] = i
             result[name].extend(rows[name])
         if (i + 1) % 50 == 0:
             print(f'  LOO {i+1}/{len(targets)}', flush=True)
@@ -430,7 +433,7 @@ def metric_table(items):
 
 def report(data, elapsed):
     meta = data['metadata']
-    lines = ['# Skald offline replay', '',
+    lines = ['# Skald offline replay', '', 'Evidence: cached-profile.', '',
              f"Snapshot: {meta['snapshot']}; universe n={meta['universe_n']}; seed={meta['seed']}.",
              f'Runtime: {elapsed:.1f}s. No network; local known-title calibration when available; trending fallback skipped.',
              'Ranking ties use ascending key. Unscorable targets count as misses. All numbers are fractions.',
@@ -500,7 +503,7 @@ def run(server, snapshot, selected, use_grid, protocols, seed, probes_path=None)
         profile['seen'] = set(profile['seen']) | {e['key'] for e in profile['entries']}
     profile = profile_with(profile, profile['entries'])
     universe = sorted(set(server._emb) | set(server._facets))
-    data = {'metadata': {'snapshot': str(snapshot), 'seed': seed, 'universe_n': len(universe),
+    data = {'evidence': 'cached-profile', 'metadata': {'snapshot': str(snapshot), 'seed': seed, 'universe_n': len(universe),
                         'profile_n': len(profile['entries']), 'positive_targets_n': len(positives(profile)),
                         'server_sha256': hashlib.sha256((ROOT/'server.py').read_bytes()).hexdigest(),
                         'snapshot_sha256': {name: hashlib.sha256((snapshot/name).read_bytes()).hexdigest()
@@ -581,6 +584,7 @@ def main():
             selected += [variants.Variant('richness', lambda ctx: lambda key, person=None:
                                          richness(ctx.server._facets.get(key, {})))]
             data = run(server, snapshot, selected, use_grid, protocols, SEED, args.probes)
+        print('Evidence: cached-profile')
         if args.baseline:
             baseline = read_json(args.baseline)
             if data['metadata']['snapshot_sha256'] != baseline['metadata']['snapshot_sha256']:

@@ -98,6 +98,7 @@ def main():
     p.add_argument("--check", action="store_true")
     args = p.parse_args()
     with Engine(args.snapshot) as e:
+        print('Evidence:', e.provenance()['evidence'])
         s = e._server
         anchors = s.ANCHORS if args.check else pick(s)
         print("ANCHORS = (")

@@ -171,6 +171,8 @@ def parse(path, stats=None, title_counts=None, **kwargs):
             entry["t"] = stamp
         elif len(entry["ratings"]) >= 3:
             signal, conf = rating_signal(sum(entry["ratings"]) / len(entry["ratings"])), .7
+        elif entry["hidden"]:
+            signal, conf = "not_for_us", 1.
         else:
             if entry["plays"] >= 2:
                 signal, conf = "like", .7
@@ -181,7 +183,5 @@ def parse(path, stats=None, title_counts=None, **kwargs):
                     signal, conf = "abandon", .5
             elif c.kind == "tv" and stale and 0 < watched <= 2:
                 signal, conf = "abandon", .4
-            if signal != "abandon" and entry["hidden"]:
-                signal, conf = "abandon", .8
         out.append(replace(c, signal=signal, conf=conf, n=n, last_ts=entry["t"]))
     return out

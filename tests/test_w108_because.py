@@ -56,7 +56,7 @@ class BecauseRows(unittest.TestCase):
         self.p['entries'].append(e)
         self.p['seen'].add(e['key'])
         self.facets[self.s.fkey(e['key'], kind)] = {'title': e['title'], 'kind': kind, 'g': ['Drama'],
-                                 'y': '2020', 'x': {f'area_{i}': 3}, **facets}
+                                 'y': '2020', 'x': {tuple(self.s.EXPERIENCES)[i % len(self.s.EXPERIENCES)]: 3}, **facets}
         self.recs[i] = [self.item(i * 100 + n) for n in range(1, 21)]
         return e
 
@@ -268,7 +268,7 @@ class BecauseRows(unittest.TestCase):
         self.assertTrue(all(home[cid, 'tv'] for cid in self.rows))
 
     def test_retained_anchors_must_be_diverse_from_rebuilt_and_retained_rows(self):
-        for facets in ({'collection': 90}, {'c': [[90, 'Marvel Studios']]}, {'x': {'quiet': 3}}):
+        for facets in ({'collection': 90}, {'c': [[90, 'Marvel Studios']]}, {'x': {'dread': 3}}):
             for rebuild in (True, False):
                 with self.subTest(facets=facets, rebuild=rebuild):
                     self.s._feeds.clear()
@@ -312,7 +312,7 @@ class BecauseRows(unittest.TestCase):
     def test_same_franchise_universe_or_experience_does_not_take_two_slots(self):
         for facets in (({'collection': 90}, {'collection': 90}),
                        ({'c': [[90, 'Marvel Studios']]}, {'c': [[91, 'Marvel Entertainment']]}),
-                       ({'x': {'quiet': 3, 'mystery': 2}}, {'x': {'quiet': 3, 'mystery': 1}})):
+                       ({'x': {'dread': 3, 'whodunit': 2}}, {'x': {'dread': 3, 'whodunit': 1}})):
             with self.subTest(facets=facets):
                 self.p['entries'].clear()
                 self.seed(1, **facets[0])
@@ -345,7 +345,7 @@ class BecauseRows(unittest.TestCase):
         def enrich(*args):
             for i in (1, 2):
                 self.facets[f'tmdb:{i}'] = {**self.facets[f'tmdb:{i}'], 'collection': 90,
-                                          'x': {'quiet': 3}}
+                                          'x': {'dread': 3}}
         with patch.object(self.s, 'get_model', side_effect=enrich):
             self.assertEqual(len(set(self.built()) - {'_names'}), 2)
 
@@ -384,7 +384,7 @@ class BecauseRows(unittest.TestCase):
         series = {**movie, 'kind': 'tv', 'stype': 'series', 'title': 'Synthetic Series Seed'}
         self.p['entries'].append(series)
         self.facets['tmdb:1@tv'] = {**self.facets[movie['key']], 'kind': 'tv', 'title': series['title'],
-                                   'x': {'series_area': 3}}
+                                   'x': {'war_sacrifice': 3}}
         other = self.seed(2)
         seeds = self.s.because_seeds(self.p)
         self.assertEqual([(e['key'], e['kind']) for e in seeds],

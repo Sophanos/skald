@@ -69,7 +69,7 @@ class Commands(unittest.TestCase):
         self.change.update(op='like', kind='tv', values=['Dark'])
         with patch.object(self.c, 'resolve', return_value={'key': 'tmdb:1', 'kind': 'tv', 'title': 'Dark', 'year': '2017'}):
             self.c.apply(self.s, self.preview())
-        self.assertEqual(self.s.read_feedback()[0]['action'], 'love')
+        self.assertEqual(self.s.read_feedback()[0]['action'], 'like')
         self.c.undo(self.s, ['ana'])
         self.assertFalse(self.s.active_feedback(self.s.read_feedback()))
 

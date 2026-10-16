@@ -15,7 +15,7 @@ from skald import commands, members
 def catalog(n=80):
     return {f'tmdb:{100+i}': {'kind': 'movie' if i % 2 else 'tv',
             'title': 'Invented ' + chr(65+i//26) + chr(65+i%26), 'y': '2020',
-            'g': ['Drama'], 'd': [[i+1, 'Invented maker']], 'x': {'warm': 1},
+            'g': ['Drama'], 'd': [[i+1, 'Invented maker']], 'x': {'heartwarming': 1},
             'vote_count': 500, 'vote_average': 8, 'cr': {'US': 'R' if i % 2 else 'TV-MA'},
             'o': 'An invented story.', 'poster_path': '/fake.jpg', 'backdrop_path': '/fake-wide.jpg'} for i in range(n)}
 
@@ -274,7 +274,7 @@ class CatalogReachTests(unittest.TestCase):
                  'poster_path': '/fake.jpg', 'backdrop_path': '/fake-wide.jpg'} for i in range(8)]
         for it in recs:
             s._facets[f'tmdb:{it["id"]}'] = {'kind': 'movie', 'title': it['title'], 'g': ['Drama'],
-                                          'x': {'warm': 1}, 'vote_count': 500, 'vote_average': 8}
+                                          'x': {'heartwarming': 1}, 'vote_count': 500, 'vote_average': 8}
         self.p['entries'] = [{'key': 'tmdb:1', 'id': 1, 'kind': 'movie', 'stype': 'movie', 'title': 'Invented anchor',
                              'weight': 1, 'age': 0, 'signal': 'loved', 'item': {}, 'by': {'ana': 1}, 'who': 'ana'}]
         with patch.object(s, 'with_art', return_value=(recs, {})), patch.object(s, 'rank_by_taste'), \
@@ -289,7 +289,7 @@ class CatalogReachTests(unittest.TestCase):
                  'backdrop_path': '/fake-wide.jpg'} for i in range(35)]
         for it in recs:
             s._facets[f'tmdb:{it["id"]}'] = {'kind': 'movie', 'title': it['title'], 'g': ['Drama'],
-                                          'x': {'warm': 1}, 'vote_count': 500, 'vote_average': 8}
+                                          'x': {'heartwarming': 1}, 'vote_count': 500, 'vote_average': 8}
         self.p['entries'] = [{'key': 'tmdb:1', 'id': 1, 'kind': 'movie', 'stype': 'movie', 'title': 'Invented anchor',
                              'weight': 1, 'age': 0, 'signal': 'loved', 'item': {}, 'by': {'ana': 1}, 'who': 'ana'}]
         with patch.object(s, 'catalog_picks', return_value=[]), patch.object(s, 'with_art', return_value=(recs, {})), \

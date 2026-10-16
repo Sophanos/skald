@@ -1,10 +1,40 @@
 """Small scoring registry: a factory receives Context and returns score(key, person=None)."""
 from dataclasses import dataclass
+from contextlib import contextmanager
 from functools import cache
 import hashlib
 import math
 import random
 import re
+
+
+@contextmanager
+def experience_overlay(server, overlay):
+    """Add only missing, kind-checked tags for one offline arm, then restore its inputs."""
+    if not isinstance(overlay, dict):
+        raise ValueError('experience overlay must be a JSON object')
+    facets = dict(server._facets)
+    for key, record in overlay.items():
+        if not isinstance(record, dict):
+            raise ValueError(f'invalid experience overlay record: {key}')
+        kind, tags = record.get('kind'), record.get('x')
+        if (kind not in ('movie', 'tv') or key not in facets or facets[key].get('kind') != kind
+                or server.fkey(key.split('@')[0], kind) != key):
+            raise ValueError(f'overlay key/kind is not in the frozen universe: {key}')
+        if 'x' in facets[key] or set(record) != {'kind', 'x'} or not isinstance(tags, dict) or not tags:
+            raise ValueError(f'overlay must add missing experience tags only: {key}')
+        if any(tag not in server.EXPERIENCES or type(value) is not int or not 1 <= value <= 3
+               for tag, value in tags.items()):
+            raise ValueError(f'invalid experience tags: {key}')
+        facets[key] = {**facets[key], 'x': dict(tags)}
+    original, stats = server._facets, server._seed_stats
+    try:
+        server._facets = facets
+        server.clear_seed_cache()
+        yield
+    finally:
+        server._facets, server._seed_stats = original, stats
+        server.clear_seed_cache()
 
 
 @dataclass(frozen=True)

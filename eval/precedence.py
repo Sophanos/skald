@@ -44,6 +44,7 @@ def event(s, action, age=10, src='import:letterboxd', who='ana', eid='a', **item
 
 def cases(s):
     imp = lambda action, age=10, **kw: event(s, action, age, **kw)
+    inferred = lambda **kw: {**imp('abandon', src='import:netflix', **kw), 'conf': .4}
     old = lambda action, age=400, **kw: imp(action, age, src='import:imdb', eid='b', **kw)
     tv = lambda **kw: event(s, 'seen', 100, src='tv', who='together', **kw)
     remote = lambda action, who='ana', age=10: event(s, action, age, src='remote', who=who, eid=who)
@@ -53,11 +54,11 @@ def cases(s):
         ('I1', [old('not_for_us'), imp('love')], 'loved', None),
         ('I2', [old('love'), imp('not_for_us')], 'disliked', None),
         ('I3', [old('love'), imp('like')], 'liked', None),
-        ('A1', [old('love'), imp('abandon')], 'loved', None),
+        ('A1', [old('love'), inferred()], 'loved', None),
         ('A2', [old('abandon'), imp('love')], 'loved', None),
-        ('A3', [old('like'), imp('abandon')], 'liked', None),
-        ('A4', [old('seen'), imp('abandon')], 'watched', None),
-        ('I5', [old('seen', who='both'), imp('abandon')], 'watched', 'watched'),
+        ('A3', [old('like'), inferred()], 'liked', None),
+        ('A4', [old('seen'), inferred()], 'watched', None),
+        ('I5', [old('seen', who='both'), inferred()], 'watched', 'watched'),
         ('T1', [old('love', 10), imp('not_for_us')], 'disliked', None),
         ('T2', [imp('love', src='import:netflix'), old('like', 10)], 'liked', None),
         ('T3', [old('abandon', 10), imp('love')], 'loved', None),
@@ -70,9 +71,9 @@ def cases(s):
         ('S7', [tv(progress=.1), imp('seen')], 'watched', 'abandoned'),
         ('S8', [tv(progress=.1), trakt('seen')], 'abandoned', 'watched'),
         ('S9', [tv(progress=.1), imp('like')], 'liked', 'abandoned'),
-        ('S10', [tv(played=True), imp('abandon')], 'watched', 'watched'),
+        ('S10', [tv(played=True), inferred()], 'watched', 'watched'),
         ('K1', [trakt('abandon'), imp('love', who='ben')], None, 'loved'),
-        ('K2', [trakt('seen'), imp('abandon', who='ben')], None, 'watched'),
+        ('K2', [trakt('seen'), inferred(who='ben')], None, 'watched'),
         ('K3', [trakt('love'), imp('not_for_us', who='ben')], None, 'disliked'),
         ('K4', [trakt('love', 10), imp('not_for_us', 2000, who='ben')], None, 'disliked'),
         ('D1', [event(s, 'love', 400, src='told'), imp('not_for_us')], 'loved', None),

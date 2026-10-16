@@ -532,7 +532,8 @@ class PMDBTests(unittest.TestCase):
         for fields in ({'played': True, 'signal': 'watched', 'weight': 2},
                        {'rating': 8, 'signal': 'loved', 'weight': 3}):
             self.s._connector_write('trakt-' + self.person + '.history', {'items': [{**interest, **fields}]})
-            self.assertEqual(self.items()['movie', 'tmdb:7']['signal'], fields['signal'])
+            self.assertEqual(self.items()['movie', 'tmdb:7']['signal'],
+                             fields['signal'] if 'rating' in fields else 'abandoned')
 
     def test_resume_timestamp_keeps_show_in_next_episode_row(self):
         self.routes['watched'] = []

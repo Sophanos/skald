@@ -136,6 +136,25 @@ class PersonalWeekly(unittest.TestCase):
             s.weekpicks_feed(s.LANG)
             self.assertEqual(llm.call_count, 1)
 
+    def test_weekly_prompt_does_not_call_available_early_stops_seen(self):
+        self.picker()
+        s = self.s
+        for n, title, release, reason in ((910, 'Synthetic held film', '2026-10-20', 'release'),
+                                           (911, 'Synthetic released film', '2026-10-13', 'release'),
+                                           (912, 'Synthetic broken stream', '2026-10-20', 'stream')):
+            key = f'tmdb:{n}'
+            s._facets[key] = dict(kind='movie', dr=release)
+            s._profiles['household']['entries'].append(dict(key=key, title=title, kind='movie', by=['together'],
+                signal='abandoned', weight=0, abandon='early', abandon_reason=reason))
+        with ReplayLLM(s) as replay:
+            replay.arm({'choices': [{'message': {'content': '{}'}}]})
+            s.weekpicks_feed(s.LANG)
+        seen = json.loads(replay.bodies[0]['messages'][1]['content'].split('\n')[-1])['seen']
+        self.assertIn(s._profiles['household']['entries'][0]['title'], seen)
+        self.assertIn('Synthetic held film', seen)
+        self.assertNotIn('Synthetic released film', seen)
+        self.assertNotIn('Synthetic broken stream', seen)
+
     def test_failure_no_key_budget_and_failed_reservation_never_fallback_or_retry(self):
         self.picker()
         s = self.s

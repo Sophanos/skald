@@ -472,6 +472,25 @@ class Ready(unittest.TestCase):
         self.build()
         self.assertEqual(len(self.serve(who='ana')), 2)
 
+    def test_release_early_part_is_held_per_member_without_blocking_rewatches(self):
+        s = self.s
+        eva, oskar = s.PEOPLE[:2]
+        s._facets['tmdb:102'] = dict(kind='movie', dr='2026-10-20', runtime=110)
+        for today, reason, expected in ((TODAY, 'release', ['tmdb:101']),
+                                        (dt.datetime(2026, 10, 20, 12), 'release', ['tmdb:101', 'tmdb:102']),
+                                        (TODAY, 'stream', ['tmdb:101', 'tmdb:102']),
+                                        (TODAY, None, ['tmdb:101', 'tmdb:102'])):
+            with self.subTest(today=today, reason=reason), patch.object(s, 'local_now', return_value=today):
+                stop = entry(102, eva)
+                stop.update(by=[eva, oskar], opinions={oskar: dict(signal='watched', weight=1, item={}, flags=[])})
+                if reason:
+                    stop.update(signal='abandoned', weight=0, abandon='early', abandon_reason=reason)
+                self.profile(entry(101, eva), stop)
+                self.build()
+                self.assertEqual([x['id'] for x in self.serve(who=eva)], expected)
+                self.assertEqual([x['id'] for x in self.serve(who=oskar)], ['tmdb:101', 'tmdb:102'])
+                self.assertEqual([x['id'] for x in self.serve()], ['tmdb:101', 'tmdb:102'])
+
     def test_finished_prior_seasons_and_unknown_progress_do_not_qualify(self):
         for item, reason in ((dict(last_episode=[2, 4]), 'caught_up'), ({}, 'unknown_progress')):
             with self.subTest(item=item):

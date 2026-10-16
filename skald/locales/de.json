@@ -1,4 +1,8 @@
 {
+  "abandon.early.release": "Abgebrochen, bevor er digital erschien",
+  "abandon.early.stream": "Stream war kaputt",
+  "abandon.related": "Abgebrochen, aber nah an Gesehenem",
+  "abandon.pending": "Noch zu wenig Infos",
   "ready.catchup.one": "Staffel {season} ab {date} · noch {count} Staffel nachholen",
   "row.ready": "Einstimmen",
   "row.ready.named": "Einstimmen auf {title}",
@@ -125,6 +129,8 @@
   "why.told": "Weil du gesagt hast, du magst ",
   "why.like": "Du magst ",
   "match.strong": "Passt richtig gut",
+  "match.shared": "Passt richtig gut für alle",
+  "match.one": "Gestützt auf den Geschmack einer Person",
   "match.good": "Passt gut",
   "match.wildcard": "Mal was anderes",
   "note.unseen.long": "Lange nicht gesehen",
@@ -427,5 +433,16 @@
   "forget.settings_copies_deleted": "Ältere Einstellungskopien gelöscht: {count}.",
   "forget.backups_preview": "Skald löscht außerdem die älteren Sicherungen ({count}) und erstellt danach eine neue Sicherung.",
   "forget.backups_done": "Ältere Sicherungen gelöscht: {count}; neue Sicherung: {name}.",
-  "forget.backups_failed": "Ältere Sicherungen gelöscht: {count}. Bis zur nächsten täglichen Sicherung gibt es keine Sicherung."
+  "forget.backups_failed": "Ältere Sicherungen gelöscht: {count}. Bis zur nächsten täglichen Sicherung gibt es keine Sicherung.",
+  "tags.preview": "Erlebnis-Tags für {count} Titel prüfen?",
+  "tags.queued": "{count} Titel zur Erlebnis-Markierung vorgemerkt.",
+  "tags.detail": "Der Hintergrundprozess prüft Tags im bestehenden KI-Budget. Manuelle Tags bleiben. Bereits geschriebene Tags lassen sich mit dieser Anfrage nicht zurücknehmen.",
+  "tags.adult": "Bitte ein aktuelles erwachsenes Haushaltsmitglied, die Titel neu zu markieren.",
+  "tags.arguments": "Wähle einen Titel oder alle veralteten Erlebnis-Tags.",
+  "tags.title_error": "Verwende einen eindeutigen gespeicherten Titel oder seine Titel-ID.",
+  "tags.queue_error": "Die Warteschlange für Erlebnis-Tags konnte nicht gelesen werden.",
+  "tags.local": "Erlebnis-Tags lassen sich nur im lokalen DATA_DIR neu prüfen.",
+  "tags.help": "Erlebnis-Tags zur erneuten Prüfung vormerken",
+  "tags.help.retag": "einen gespeicherten Titel vormerken; manuelle Tags bleiben",
+  "tags.help.stale": "gespeicherte Tags mit altem Schema oder alten Eingaben vormerken"
 }

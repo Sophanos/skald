@@ -13,7 +13,7 @@ from test_w116_settings import SettingsFixture
 
 
 HOUSEHOLD = {
-    'household_erase': {},
+    'household_erase': {}, 'tags_retag': {},
     'ai_budget': dict(values=[2]),
     'row_rename': dict(values=['foryou', 'Invented picks']),
     'row_hide': dict(values=['top10']), 'row_show': dict(values=['digital']),

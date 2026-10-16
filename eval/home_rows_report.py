@@ -52,6 +52,8 @@ def main():
         if args.lang and not engine._server.LANG_RE.fullmatch(args.lang):
             parser.error('invalid language')
         report = scope_report(engine._server, args.lang)
+        for stats in report.values():
+            stats.update(engine.provenance())
     for scope, stats in report.items():
         print(scope + ': ' + json.dumps(stats, sort_keys=True))
 

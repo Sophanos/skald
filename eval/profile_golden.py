@@ -154,6 +154,10 @@ def offline_server(source, data=FIXTURE / 'data', stubs=None, n=None, profile=No
                 pool = getattr(s, name, None)
                 if pool is not None:
                     pool.shutdown(wait=True, cancel_futures=True)
+            if hasattr(s, '_decide_queue'):
+                s.flush_decisions()
+                s._decide_queue.put(False)
+                s._decide_queue.join()
             deadline = time.monotonic() + 10
             for thread in set(threading.enumerate()) - before:
                 thread.join(max(0, deadline - time.monotonic()))

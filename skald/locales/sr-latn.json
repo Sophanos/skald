@@ -1,4 +1,8 @@
 {
+  "abandon.early.release": "Prekinuto pre digitalnog izdanja",
+  "abandon.early.stream": "Strim je bio pokvaren",
+  "abandon.related": "Prekinuto, ali blisko naslovima koje ste gledali",
+  "abandon.pending": "Još nema dovoljno informacija",
   "ready.catchup.one": "Sezona {season} počinje {date} · Sezone za nadoknadu: {count}",
   "row.ready": "Pripremi se",
   "row.ready.named": "Pripremi se za {title}",
@@ -125,6 +129,8 @@
   "why.told": "Jer kažeš da voliš ",
   "why.like": "Voliš ",
   "match.strong": "Baš po tvom ukusu",
+  "match.shared": "Baš po svačijem ukusu",
+  "match.one": "Na osnovu ukusa jedne osobe",
   "match.good": "Po tvom ukusu",
   "match.wildcard": "Nešto drugačije",
   "note.unseen.long": "Odavno nije gledano",
@@ -427,5 +433,16 @@
   "forget.settings_copies_deleted": "Obrisane starije kopije podešavanja: {count}.",
   "forget.backups_preview": "Skald briše i starije rezervne kopije ({count}), a zatim pravi novu rezervnu kopiju.",
   "forget.backups_done": "Obrisano starijih rezervnih kopija: {count}; nova rezervna kopija: {name}.",
-  "forget.backups_failed": "Obrisano starijih rezervnih kopija: {count}. Do sledećeg dnevnog pravljenja rezervne kopije nema rezervne kopije."
+  "forget.backups_failed": "Obrisano starijih rezervnih kopija: {count}. Do sledećeg dnevnog pravljenja rezervne kopije nema rezervne kopije.",
+  "tags.preview": "Proveriti oznake doživljaja za {count} naslova?",
+  "tags.queued": "{count} naslova čeka označavanje doživljaja.",
+  "tags.detail": "Pozadinski proces proverava oznake u okviru postojećeg AI budžeta. Ručne oznake ostaju. Ovaj zahtev ne može poništiti već upisane oznake.",
+  "tags.adult": "Zamoli trenutnog odraslog člana domaćinstva da ponovo označi naslove.",
+  "tags.arguments": "Izaberi jedan naslov ili sve zastarele oznake doživljaja.",
+  "tags.title_error": "Koristi jedan tačan sačuvan naslov ili njegov ID.",
+  "tags.queue_error": "Red za oznake doživljaja nije mogao da se pročita.",
+  "tags.local": "Ponovno označavanje radi samo sa lokalnim DATA_DIR.",
+  "tags.help": "zakaži novu proveru oznaka doživljaja",
+  "tags.help.retag": "zakaži proveru jednog sačuvanog naslova; ručne oznake ostaju",
+  "tags.help.stale": "zakaži proveru oznaka sa starom šemom ili podacima"
 }

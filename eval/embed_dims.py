@@ -190,7 +190,8 @@ def table(result):
 
 
 def report(result, titles):
-    lines = ['# Embedding dimensions', '', 'P1 is leave-one-out over the cached universe. Scores are fractions.',
+    lines = ['# Embedding dimensions', '', 'Evidence: ' + result['evidence'],
+             'P1 is leave-one-out over the cached universe. Scores are fractions.',
              'Best weights use hash-tune mAUC, ties prefer lower weight; screen lists are diagnostic score rankings.',
              'Static cached features can contain future information. Hard slices differ by arm. Storage excludes JSON/base64.',
              'Intervals resample paired targets 2000 times, seed 0; they do not capture tuning or shared training uncertainty.',
@@ -229,6 +230,7 @@ def compare(data, vectors, dims, weights, out):
     result = {'arms': [], 'screen': {}, 'selection': 'hash-tune mAUC; lower weight breaks ties',
               'storage': {str(d): 2*d*len(candidate['vectors'])/1_000_000 for d in dims}}
     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()), Engine(data) as engine:
+        result.update(engine.provenance())
         s, profile = engine._server, engine._profile
         universe = sorted(k for k in set(baseline['vectors']) | set(s._facets) if '@' not in k)
         live = s.SCORE_BLEND

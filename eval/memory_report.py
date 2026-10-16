@@ -65,6 +65,11 @@ def shares(s, p):
 
 def supports(s, evts, m):
     candidates = {}
+    profile = s._profiles.get('household') or {}
+    titles = {(e['key'], e['kind']) for e in profile.get('entries', ())}
+    moves = s.title_moves()
+    readings = {(p, e['key'], e['kind']): s.entry_weight(e)
+                for p in s.PEOPLE for e in s.person_entries(profile, p)} if profile.get('entries') else {}
     for p in s.PEOPLE:
         pairs = sorted(((fid, a) for fid, a in m['paff'].get(p, {}).items()
                         if fid[0] in s.MEMORY_TYPES and fid in m['names'] and s.speaks(fid, m['names'][fid]) and a),
@@ -79,8 +84,15 @@ def supports(s, evts, m):
             continue
         held = {f for f, _ in s.facet_pairs(s.frec(ev['key'], ev['kind']))}
         kind = 'like' if ev['action'] in s.MEMORY_POS else 'avoid'
+        owners = s.watch_owners(ev, moves)
         for p in s.PEOPLE:
-            if p not in ev['by']:
+            if p not in ev['by'] and p not in owners:
+                continue
+            weight = readings.get((p, ev['key'], ev['kind']))
+            if weight is None:
+                weight = (0 if (ev['key'], ev['kind']) in titles or p not in owners or ev['action'] == 'abandon'
+                          else ev['conf'] * (1 if kind == 'like' else -1))
+            if not weight or (weight > 0) != (kind == 'like'):
                 continue
             for fid in held & candidates[p].keys():
                 acc = candidates[p][fid]

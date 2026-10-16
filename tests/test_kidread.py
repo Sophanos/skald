@@ -305,8 +305,8 @@ class KidRead(unittest.TestCase):
         self.assertEqual(plays.days_state(self.data), {})
 
     def test_child_read_hints_invalidate_cached_parses_and_routes(self):
-        self.assertEqual(self.s.DECISIONS['parse_command']['ver'], 19)
-        self.assertEqual(self.s.DECISIONS['route_query']['ver'], 9)
+        self.assertEqual(self.s.DECISIONS['parse_command']['ver'], 20)
+        self.assertEqual(self.s.DECISIONS['route_query']['ver'], 10)
         self.assertIn('person the named child', commands.REGISTRY['plays_recent']['hint'])
         self.assertIn('person the named child', commands.REGISTRY['plays_explain']['hint'])
         self.assertIn('person the named child', commands.REGISTRY['taste_drivers']['hint'])

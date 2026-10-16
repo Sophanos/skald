@@ -81,7 +81,7 @@ def run(snapshot, person=None, n=20, seed=7, base=None):
                 out[who] = {'n': len(results), 'checks': checks, 'K3_limit': limit,
                             'K3_median': statistics.median(r['values']['K3'] for r in results) if results else None,
                             'probes': results}
-    return {'seed': seed, 'people': out}
+    return {**engine.provenance(), 'seed': seed, 'people': out}
 
 
 def main():
@@ -101,6 +101,7 @@ def main():
     if args.json:
         print(json.dumps(result, allow_nan=False))
     else:
+        print('Evidence:', result['evidence'])
         for who, report in result['people'].items():
             print(who, 'n', report['n'], 'K3 median', report['K3_median'], 'base limit', report['K3_limit'])
             for check, values in report['checks'].items():

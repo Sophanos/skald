@@ -161,7 +161,7 @@ class TraktZipTests(unittest.TestCase):
             for prefix in ("comments", "notes", "likes"):
                 (folder / f"{prefix}-movies.json").write_text(json.dumps([{**title(prefix), "likes": True}]))
             rows = {c.title: c.signal for c in parse("trakt", folder)}
-            self.assertEqual(rows, {"Watched": "seen", "Series": "seen", "Rated": "love", "Wish": "interest", "Favorite": "love", "Hidden": "abandon", "Playback": "seen"})
+            self.assertEqual(rows, {"Watched": "seen", "Series": "seen", "Rated": "love", "Wish": "interest", "Favorite": "love", "Hidden": "not_for_us", "Playback": "seen"})
             only = folder / "collection-movies.json"
             self.assertEqual(parse("trakt", only), [])
 

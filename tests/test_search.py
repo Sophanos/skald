@@ -232,7 +232,7 @@ class SearchTests(unittest.TestCase):
         self.model.update(cal=1, vec=None, vbase=0, bscale=1, bg=bg, holders={},
                           pbg={"ana": bg, "ben": bg}, nexp={"household": 60, "ana": 60, "ben": 60})
         metas = [{"id": f"tmdb:{i}", "type": "movie"} for i in (9101, 9102, 9103)]
-        facets = {meta["id"]: {"kind": "movie", "x": {tag: 4} if tag else {}}
+        facets = {meta["id"]: {"kind": "movie", "x": {tag: 3} if tag else {}}
                   for meta, tag in zip(metas, ("hero_burden", "slow_romance", None))}
         with patch.dict(self.s._facets, facets), patch.object(self.s, "PEOPLE", ("ana", "ben", "ciro")), \
                 patch.object(self.s, "match_note", wraps=self.s.match_note) as notes, \

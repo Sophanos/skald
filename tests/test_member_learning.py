@@ -5,12 +5,14 @@ import io
 import json
 import os
 from pathlib import Path
+import threading
 import unittest
 from unittest.mock import patch
 
 from skald.__main__ import main, parser, text_output
 from skald import setup
 from test_taste_report import TasteCase, NOW
+from decide_kit import load_server, close_server
 
 
 class MemberLearningTests(TasteCase):
@@ -61,7 +63,7 @@ class MemberLearningTests(TasteCase):
         self.assertEqual(len(pairs), 750)
         self.assertEqual(tags.call_args.kwargs['max_batches'], 16)
 
-    def test_tagging_keeps_adult_positive_scope_and_fair_order(self):
+    def test_tagging_keeps_adult_history_scope_and_fair_order(self):
         s = self.s
         p = {'entries': [self.entry(5001, 'kid'), self.entry(5002, 'kid'),
                         self.entry(1001, 'ben', 1.8), self.entry(1002, 'ben', 1.8),
@@ -75,12 +77,96 @@ class MemberLearningTests(TasteCase):
                 patch.object(s, 'ensure_facets') as facets:
             self.build(p)
         self.assertEqual(tags.call_args.args[0], [('tmdb:1', 'movie'), ('tmdb:1001', 'movie'),
-            ('tmdb:3', 'movie'), ('tmdb:2', 'movie'), ('tmdb:1002', 'movie'), ('tmdb:7', 'tv')])
+            ('tmdb:3', 'movie'), ('tmdb:2', 'movie'), ('tmdb:1002', 'movie'), ('tmdb:7', 'tv'),
+            ('tmdb:10', 'movie'), ('tmdb:9', 'movie')])
         self.assertEqual(tags.call_args.kwargs, {'max_batches': 16, 'fetch_facets': False})
         self.assertEqual(set(embeddings.call_args_list[0].args[0]),
             {('tmdb:1', 'movie'), ('tmdb:2', 'movie'), ('tmdb:3', 'movie'), ('tmdb:7', 'tv'),
              ('tmdb:9', 'movie'), ('tmdb:10', 'movie'), ('tmdb:1001', 'movie'), ('tmdb:1002', 'movie')})
         self.assertEqual(set(facets.call_args.args[0]), {(e['key'], e['kind']) for e in p['entries']})
+
+    def test_tag_queue_includes_all_stop_readings_and_dislikes(self):
+        s = self.s
+        entries = [self.entry(1, 'eva'), self.entry(2, 'oskar'),
+                   self.entry(3, 'eva', 0, signal='abandoned', abandon='unsure'),
+                   self.entry(4, 'eva', -.5, signal='abandoned', abandon='far'),
+                   self.entry(5, 'oskar', .5, signal='interest', abandon='related'),
+                   self.entry(6, 'oskar', -2, signal='disliked')]
+        with patch.object(s, 'PEOPLE', ('eva', 'oskar')), patch.object(s, 'tag_experiences') as tags:
+            m = self.build({'entries': entries, 'seen': set()})
+        self.assertEqual(set(tags.call_args.args[0]), {(e['key'], e['kind']) for e in entries})
+        self.assertTrue({'tmdb:3', 'tmdb:4', 'tmdb:5'}.isdisjoint(m['ent']))
+
+    def test_worker_refreshes_model_and_calibration_after_candidate_tags(self):
+        s = load_server(Path(self.temp.name))
+        self.addCleanup(close_server, s)
+        entries = [self.entry(i, 'eva', 3., signal='loved') for i in range(1, 21)]
+        p = {'entries': entries, 'seen': {e['key'] for e in entries}, 'hash': 'fixture'}
+        s._facets.update({f'tmdb:{i}': {'kind': 'movie', 'title': f'Fixture {i}', 'o': 'Fixture',
+            'k': [[1, 'Space']], **({'x': {'dread': 3}} if i <= 20 else
+                                  {'x': {'feel_good': 3}} if i > 30 else {})} for i in range(1, 251)})
+        for rec in s._facets.values():
+            if rec.get('x'):
+                rec['x_state'] = {'status': 'manual'}
+        def enrich(*args):
+            s.tag_experiences([('tmdb:21', 'movie')], max_batches=2)
+        with patch.object(s, 'PEOPLE', ('eva', 'oskar')), patch.object(s, 'OR_KEY', 'offline'), \
+                patch.object(s, 'llm_text', return_value='1|dread:3'), \
+                patch.object(s, 'ensure_emb'), patch.object(s, '_feed_started', True), \
+                patch.object(s, 'refresh_profiles', return_value={}), patch.object(s, 'build_feeds', side_effect=enrich):
+            s._profiles['household'] = p
+            old = s.get_model()
+            old_bg = list(old['pbg']['eva'])
+            s.feed_pass(s.local_now(), {})
+            new = s.get_model(False)
+            self.assertTrue(new is not old)
+            self.assertNotEqual(new['pbg']['eva'], old_bg)
+            with redirect_stdout(io.StringIO()):
+                expected = s.build_model(p)
+            self.assertEqual(new['paff'], expected['paff'])
+            self.assertEqual(new['pbg'], expected['pbg'])
+
+    def test_tags_landing_during_model_build_still_trigger_worker_refresh(self):
+        s = load_server(Path(self.temp.name))
+        self.addCleanup(close_server, s)
+        entries = [self.entry(i, 'eva', 3., signal='loved') for i in range(1, 21)]
+        p = {'entries': entries, 'seen': {e['key'] for e in entries}, 'hash': 'fixture'}
+        s._facets.update({f'tmdb:{i}': {'kind': 'movie', 'title': f'Fixture {i}', 'o': 'Fixture',
+            'k': [[1, 'Space']], **({'x': {'dread': 3}} if i <= 20 else
+                                  {'x': {'feel_good': 3}} if i > 30 else {})} for i in range(1, 251)})
+        for rec in s._facets.values():
+            if rec.get('x'):
+                rec['x_state'] = {'status': 'manual'}
+        captured, resume = threading.Event(), threading.Event()
+        affinities = s.affinities
+        def pause(*args, **kwargs):
+            if not captured.is_set():
+                captured.set()  # build_model has already captured its facet store and tag version.
+                if not resume.wait(5):
+                    raise AssertionError('model build was not resumed')
+            return affinities(*args, **kwargs)
+        with patch.object(s, 'PEOPLE', ('eva', 'oskar')), patch.object(s, 'OR_KEY', 'offline'), \
+                patch.object(s, 'llm_text', return_value='1|dread:3'), patch.object(s, 'ensure_emb'), \
+                patch.object(s, 'affinities', side_effect=pause), patch.object(s, '_feed_started', True), \
+                patch.object(s, 'refresh_profiles', return_value={}), patch.object(s, 'build_feeds'):
+            s._profiles['household'] = p
+            version = s._tag_version
+            pending = s._outer.submit(s.get_model)
+            try:
+                self.assertTrue(captured.wait(5))
+                self.assertEqual(s.tag_experiences([('tmdb:21', 'movie')]), 1)
+            finally:
+                resume.set()
+                built = pending.result(timeout=5)
+            self.assertEqual(built['tag_version'], version)
+            self.assertGreater(s._tag_version, version)
+            s.feed_pass(s.local_now(), {})
+            fresh = s.get_model(False)
+            self.assertTrue(fresh is not built)
+            self.assertEqual(fresh['tag_version'], s._tag_version)
+            expected = s.build_model(p)
+            self.assertEqual(fresh['paff'], expected['paff'])
+            self.assertEqual(fresh['pbg'], expected['pbg'])
 
     def test_child_overlap_does_not_advance_one_adults_tagging_queue(self):
         s = self.s

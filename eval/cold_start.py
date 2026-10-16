@@ -76,6 +76,8 @@ def main():
         profile = replay.read_json(Path(args.snapshot) / 'profile.json')
         profile = replay.profile_with(profile, profile['entries'])
         result = run(server, profile, sorted(set(server._emb) | set(server._facets)))
+    result['evidence'] = 'cached-profile'
+    print('Evidence: cached-profile')
     (output/'cold_start.json').write_text(json.dumps(result, indent=2, allow_nan=False)+'\n')
 
 

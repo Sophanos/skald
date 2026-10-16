@@ -16,7 +16,7 @@ LOCK = 'history.lock'
 _writer_lock = threading.RLock()
 _locked_paths = set()
 ITEM_FIELDS = ('played', 'plays', 'progress', 'episodes_played', 'last_episode', 'resume_episode', 'rating', 'completed',
-               'favorite', 'dropped', 'likes', 'signal', 'weight', 'flags')
+               'favorite', 'dropped', 'likes', 'signal', 'weight', 'flags', 'duration_min')
 
 
 @contextmanager

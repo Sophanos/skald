@@ -124,6 +124,25 @@ class KeysTests(unittest.TestCase):
                 self.assertEqual(alias['o'], second + ' overview')
                 self.assertEqual(alias['x'], {'cozy_case': 3})
 
+    def test_ranking_tags_missing_alias_after_fifty_tagged_titles_and_retries(self):
+        s = self.s
+        s._facets.update({f'tmdb:{i}': self.record('movie') for i in range(1, 52)})
+        for i in range(1, 51):
+            s._facets[f'tmdb:{i}']['x_state'] = {'status': 'manual'}
+        s._facets['tmdb:51@tv'] = {**self.record('tv'), 'o': 'Fixture series'}
+        del s._facets['tmdb:51@tv']['x']
+        items = [(f'tmdb:{i}', 'movie', {}) for i in range(1, 51)] + [('tmdb:51', 'tv', {})]
+        with patch.object(s, 'ensure_facets'), patch.object(s, 'ensure_emb'), \
+                patch.object(s.time, 'time', return_value=1800000000.) as clock, \
+                patch.object(s, 'llm_text', side_effect=[s.BudgetExceeded('fixture'), '', '1|dread:3']) as llm:
+            for attempt in range(3):
+                s.rank_by_taste(None, items)
+                self.assertFalse(s._tagging)
+                self.assertEqual(bool(s._facets['tmdb:51@tv'].get('x')), attempt == 2)
+                clock.return_value += s.TAG_COOLDOWN
+        self.assertEqual(llm.call_count, 3)
+        self.assertEqual(s._facets['tmdb:51']['x'], self.record('movie')['x'])
+
     def test_embedding_kind_mismatch_embeds_alias_without_facets(self):
         s = self.s
         self.vector('tmdb:1', 'movie', 0)

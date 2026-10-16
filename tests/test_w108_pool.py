@@ -254,6 +254,22 @@ class PoolTests(unittest.TestCase):
                     patch.object(self.s, 'match_pct', return_value=None), patch.object(self.s, 'reasons', return_value=[]):
                 self.assertEqual(len(self.s.candidate_pool(self.profile(entries))), limit)
 
+    def test_tag_queue_skips_fifty_tagged_candidates_before_limit(self):
+        s = self.s
+        facts = {f'tmdb:{i}': {'kind': 'movie', 'title': f'Fixture {i}', 'o': 'Fixture',
+                 **({'x': {'dread': 3}, 'x_state': {'status': 'manual'}} if i < 151 else {})} for i in range(101, 152)}
+        with patch.dict(s._facets, facts, clear=True), patch.object(s, 'OR_KEY', 'offline'), \
+                patch.object(s, 'llm_text', return_value='1|banter_duo:3') as llm, \
+                patch.object(s, 'catalog_picks', return_value=[]):
+            self.build([seed(1), seed(2)], {
+                'movie/1/recommendations': [title(i) for i in range(101, 121)],
+                'movie/1/similar': [title(i) for i in range(121, 141)],
+                'movie/2/recommendations': [title(i) for i in range(141, 152)]},
+                       facts=facts, scores={f'tmdb:{i}': -i for i in range(101, 152)})
+            tagged = s.frec('tmdb:151', 'movie').get('x')
+        self.assertEqual(tagged, {'banter_duo': 3})
+        self.assertEqual(llm.call_count, 1)
+
     def test_pool_calls_belong_to_background_personal_builder(self):
         tree = ast.parse((Path(__file__).resolve().parents[1] / 'server.py').read_text())
         callers = [node.name for node in tree.body if isinstance(node, ast.FunctionDef)

@@ -35,7 +35,7 @@ def simulation(snapshot, source):
             picks = [s.explain_pick_rule({"key": k, "kind": s._facets[k].get("kind"), "person": p}, {})[0] for k in probe]
             scores = [e.score(k, p) for k in probe]
             matched = [(v["match"], v["confidence"]) for v in views]
-            result[p] = {"explicit": m["nexp"][p], "state": s.maturity(m, p)["state"] if hasattr(s, "maturity") else "unguarded",
+            result[p] = {**e.provenance(), "explicit": m["nexp"][p], "state": s.maturity(m, p)["state"] if hasattr(s, "maturity") else "unguarded",
                 "title_view": sum(v["match"] is not None for v in views), "explain_pick": sum(v["match"] is not None for v in picks),
                 "match_note": sum(bool(s.match_note(k, person=p, kind=s._facets[k].get("kind"))) for k in probe),
                 "engine_score": sum(v["percentile"] is not None for v in scores),

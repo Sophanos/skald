@@ -1,4 +1,8 @@
 {
+  "abandon.early.release": "Stopped before it was out digitally",
+  "abandon.early.stream": "Stream was broken",
+  "abandon.related": "Stopped, but close to titles you watched",
+  "abandon.pending": "Not enough information yet",
   "ready.catchup.one": "Season {season} starts {date} · {count} season to catch up",
   "row.ready": "Get Ready",
   "row.ready.named": "Get Ready for {title}",
@@ -90,6 +94,8 @@
   "why.told": "Because you told me you like ",
   "why.like": "You like ",
   "match.strong": "Strong fit",
+  "match.shared": "Strong fit for everyone",
+  "match.one": "Supported by one member's taste",
   "match.good": "Good fit",
   "match.wildcard": "Wildcard",
   "note.unseen.long": "Not seen in ages",
@@ -427,5 +433,16 @@
   "forget.settings_copies_deleted": "Older settings copies deleted: {count}.",
   "forget.backups_preview": "Older backups to delete: {count}. Skald then takes one fresh backup.",
   "forget.backups_done": "Older backups deleted: {count}; fresh backup: {name}.",
-  "forget.backups_failed": "Older backups deleted: {count}. No backup exists until the next daily backup."
+  "forget.backups_failed": "Older backups deleted: {count}. No backup exists until the next daily backup.",
+  "tags.preview": "Check experience tags for {count} titles?",
+  "tags.queued": "Queued {count} titles for experience tagging.",
+  "tags.detail": "The worker checks tags within the existing AI budget. Manual tags stay. This request cannot undo tags already written.",
+  "tags.adult": "Ask a current adult household member to retag titles.",
+  "tags.arguments": "Choose one title or all stale experience tags.",
+  "tags.title_error": "Use one exact cached title or its title id.",
+  "tags.queue_error": "The experience tag queue could not be read.",
+  "tags.local": "Experience retagging runs only against local DATA_DIR.",
+  "tags.help": "queue experience tags for another check",
+  "tags.help.retag": "queue one cached title; manual tags stay",
+  "tags.help.stale": "queue cached tags with old schema or inputs"
 }

@@ -326,4 +326,4 @@ class SearchRouting(unittest.TestCase):
         pair = s.route_parse({'answers': {'route': {'choice': 'request', 'confidence': .9},
                                         'watched': {'choice': 'unseen'}, 'list': {'choice': 'best'}}}, [{}])[0]
         self.assertEqual((pair[0]['watched'], pair[0]['list']), ('unseen', 'best'))
-        self.assertEqual(s.DECISIONS['route_query']['ver'], 9)
+        self.assertEqual(s.DECISIONS['route_query']['ver'], 10)

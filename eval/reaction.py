@@ -194,7 +194,7 @@ def run(snapshot, person=None, n=20, seed=7, timing=False):
             out[who] = {"n": count, "pass_rate": rate, "pass": rate is not None and rate >= .8,
                         "checks": summary, "worst": [r["key"] for r in sorted(results,
                             key=lambda r: (sum(r["checks"].values()), -r["values"]["K3"], r["key"]))[:3]], "probes": results}
-    result = {"seed": seed, "people": out}
+    result = {**engine.provenance(), "seed": seed, "people": out}
     if timing:
         result["seconds"] = round(time.perf_counter()-started, 3)
     return result
@@ -217,6 +217,7 @@ def main():
     if args.json:
         print(json.dumps(result, allow_nan=False))
     else:
+        print('Evidence:', result['evidence'])
         for who, report in result["people"].items():
             print(who, "n", report["n"], "pass_rate", report["pass_rate"])
             for check, scores in report["checks"].items():

@@ -95,6 +95,20 @@ class InterviewTests(unittest.TestCase):
         self.assertTrue(view["done"])
         self.assertEqual(view["anchors"], [])
 
+    def test_early_stops_are_not_asked(self):
+        from test_abandon_reading import rec
+        key = "tmdb:900999"
+        self.s._facets[key] = {**rec("Synthetic broken stream"), "runtime": 110}
+        stop = {"key": key, "id": 900999, "kind": "movie", "stype": "movie", "title": "Synthetic broken stream",
+                "year": "2020", "signal": "abandoned", "weight": -1.5, "age": 5,
+                "item": {"duration_min": 2}, "who": "owner", "by": [self.s.PEOPLE[0]], "flags": [], "genres": []}
+        self.s.read_abandoned([stop])
+        self.assertEqual(stop["abandon"], "early")
+        profile = self.s._profiles["household"]
+        self.s._profiles["household"] = {**profile, "entries": profile["entries"] + [stop]}
+        self.s._interview_cache.clear()
+        self.assertNotIn(key, [a["key"] for a in self.s.interview_next(self.s.PEOPLE[0])["anchors"]])
+
     def test_five_loves_learn_experience_and_progress(self):
         x = next(iter(self.s.EXPERIENCES))
         for a in [a for a in self.s.ANCHORS if a[2] == x][:5]:

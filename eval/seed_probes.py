@@ -105,6 +105,8 @@ def main():
         replay.build_contexts(server, replay.profile_with(profile, profile['entries']),
                               [replay.variants.REGISTRY['current']], replay.SEED)
         result = run(server, sorted(set(server._emb) | set(server._facets)), args.probes)
+    result['evidence'] = 'cached-profile'
+    print('Evidence: cached-profile')
     (output/'seed_probes.json').write_text(json.dumps(result, indent=2, allow_nan=False)+'\n')
 
 

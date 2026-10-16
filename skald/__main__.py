@@ -267,6 +267,11 @@ def parser():
         "--person", "--member", dest="person", choices=PEOPLE if not members.CONFIG_ERROR else None)
     cmd(commands, "learn")
     cmd(commands, "health")
+    tags = commands.add_parser("tags", help=t("tags.help"))
+    choice = tags.add_mutually_exclusive_group(required=True)
+    choice.add_argument("--retag", metavar="TITLE", help=t("tags.help.retag"))
+    choice.add_argument("--stale", action="store_true", help=t("tags.help.stale"))
+    tags.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     search = commands.add_parser("search", help="inspect saved search timing")
     search.add_argument("--explain-timing", action="store_true", required=True, help="show stage times for the last 15 searches")
     search.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
@@ -709,6 +714,12 @@ def text_output(args, data, out):
             line(f"  {facet['name'][:34]:34} {facet['affinity']:6.3f}  {', '.join(facet['anchors'][:2])}")
         for person, split in data.get("per_person", {}).items():
             line(f"  {person:8} {number(split['score'])} / {number(split['percentile'])}")
+            if split.get("abandon") == "early":
+                region = members.CONFIG["region"]
+                line("  " + t("abandon.early." + split["abandon_reason"], region.get("row_lang", region["lang"])))
+            elif split.get("abandon") in ("related", "pending"):
+                region = members.CONFIG["region"]
+                line("  " + t("abandon." + split["abandon"], region.get("row_lang", region["lang"])))
         if "parts" in data:
             line("  Score parts: " + ", ".join(f"{k} {v:+.6f}" for k, v in (data["parts"] or {}).items()))
             line(f"  Rung: {data['rung'] or 'none'} · bg {data['bg_n']}")
@@ -969,6 +980,16 @@ def main(argv=None, out=None):
                 for row in data['rows']:
                     print(row['id'] + ': ' + str(row['label']) + ' (' + row['source'] + ')' +
                           ('; missing: ' + ', '.join(row['missing']) if row['missing'] else ''), file=out)
+            return 0
+        if args.command == "tags":
+            from . import setup, tags
+            if args.live or args.snapshot:
+                raise ValueError(t('tags.local', members.CONFIG['region']['lang']))
+            with setup.server(os.environ.get("DATA_DIR", "/data")) as s:
+                s.load_facets()
+                data = tags.queue(s, args.retag, stale=args.stale)
+                print(json.dumps(data, ensure_ascii=False) if args.json else
+                      s.t('tags.queued', lang=s.LANG, count=data['queued']), file=out)
             return 0
         if args.command == "search":
             from .search import timings

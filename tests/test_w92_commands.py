@@ -53,7 +53,7 @@ class Registry(Household):
         self.assertEqual(c.OPS[:len(OLD_OPS)], OLD_OPS)
         self.assertEqual(c.REGISTRY['hide']['inverse'], 'show')
         self.assertEqual(c.REGISTRY['include_genre']['inverse'], 'exclude_genre')
-        self.assertEqual(c.REGISTRY['like']['feedback'], 'love')
+        self.assertEqual(c.REGISTRY['like']['feedback'], 'like')
         prompt = c.command_prompt(self.s)
         for op in ('plan', 'correct', 'ask', 'wish', 'shelf_filter', 'shelf_schedule', 'member_create', 'member_update', 'search'):
             self.assertIn(op, c.REGISTRY)

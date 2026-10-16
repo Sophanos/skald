@@ -107,9 +107,14 @@ with Engine("data") as e:
         raw = s.score_key(m, "tmdb:900001", "ana", "movie")[0]
         for n in (0, 10, 20, 40, 309):
             m["nexp"]["ana"] = n
-            value = s.person_score(m, "tmdb:900001", "ana", "movie")[0]
+            self.assertEqual(s.person_score(m, "tmdb:900001", "ana", "movie")[0], raw)
+        m["paff"]["ana"] = {}
+        raw = s.score_key(m, "tmdb:900001", "ana", "movie")[0]
+        for n in (0, 10, 20, 40, 309):
+            m["nexp"]["ana"] = n
             lam = min(1, n/40)
-            self.assertEqual(value, raw if lam == 1 else lam*raw+(1-lam)*house)
+            self.assertEqual(s.person_score(m, "tmdb:900001", "ana", "movie")[0],
+                             raw if lam == 1 else lam*raw+(1-lam)*house)
         with patch.object(s, "HOUSEHOLD_PRIOR", False):
             self.assertEqual(s.person_score(m, "tmdb:900001", "ana", "movie"), s.score_key(m, "tmdb:900001", "ana", "movie"))
 
