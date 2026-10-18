@@ -4,6 +4,12 @@ Every future release entry includes a **Data changes:** line stating the data
 format, migrations, and any backup or rollback steps. Use “none” when the format
 and layout stay the same.
 
+## 1.7.2
+
+The commander now uses DeepSeek Flash by default; `SKALD_PARSE_MODEL` overrides it.
+
+**Data changes:** none.
+
 ## 1.7.1
 
 Developers can compare a member's loved, watched, given up and disliked titles with `python eval/stop_report.py --snapshot DIR --person NAME`, including missing context counts and optional separation targets.

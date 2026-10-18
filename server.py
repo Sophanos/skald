@@ -59,7 +59,7 @@ from types import SimpleNamespace
 
 # --- household config (also loaded alone by skald/members.py) ---
 DATA = os.environ.get("DATA_DIR", "/data")
-VERSION = "1.7.1"
+VERSION = "1.7.2"
 CONFIG_NAME = "skald.json"
 DEFAULT_ROW_PREFIX = "skald"
 RESERVED_DATA_FILES = ("addon.json", "skald.json", "legacy.json", "clients.json", "remote.json", ".skald-household", ".skald-format")
@@ -869,6 +869,7 @@ ROUTE_MODEL = os.environ.get("SKALD_ROUTE_MODEL") or "perplexity/pplx-decider-v1
 LUNA_DECIDER_MODEL = "openai/gpt-6-luna-decisions"
 PICK_MODEL = "openai/gpt-6-luna"
 COMMAND_MODEL = os.environ.get("SKALD_COMMAND_MODEL") or "~google/gemini-flash-latest"
+PARSE_MODEL = os.environ.get("SKALD_PARSE_MODEL") or "~deepseek/deepseek-flash-latest"
 COMMAND_EFFORT = os.environ.get("SKALD_COMMAND_EFFORT") or "low"
 COMMAND_FALLBACK_MODEL = os.environ.get("SKALD_COMMAND_FALLBACK_MODEL") or "z-ai/glm-5.3-flash"
 COMMAND_FALLBACK_EFFORT = os.environ.get("SKALD_COMMAND_FALLBACK_EFFORT") or "low"

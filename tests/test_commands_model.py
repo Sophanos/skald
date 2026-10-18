@@ -7,19 +7,20 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 import urllib.error
 from unittest.mock import patch
 
 from decide_kit import close_server, load_server
-from skald.commands import NONE, OUT
+from skald.commands import NONE, OUT, register
 
 
 class CommandModel(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        with patch.dict(os.environ, {'SKALD_COMMAND_MODEL': '', 'SKALD_COMMAND_EFFORT': ''}):
+        with patch.dict(os.environ, {'SKALD_PARSE_MODEL': '', 'SKALD_COMMAND_MODEL': '', 'SKALD_COMMAND_EFFORT': ''}):
             self.s = load_server(self.temp.name)
         self.addCleanup(close_server, self.s)
         self.answer = {'op': 'hide', 'kind': None, 'values': ['anime'], 'person': None}
@@ -51,7 +52,7 @@ class CommandModel(unittest.TestCase):
             return self.s.decide('parse_command', {'query': query}, **kwargs)
 
     def assert_requests(self, fallback=False):
-        expected = [('~google/gemini-flash-latest', 'low', 1200, 6)]
+        expected = [('~deepseek/deepseek-flash-latest', 'low', 4000, 6)]
         if fallback:
             expected.append(('z-ai/glm-5.3-flash', 'low', 1200, 6))
         self.assertEqual([(p['model'], p['reasoning']['effort'], p['max_tokens'], t)
@@ -60,6 +61,36 @@ class CommandModel(unittest.TestCase):
             self.assertEqual(self.requests[0][0]['messages'], self.requests[1][0]['messages'])
         for payload, _ in self.requests:
             self.assertEqual(payload['response_format'], {'type': 'json_object'})
+
+    def registered(self, **settings):
+        spec = {}
+        register(SimpleNamespace(HIDE_CHOICES=('anime',), PICK_MODEL='m-pick', DAY=86400,
+                                 route_norm=lambda x: x, decision=lambda name, **kw: spec.update(kw),
+                                 **settings))
+        return spec['llm']
+
+    def test_parse_model_precedence(self):
+        for settings, expected in (({'PARSE_MODEL': 'm-parse', 'COMMAND_MODEL': 'm-cmd'}, 'm-parse'),
+                                   ({'COMMAND_MODEL': 'm-cmd'}, 'm-cmd'),
+                                   ({'PARSE_MODEL': '', 'COMMAND_MODEL': 'm-cmd'}, 'm-cmd'),
+                                   ({}, 'm-pick')):
+            with self.subTest(settings=settings):
+                spec = self.registered(**settings)
+                self.assertEqual(spec['model'], expected)
+                self.assertEqual(spec['prompt']([{'query': 'hide anime'}])['model'], expected)
+
+    def test_parse_request_token_caps(self):
+        for effort, tokens in (('low', 4000), ('none', 200)):
+            with self.subTest(effort=effort):
+                spec = self.registered(COMMAND_EFFORT=effort)
+                body = spec['prompt']([{'query': 'hide anime'}])
+                self.assertEqual(body['max_tokens'], tokens)
+                self.assertEqual(body['reasoning'], {'effort': effort})
+                self.assertEqual(spec['fallback']['prompt']([{'query': 'hide anime'}])['max_tokens'], 1200)
+
+    def test_server_model_defaults(self):
+        self.assertEqual(getattr(self.s, 'PARSE_MODEL', None), '~deepseek/deepseek-flash-latest')
+        self.assertEqual(self.s.COMMAND_MODEL, '~google/gemini-flash-latest')
 
     def test_version_eight_ignores_fresh_version_seven_cache(self):
         spec = self.s.DECISIONS['parse_command']

@@ -166,7 +166,7 @@ def evaluate(cases, models=None, *, transport=None, key='', base='https://openro
                     else:
                         payload = spec['llm']['prompt']([inp])
                         payload.update(model=model, reasoning={'effort': effort},
-                                       max_tokens=200 if effort == 'none' else 1200, usage={'include': True})
+                                       max_tokens=200 if effort == 'none' else 4000, usage={'include': True})
                         payload['messages'][0]['content'] = command_prompt(s)
                         reply = transport(base.rstrip('/') + spec['llm']['path'], payload, key, timeout)
                         cost = float((reply.get('usage') or {}).get('cost') or 0)

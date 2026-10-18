@@ -768,7 +768,7 @@ def command_prompt(s):
               'When in doubt whether text is a command at all (a title, chat, a one-off search), return op null. Unsupported settings return op null. Do not invent an operation.')
 def register(s):
     prompt = command_prompt(s)
-    model = getattr(s, 'COMMAND_MODEL', s.PICK_MODEL)
+    model = getattr(s, 'PARSE_MODEL', None) or getattr(s, 'COMMAND_MODEL', s.PICK_MODEL)
     effort = getattr(s, 'COMMAND_EFFORT', 'low')
     fallback_model = getattr(s, 'COMMAND_FALLBACK_MODEL', 'z-ai/glm-5.3-flash')
     fallback_effort = getattr(s, 'COMMAND_FALLBACK_EFFORT', 'low')
@@ -776,7 +776,7 @@ def register(s):
         return {'model': model, 'messages': [{'role': 'system', 'content': prompt},
                                            {'role': 'user', 'content': command_state(inp)}],
                 'response_format': {'type': 'json_object'}, 'reasoning': {'effort': effort},
-                'max_tokens': 200 if effort == 'none' else 1200}
+                'max_tokens': 200 if effort == 'none' else 4000}
     def parse(reply):
         return parse_json(reply['choices'][0]['message']['content'])
     def rule(inp, params):

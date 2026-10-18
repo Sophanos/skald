@@ -368,7 +368,7 @@ class CommandEval(unittest.TestCase):
                                       '--json', str(dest)], transport=transport, out=out), 0)
             self.assertEqual([p['model'] for p in requests], ['synthetic/model'] * 3)
             self.assertEqual([p['reasoning']['effort'] for p in requests], ['low', 'none', 'none'])
-            self.assertEqual([p['max_tokens'] for p in requests], [1200, 200, 200])
+            self.assertEqual([p['max_tokens'] for p in requests], [4000, 200, 200])
             self.assertEqual([r['model'] for r in json.loads(dest.read_text())],
                              ['synthetic/model@low', 'synthetic/model@none', 'synthetic/model@none'])
             self.assertIn('synthetic/model@low |', out.getvalue())
@@ -430,14 +430,15 @@ class CommandEval(unittest.TestCase):
         self.assertEqual(ev.evaluate([])[0]['by_tier'], {})
 
     def test_command_model_env_and_prompt(self):
-        with tempfile.TemporaryDirectory() as data, patch.dict(os.environ, {'SKALD_COMMAND_MODEL': 'synthetic/override', 'SKALD_COMMAND_EFFORT': 'none'}):
+        with tempfile.TemporaryDirectory() as data, patch.dict(os.environ, {'SKALD_PARSE_MODEL': 'synthetic/parse', 'SKALD_COMMAND_MODEL': 'synthetic/override', 'SKALD_COMMAND_EFFORT': 'none'}):
             s = load_server(data)
             try:
                 spec = s.DECISIONS['parse_command']['llm']
                 self.assertEqual(s.COMMAND_MODEL, 'synthetic/override')
-                self.assertEqual(spec['model'], s.COMMAND_MODEL)
+                self.assertEqual(s.PARSE_MODEL, 'synthetic/parse')
+                self.assertEqual(spec['model'], s.PARSE_MODEL)
                 body = spec['prompt']([{'query': 'hide anime'}])
-                self.assertEqual(body['model'], s.COMMAND_MODEL)
+                self.assertEqual(body['model'], s.PARSE_MODEL)
                 self.assertEqual(s.COMMAND_EFFORT, 'none')
                 self.assertEqual(body['reasoning'], {'effort': 'none'})
                 self.assertEqual(body['max_tokens'], 200)
@@ -447,7 +448,7 @@ class CommandEval(unittest.TestCase):
                 self.assertEqual(commands.command_prompt(synthetic), commands.command_prompt(s))
             finally:
                 close_server(s)
-        with tempfile.TemporaryDirectory() as data, patch.dict(os.environ, {'SKALD_COMMAND_MODEL': '', 'SKALD_COMMAND_EFFORT': ''}):
+        with tempfile.TemporaryDirectory() as data, patch.dict(os.environ, {'SKALD_PARSE_MODEL': '', 'SKALD_COMMAND_MODEL': '', 'SKALD_COMMAND_EFFORT': ''}):
             s = load_server(data)
             try:
                 self.assertEqual(s.COMMAND_MODEL, '~google/gemini-flash-latest')
@@ -455,7 +456,7 @@ class CommandEval(unittest.TestCase):
                 spec = s.DECISIONS['parse_command']['llm']
                 body = spec['prompt']([{'query': 'hide anime'}])
                 self.assertEqual(body['reasoning'], {'effort': 'low'})
-                self.assertEqual(body['max_tokens'], 1200)
+                self.assertEqual(body['max_tokens'], 4000)
                 self.assertEqual(spec['timeout'], 6)
             finally:
                 close_server(s)

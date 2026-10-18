@@ -209,7 +209,7 @@ re-embeds in the background within the daily embed budget, switching when the ne
 model covers at least as many needed titles. Errors keep the old vectors for retry;
 `/stats` shows the active embedding model and coverage counts.
 
-Optional `SKALD_COMMAND_MODEL` defaults to `~google/gemini-flash-latest`; `SKALD_COMMAND_EFFORT` defaults to `low`.
+`SKALD_PARSE_MODEL` sets the commander model and defaults to `~deepseek/deepseek-flash-latest`; `SKALD_COMMAND_MODEL` still sets themes, lanes, archetypes and lab and defaults to `~google/gemini-flash-latest`; `SKALD_COMMAND_EFFORT` defaults to `low`.
 Within decision budgets, failed settings command calls retry once with `z-ai/glm-5.3-flash` at effort `low` (1200 tokens, six seconds) before returning no change. Override with `SKALD_COMMAND_FALLBACK_MODEL` and `SKALD_COMMAND_FALLBACK_EFFORT`.
 AI search understands “anime I have not watched” and “anime I have watched” using the linked member’s history, or current members together on the Together link.
 

@@ -103,7 +103,7 @@ class Fixes(unittest.TestCase):
         spec = self.s.DECISIONS['parse_command']
         body = spec['llm']['prompt']([{'query': 'hide anime'}])
         self.assertEqual(body['reasoning'], {'effort': self.s.COMMAND_EFFORT})
-        self.assertEqual(body['max_tokens'], 200 if self.s.COMMAND_EFFORT == 'none' else 1200)
+        self.assertEqual(body['max_tokens'], 200 if self.s.COMMAND_EFFORT == 'none' else 4000)
         self.assertEqual(body['response_format'], {'type': 'json_object'})
         self.assertGreater(spec['ver'], 2)
 

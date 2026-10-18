@@ -195,7 +195,7 @@ class WideSearchTests(unittest.TestCase):
         self.assertEqual([m['id'] for m in self.results(query='like Title 2 from 2001 to 2002')], ['tmdb:3'])
         call = next(c for c in self.calls if c[-1] == 'rules')
         self.assertEqual(call[0], '/api/v1/chat/completions')
-        self.assertEqual(call[1]['model'], self.s.COMMAND_MODEL)
+        self.assertEqual(call[1]['model'], self.s.PARSE_MODEL)
         self.assertEqual(call[1]['response_format'], {'type': 'json_object'})
 
     def test_unseen_and_disliked_are_filtered(self):
